@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>用户管理</title>
+    <style>
+        /* ... (保持之前的 CSS 不变) ... */
+        body { font-family: sans-serif; padding: 20px; background: #f4f6f9; }
+        .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px; }
+        
+        .header-actions { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+        .btn { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; color: white; font-size: 14px; }
+        .btn-primary { background: #007bff; }
+        .btn-danger { background: #dc3545; }
+        
+        /* 搜索框样式 */
+        .search-box input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 250px;
+            font-size: 14px;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; color: #333; cursor: pointer; user-select: none; }
+        th:hover { background-color: #e2e6ea; }
+        
+        /* 排序箭头样式 */
+        .sort-icon::after { content: ' ↕'; font-size: 12px; color: #999; }
+        .sort-asc::after { content: ' ↑'; color: #007bff; }
+        .sort-desc::after { content: ' ↓'; color: #007bff; }
+
+        .role-badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+        .role-0 { background: #ffebee; color: #c62828; }
+        .role-1 { background: #e3f2fd; color: #1565c0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-actions">
+            <a href="/dashboard" class="back-link" style="margin:0; text-decoration:none; color:#007bff;">← 返回仪表盘</a>
+            <button class="btn btn-primary" onclick="addUser()">+ 新增用户</button>
+        </div>
+        
+        <!-- 搜索区域 -->
+        <div style="margin-bottom: 20px;">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="搜索工号或姓名..." onkeyup="handleSearch(event)">
+            </div>
+        </div>
+
+        <h2>用户列表</h2>
+        <table>
+            <thead>
+                <tr>
+                    <!-- 点击表头触发排序 -->
+                    <th onclick="toggleSort('employee_no')" id="th-employee_no">工号 <span class="sort-icon"></span></th>
+                    <th onclick="toggleSort('name')" id="th-name">姓名 <span class="sort-icon"></span></th>
+                    <th>角色</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="user-table-body">
+                <!-- 数据将通过 JS 插入这里 -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        // 全局状态
+        let currentSort = { by: 'employee_no', order: 'asc' };
+
+        // 1. 加载用户列表
+        function loadUsers() {
+            const searchVal = document.getElementById('search-input').value;
+            
+            // 构建 URL 参数
+            const url = `/admin/users/api?search=${searchVal}&sort_by=${currentSort.by}&order=${currentSort.order}`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(res => {
+                    const tbody = document.getElementById('user-table-body');
+                    if (res.code === 200) {
+                        let html = '';
+                        if (res.data.length === 0) {
+                            html = '<tr><td colspan="4" style="text-align:center; color:#999;">没有找到用户</td></tr>';
+                        } else {
+                            res.data.forEach(user => {
+                                const roleClass = user.role === 0 ? 'role-0' : 'role-1';
+                                const roleMap = {
+                                    0: '超级管理员',
+                                    1: '普通用户',
+                                    2: '管理员'
+                                };
+                                const roleName = roleMap[user.role] || '未知角色';
+                                const isAdmin = user.role === 0;
+                                // 如果是管理员，禁用删除按钮并显示提示
+                                const deleteBtn = isAdmin 
+                                    ? `<button class="btn" disabled style="background:#ccc; cursor:not-allowed;">不可删</button>`
+                                    : `<button class="btn btn-danger" onclick="deleteUser(${user.id})">删除</button>`;
+
+                                html += `
+                                    <tr>
+                                        <td>${user.employee_no}</td>
+                                        <td>${user.name}</td>
+                                        <td><span class="role-badge ${roleClass}">${roleName}</span></td>
+                                        <td>
+                                            ${deleteBtn}
+                                        </td>
+                                    </tr>
+                                `;
+                            });
+                        }
+                        tbody.innerHTML = html;
+                        updateSortIcons();
+                    }
+                });
+        }
+
+        // 2. 处理搜索输入
+        function handleSearch(e) {
+            if (e.key === 'Enter') { // 按回车键触发
+                loadUsers();
+            }
+        }
+
+        // 3. 处理排序切换
+        function toggleSort(field) {
+            if (currentSort.by === field) {
+                // 如果点击当前列，切换升降序
+                currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
+            } else {
+                // 如果点击新列，默认升序
+                currentSort.by = field;
+                currentSort.order = 'asc';
+            }
+            loadUsers();
+        }
+
+        // 更新表头箭头样式
+        function updateSortIcons() {
+            // 重置所有图标
+            document.querySelectorAll('th span').forEach(span => {
+                span.className = 'sort-icon';
+            });
+            // 设置当前激活的图标
+            const activeTh = document.getElementById(`th-${currentSort.by}`);
+            if (activeTh) {
+                const span = activeTh.querySelector('span');
+                span.className = currentSort.order === 'asc' ? 'sort-icon sort-asc' : 'sort-icon sort-desc';
+            }
+        }
+
+        // ... (addUser 和 deleteUser 函数保持不变) ...
+        function addUser() {
+            const employee_no = prompt("请输入工号:");
+            if (!employee_no) return;
+            const name = prompt("请输入姓名:");
+            if (!name) return;
+            const password = prompt("请输入密码:");
+            if (!password) return;
+            const role = 1;
+
+            fetch('/admin/users/api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ employee_no, name, password, role })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.code === 200) { alert('添加成功！'); loadUsers(); } 
+                else { alert('添加失败: ' + data.msg); }
+            });
+        }
+
+        function deleteUser(id) {
+            if (!confirm("确定要删除该用户吗？")) return;
+            fetch(`/admin/users/api/${id}`, { method: 'DELETE' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.code === 200) { alert('删除成功！'); loadUsers(); } 
+                else { alert('删除失败: ' + data.msg); }
+            });
+        }
+
+        // 页面加载时执行
+        document.addEventListener('DOMContentLoaded', loadUsers);
+    </script>
+</body>
+</html>

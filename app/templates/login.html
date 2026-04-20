@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统管理后台 - 登录</title>
+    <style>
+        /* 全局重置 */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 登录卡片 */
+        .login-card {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            width: 100%;
+            max-width: 400px;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .login-header h2 {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .login-header p {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        /* 表单样式 */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #764ba2;
+            box-shadow: 0 0 5px rgba(118, 75, 162, 0.2);
+        }
+
+        /* 按钮样式 */
+        .btn-login {
+            width: 100%;
+            padding: 12px;
+            background: #764ba2;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .btn-login:hover {
+            background: #5b3a7d;
+        }
+
+        /* 错误提示 */
+        .error-msg {
+            color: #ff4d4d;
+            font-size: 14px;
+            text-align: center;
+            margin-top: 15px;
+            min-height: 20px;
+        }
+
+        /* 简单动画 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-card">
+        <div class="login-header">
+            <h2>管理后台登录</h2>
+            <p>请输入您的管理员账号</p>
+        </div>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="employee_no">工号</label>
+                <input type="text" id="employee_no" name="employee_no" placeholder="请输入工号" required>
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password" placeholder="请输入密码" required>
+            </div>
+            <button type="submit" class="btn-login">登 录</button>
+            <div class="error-msg" id="errorMsg"></div>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault(); // 阻止表单默认提交
+            
+            const errorMsg = document.getElementById('errorMsg');
+            const btn = document.querySelector('.btn-login');
+            
+            // 获取输入值
+            const employeeNo = document.getElementById('employee_no').value;
+            const password = document.getElementById('password').value;
+
+            // 简单的 Loading 状态
+            btn.textContent = '验证中...';
+            btn.disabled = true;
+            errorMsg.textContent = '';
+
+            // 发送 AJAX 请求
+            fetch('/api/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    employee_no: employeeNo,
+                    password: password
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.textContent = '登 录';
+                btn.disabled = false;
+
+                if (data.code === 200) {
+                    // 登录成功，跳转
+                    errorMsg.style.color = 'green';
+                    errorMsg.textContent = '登录成功，跳转中...';
+                    setTimeout(() => {
+                        window.location.href = '/dashboard';
+                    }, 500);
+                } else {
+                    // 登录失败
+                    errorMsg.style.color = '#ff4d4d';
+                    errorMsg.textContent = data.msg;
+                }
+            })
+            .catch(error => {
+                btn.textContent = '登 录';
+                btn.disabled = false;
+                errorMsg.textContent = '网络错误，请稍后重试';
+                console.error('Error:', error);
+            });
+        });
+    </script>
+</body>
+</html>

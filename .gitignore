@@ -1,0 +1,18 @@
+# --- Python 缓存文件 ---
+# 忽略所有层级的 __pycache__ 目录
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- 日志文件 ---
+# 忽略 logs 目录下的所有文件，但保留目录本身
+logs/*
+# 如果 logs 下可能有子文件夹，也忽略其内容
+logs/**/*
+
+testlog_temp_dir/*
+
+build/
+dist/
+venv/

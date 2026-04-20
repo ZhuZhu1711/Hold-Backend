@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>产品管理</title>
+    <style>
+        /* 基础样式 */
+        body { font-family: sans-serif; padding: 20px; background: #f4f6f9; }
+        .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px; }
+        
+        /* 顶部操作栏 */
+        .header-actions { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+        .btn { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; color: white; font-size: 14px; text-decoration: none; display: inline-block;}
+        .btn-primary { background: #007bff; }
+        .btn-warning { background: #ffc107; color: #333; }
+        .back-link { color: #007bff; text-decoration: none; }
+
+        /* 搜索框 */
+        .search-box input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 250px; }
+
+        /* 标签页样式 */
+        .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; cursor: pointer; font-weight: bold; color: #666; }
+        .tab.active { color: #007bff; border-bottom: 2px solid #007bff; margin-bottom: -1px; }
+
+        /* 表格样式 */
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        
+        /* 模态框样式 */
+        .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.4); }
+        .modal-content { background-color: #fff; margin: 10% auto; padding: 20px; border-radius: 8px; width: 400px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .form-group input, .form-group select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;}
+        .close { float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+        
+        /* 状态标签 */
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; color: white; }
+        .badge-ate { background-color: #17a2b8; } /* 青色 */
+        .badge-wlt { background-color: #6f42c1; } /* 紫色 */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-actions">
+            <a href="/dashboard" class="back-link">← 返回仪表盘</a>
+            <button class="btn btn-primary" onclick="openModal()">+ 新增产品</button>
+        </div>
+
+        <div class="search-box">
+            <input type="text" id="search-input" placeholder="搜索产品ID..." onkeyup="if(event.key==='Enter') loadProducts()">
+        </div>
+
+        <!-- 标签页导航 -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('ate')">ATE 产品</div>
+            <div class="tab" onclick="switchTab('wlt')">WLT 产品</div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>产品ID</th>
+                    <th>Gross Die</th>
+                    <th>负责工程师</th>
+                    <th>更新时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="product-table-body">
+                <!-- 数据将通过JS插入 -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 编辑/新增 模态框 -->
+    <div id="productModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h3 id="modalTitle">产品信息</h3>
+            <form id="productForm">
+                <input type="hidden" id="p_id">
+                
+                <div class="form-group">
+                    <label>产品ID</label>
+                    <input type="text" id="p_product_id" readonly style="background:#eee;">
+                </div>
+                
+                <div class="form-group">
+                    <label>产品类型 (Line Type)</label>
+                    <!-- 这里改为只读显示，或者如果需要可以在新增时选择，但通常类型是固定的 -->
+                    <input type="text" id="p_line_type_display" readonly style="background:#eee; font-weight:bold;">
+                </div>
+
+                <div class="form-group">
+                    <label>Gross Die</label>
+                    <input type="number" id="p_gross_die" required>
+                </div>
+
+                <div class="form-group">
+                    <label>绑定工程师</label>
+                    <select id="p_engineer">
+                        <option value="">-- 未分配 --</option>
+                    </select>
+                </div>
+
+                <button type="button" class="btn btn-primary" style="width:100%" onclick="saveProduct()">保存</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let allProducts = []; // 存储所有产品数据
+        let engineers = [];   // 存储工程师列表
+        let currentTab = 'ate'; // 当前标签页状态
+
+        // 1. 加载产品列表
+        function loadProducts() {
+            const searchVal = document.getElementById('search-input').value;
+            fetch(`/admin/products/api?search=${searchVal}`)
+                .then(res => res.json())
+                .then(res => {
+                    if (res.code === 200) {
+                        allProducts = res.data;
+                        renderTable(); // 渲染表格
+                    }
+                });
+        }
+
+        // 2. 渲染表格（根据当前标签页过滤）
+        function renderTable() {
+            const tbody = document.getElementById('product-table-body');
+            let html = '';
+            
+            // 过滤数据
+            const filteredData = allProducts.filter(p => {
+                if (currentTab === 'ate') return p.line_type == 0;
+                return p.line_type != 0; // WLT
+            });
+
+            if (filteredData.length === 0) {
+                html = '<tr><td colspan="5" style="text-align:center; color:#999;">暂无数据</td></tr>';
+            } else {
+                filteredData.forEach(p => {
+                    const typeBadge = p.line_type == 0 
+                        ? '<span class="badge badge-ate">ATE</span>' 
+                        : '<span class="badge badge-wlt">WLT</span>';
+                    
+                    html += `
+                        <tr>
+                            <td>${p.product_id}</td>
+                            <td>${p.gross_die}</td>
+                            <td>${p.engineer_name}</td>
+                            <td>${p.update_dt}</td>
+                            <td>
+                                <button class="btn btn-warning" onclick='editProduct(${JSON.stringify(p)})'>修改</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+            }
+            tbody.innerHTML = html;
+        }
+
+        // 3. 切换标签页
+        function switchTab(type) {
+            currentTab = type;
+            // 更新UI样式
+            const tabs = document.querySelectorAll('.tab');
+            tabs[0].className = type === 'ate' ? 'tab active' : 'tab';
+            tabs[1].className = type === 'wlt' ? 'tab active' : 'tab';
+            
+            renderTable();
+        }
+
+        // 4. 加载工程师列表
+        function loadEngineers() {
+            fetch('/admin/users/api')
+                .then(res => res.json())
+                .then(res => {
+                    if (res.code === 200) {
+                        engineers = res.data;
+                    }
+                });
+        }
+
+        // 5. 打开模态框（新增）
+        function openModal() {
+            document.getElementById('productForm').reset();
+            document.getElementById('p_id').value = '';
+            document.getElementById('p_product_id').value = '';
+            document.getElementById('p_line_type_display').value = '';
+            document.getElementById('modalTitle').innerText = "新增产品";
+            
+            fillEngineerSelect();
+            document.getElementById('productModal').style.display = 'block';
+        }
+
+        // 6. 打开模态框（编辑）
+        function editProduct(p) {
+            document.getElementById('p_id').value = p.id;
+            document.getElementById('p_product_id').value = p.product_id;
+            document.getElementById('p_gross_die').value = p.gross_die;
+            
+            // 显示类型文本
+            const typeText = p.line_type == 0 ? "ATE (0)" : `WLT (${p.line_type})`;
+            document.getElementById('p_line_type_display').value = typeText;
+
+            fillEngineerSelect(p.engineer_id);
+            
+            document.getElementById('modalTitle').innerText = "修改产品: " + p.product_id;
+            document.getElementById('productModal').style.display = 'block';
+        }
+
+        function fillEngineerSelect(selectedId = "") {
+            const select = document.getElementById('p_engineer');
+            select.innerHTML = '<option value="">-- 未分配 --</option>';
+            engineers.forEach(eng => {
+                const selected = eng.id == selectedId ? 'selected' : '';
+                select.innerHTML += `<option value="${eng.id}" ${selected}>${eng.name} (${eng.employee_no})</option>`;
+            });
+        }
+
+        function closeModal() {
+            document.getElementById('productModal').style.display = 'none';
+        }
+
+        // 7. 保存产品
+        function saveProduct() {
+            const id = document.getElementById('p_id').value;
+            const productId = document.getElementById('p_product_id').value;
+            const grossDie = document.getElementById('p_gross_die').value;
+            const engId = document.getElementById('p_engineer').value;
+
+            if (!productId) {
+                alert("请输入产品ID");
+                return;
+            }
+
+            // 简单判断 Line Type，实际应该在新增时让用户选，这里为了演示默认逻辑
+            // 如果ID为空（新增），我们需要决定它是ATE还是WLT。
+            // 这里简单处理：如果没ID，默认创建ATE(0)，或者你可以加个下拉框让用户选
+            let lineType = 0; 
+            if (!id) {
+                // 这里可以扩展：在新增弹窗里加一个 Line Type 选择框
+                // 暂时默认设为 0 (ATE)
+            }
+
+            const data = {
+                product_id: productId,
+                gross_die: grossDie,
+                line_type: lineType, 
+                engineer_id: engId === "" ? null : engId
+            };
+
+            const url = id ? `/admin/products/api/${id}` : '/admin/products/api';
+            const method = id ? 'PUT' : 'POST';
+
+            fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.code === 200) {
+                    alert('保存成功');
+                    closeModal();
+                    loadProducts();
+                } else {
+                    alert('保存失败: ' + data.msg);
+                }
+            });
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            loadProducts();
+            loadEngineers();
+        });
+    </script>
+</body>
+</html>

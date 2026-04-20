@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>缺陷代码管理</title>
+    <style>
+        /* --- 原生 CSS 样式 --- */
+        body {
+            font-family: "Microsoft YaHei", Arial, sans-serif;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 40px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            margin-top: 10;
+            color: #2c3e50;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+
+        /* 搜索区域 */
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+        }
+
+        .search-box input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .search-box button {
+            padding: 10px 25px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .search-box button:hover {
+            background-color: #0056b3;
+        }
+
+        /* 表格样式 */
+        table {
+            width: 1000px;
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        th {
+            background-color: #343a40;
+            color: #fff;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+            transition: background 0.2s;
+        }
+
+        th:hover {
+            background-color: #4a525a;
+        }
+
+        /* 排序指示器样式 */
+        th .sort-indicator {
+            display: inline-block;
+            margin-left: 8px;
+            font-size: 12px;
+            opacity: 0.5;
+        }
+
+        th.sort-asc .sort-indicator {
+            opacity: 1;
+            color: #ffc107;
+        }
+
+        th.sort-desc .sort-indicator {
+            opacity: 1;
+            color: #ffc107;
+        }
+
+        th.sort-asc .sort-indicator::before {
+            content: "▲";
+        }
+
+        th.sort-desc .sort-indicator::before {
+            content: "▼";
+        }
+
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #888;
+            padding: 40px;
+            display: none;
+        }
+
+        /* 智能搜索下拉框样式 */
+        .suggestions-box {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 80px; /* 留出按钮位置 */
+            background: white;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .suggestion-item {
+            padding: 10px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .suggestion-item:hover {
+            background-color: #f0f7ff;
+        }
+
+        .suggestion-item:active {
+            background-color: #007bff;
+            color: white;
+        }
+
+        /* 复选框区域样式 */
+        #checkbox-filter {
+            padding: 12px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+        }
+
+        .checkbox-item {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 15px;
+            margin-bottom: 5px;
+            cursor: pointer;
+        }
+
+        .checkbox-item input {
+            margin-right: 5px;
+            cursor: pointer;
+        }
+
+        .checkbox-item label {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        #checkbox-filter button {
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #checkbox-filter button:hover {
+            background-color: #5a6268;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header-actions">
+            <a href="/dashboard" class="back-link" style="margin:0; text-decoration:none; color:#007bff;">← 返回仪表盘</a>
+    </div>
+
+    <h2>缺陷代码列表 (Defect Codes)</h2>
+
+    <!-- 查询表单 -->
+    <div class="search-box">
+    <div class="search-input-wrapper" style="position: relative;">
+        <input type="text" id="product_id_input" placeholder="请输入产品ID (PRODUCT_ID)" value="{{ product_id if product_id else '' }}" autocomplete="off">
+        <button type="button" onclick="searchDefectCodes()">查询</button>
+        <!-- 下拉建议框 -->
+        <div id="suggestions" class="suggestions-box" style="display: none;"></div>
+    </div>
+</div>
+
+    <!-- 复选框容器 -->
+    <div id="checkbox-filter" style="margin-bottom: 20px; display: none;">
+        <div style="font-weight: bold; margin-bottom: 10px; color: #2c3e50;">
+            按名称筛选 (NAME):
+            <button type="button" onclick="resetFilter()" style="margin-left: 10px; padding: 2px 8px; font-size: 12px;">重置</button>
+            <button type="button" onclick="selectAll()" style="margin-left: 5px; padding: 2px 8px; font-size: 12px;">全选</button>
+            <button type="button" onclick="deselectAll()" style="margin-left: 5px; padding: 2px 8px; font-size: 12px;">取消全选</button>
+        </div>
+        <div id="checkbox-group" style="display: flex; flex-wrap: wrap; gap: 10px;">
+            <!-- 复选框将动态生成在这里 -->
+        </div>
+    </div>
+
+    <!-- 数据表格 -->
+    <table id="data_table">
+        <thead>
+            <tr>
+                <th data-field="grade" data-sort-type="string">
+                    等级 (GRADE)
+                    <span class="sort-indicator"></span>
+                </th>
+                <th data-field="code" data-sort-type="number">
+                    代码 (CODE)
+                    <span class="sort-indicator"></span>
+                </th>
+                <th data-field="name" data-sort-type="string">
+                    名称 (NAME)
+                    <span class="sort-indicator"></span>
+                </th>
+                <th data-field="bsl" data-sort-type="number">
+                    BSL
+                    <span class="sort-indicator"></span>
+                </th>
+            </tr>
+        </thead>
+        <tbody id="table_body">
+            <!-- JS 将在这里动态插入数据 -->
+        </tbody>
+    </table>
+    
+    <div id="empty_msg" class="empty-state">暂无数据，请输入产品ID进行查询</div>
+</div>
+
+<script>
+    // --- 全局变量 ---
+    let currentData = [];      // 存储当前显示的数据
+    let currentSortField = null;  // 当前排序字段
+    let currentSortOrder = null;   // 当前排序顺序: 'asc' 或 'desc'
+    // --- 智能搜索相关变量 ---
+    let searchTimeout = null;
+    let currentProductId = '';
+
+    let allDefectsData = [];      // 存储原始所有数据
+    let currentFilterNames = [];   // 当前选中的NAME
+
+    // --- 原生 JavaScript 逻辑 ---
+
+    // 页面加载完成后，如果 URL 中已经有 product_id，则自动查询
+    document.addEventListener('DOMContentLoaded', function() {
+        const inputVal = document.getElementById('product_id_input').value;
+        if(inputVal) {
+            fetchData(inputVal);
+        } else {
+            document.getElementById('empty_msg').style.display = 'block';
+        }
+        
+        // 绑定表头点击排序事件
+        bindSortEvents();
+    });
+
+    // 绑定回车键搜索
+    document.getElementById('product_id_input').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') {
+            searchDefectCodes();
+        }
+    });
+
+    // 监听输入框的输入事件
+    document.getElementById('product_id_input').addEventListener('input', function(e) {
+        const keyword = e.target.value.trim();
+        
+        // 清除之前的定时器
+        if (searchTimeout) {
+            clearTimeout(searchTimeout);
+        }
+        
+        // 隐藏下拉框
+        const suggestionsBox = document.getElementById('suggestions');
+        
+        if (keyword.length === 0) {
+            suggestionsBox.style.display = 'none';
+            return;
+        }
+        
+        // 防抖：300ms 后才发起请求
+        searchTimeout = setTimeout(() => {
+            searchProducts(keyword);
+        }, 300);
+    });
+
+    // 点击其他地方隐藏下拉框
+    document.addEventListener('click', function(e) {
+        const input = document.getElementById('product_id_input');
+        const suggestionsBox = document.getElementById('suggestions');
+        
+        if (e.target !== input && !suggestionsBox.contains(e.target)) {
+            suggestionsBox.style.display = 'none';
+        }
+    });
+
+    // 绑定排序事件
+    function bindSortEvents() {
+        const headers = document.querySelectorAll('#data_table th');
+        headers.forEach(header => {
+            header.addEventListener('click', function() {
+                const field = this.getAttribute('data-field');
+                const sortType = this.getAttribute('data-sort-type');
+                if (field) {
+                    handleSort(field, sortType, this);
+                }
+            });
+        });
+    }
+
+    // 处理排序
+    function handleSort(field, sortType, headerElement) {
+        // 清除其他表头的排序样式
+        const allHeaders = document.querySelectorAll('#data_table th');
+        allHeaders.forEach(th => {
+            th.classList.remove('sort-asc', 'sort-desc');
+        });
+        
+        // 确定排序顺序
+        if (currentSortField === field) {
+            // 同一字段：升序 -> 降序 -> 取消排序
+            if (currentSortOrder === 'asc') {
+                currentSortOrder = 'desc';
+                headerElement.classList.add('sort-desc');
+            } else if (currentSortOrder === 'desc') {
+                currentSortOrder = null;
+                currentSortField = null;
+                // 取消排序，显示原始数据顺序
+                renderTable(currentData);
+                return;
+            }
+        } else {
+            // 不同字段：默认升序
+            currentSortOrder = 'asc';
+            currentSortField = field;
+            headerElement.classList.add('sort-asc');
+        }
+        
+        // 执行排序
+        sortData(field, sortType, currentSortOrder);
+        
+        // 更新表头样式
+        if (currentSortOrder === 'asc') {
+            headerElement.classList.add('sort-asc');
+        } else if (currentSortOrder === 'desc') {
+            headerElement.classList.add('sort-desc');
+        }
+        
+        // 重新渲染表格
+        renderTable(currentData);
+    }
+
+    // 排序数据
+    function sortData(field, sortType, order) {
+        if (!currentData || currentData.length === 0) return;
+        
+        currentData.sort((a, b) => {
+            let valA = a[field];
+            let valB = b[field];
+            
+            // 处理空值
+            if (valA === null || valA === undefined) valA = '';
+            if (valB === null || valB === undefined) valB = '';
+            
+            // 根据类型进行排序
+            let compareResult = 0;
+            
+            if (sortType === 'number') {
+                // 数字排序
+                const numA = parseFloat(valA);
+                const numB = parseFloat(valB);
+                if (isNaN(numA)) valA = -Infinity;
+                if (isNaN(numB)) valB = -Infinity;
+                compareResult = (numA - numB);
+            } else {
+                // 字符串排序（不区分大小写）
+                const strA = String(valA).toLowerCase();
+                const strB = String(valB).toLowerCase();
+                compareResult = strA.localeCompare(strB, 'zh-CN');
+            }
+            
+            // 根据排序顺序返回结果
+            return order === 'asc' ? compareResult : -compareResult;
+        });
+    }
+
+    function searchDefectCodes() {
+        const pid = document.getElementById('product_id_input').value;
+        if (!pid) {
+            alert("请输入产品ID");
+            return;
+        }
+        fetchData(pid);
+    }
+
+    function fetchData(product_id) {
+        const tableBody = document.getElementById('table_body');
+        const emptyMsg = document.getElementById('empty_msg');
+        
+        tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">加载中...</td></tr>';
+        emptyMsg.style.display = 'none';
+        
+        // 重置排序状态
+        currentSortField = null;
+        currentSortOrder = null;
+        const allHeaders = document.querySelectorAll('#data_table th');
+        allHeaders.forEach(th => {
+            th.classList.remove('sort-asc', 'sort-desc');
+        });
+
+        fetch(`/admin/defects/api?product_id=${encodeURIComponent(product_id)}`, {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            tableBody.innerHTML = '';
+            
+            // 检查返回的数据是否是数组
+            if (Array.isArray(data) && data.length > 0) {
+                currentData = [...data];  // 存储数据副本
+                renderTable(currentData);
+            } else if (data.success !== undefined) {
+                // 如果后端返回的是包装格式
+                if (data.success && data.data && data.data.length > 0) {
+                    currentData = [...data.data];
+                    renderTable(currentData);
+                } else {
+                    currentData = [];
+                    emptyMsg.textContent = data.message || "未找到相关数据";
+                    emptyMsg.style.display = 'block';
+                }
+            } else {
+                // 空数组情况
+                if (data.length === 0) {
+                    currentData = [];
+                    emptyMsg.textContent = "未找到相关数据";
+                    emptyMsg.style.display = 'block';
+                } else {
+                    // 数据格式不对
+                    console.error('Unexpected data format:', data);
+                    currentData = [];
+                    emptyMsg.textContent = "数据格式错误";
+                    emptyMsg.style.display = 'block';
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            tableBody.innerHTML = '';
+            currentData = [];
+            emptyMsg.textContent = "系统错误，请稍后重试";
+            emptyMsg.style.display = 'block';
+        });
+    }
+
+    function renderTable(dataList) {
+        const tableBody = document.getElementById('table_body');
+        const emptyMsg = document.getElementById('empty_msg');
+        const checkboxFilter = document.getElementById('checkbox-filter');
+        
+        if (!dataList || dataList.length === 0) {
+            tableBody.innerHTML = '';
+            emptyMsg.textContent = "未找到相关数据";
+            emptyMsg.style.display = 'block';
+            checkboxFilter.style.display = 'none';
+            return;
+        }
+        
+        // 存储原始数据
+        allDefectsData = [...dataList];
+        
+        // 生成复选框
+        generateCheckboxes(dataList);
+        checkboxFilter.style.display = 'block';
+        
+        // 应用筛选
+        applyFilter();
+    }
+
+    // 搜索产品ID
+    function searchProducts(keyword) {
+        // 使用你已有的产品接口
+        fetch(`/admin/products/api?search=${encodeURIComponent(keyword)}`)
+            .then(response => response.json())
+            .then(result => {
+                // 根据你接口返回的格式：{code: 200, msg: '', data: [...]}
+                if (result.code === 200 && result.data && result.data.length > 0) {
+                    showSuggestions(result.data);
+                } else {
+                    document.getElementById('suggestions').style.display = 'none';
+                }
+            })
+            .catch(error => {
+                console.error('搜索失败:', error);
+                document.getElementById('suggestions').style.display = 'none';
+            });
+    }
+
+    // 显示建议下拉框
+    function showSuggestions(products) {
+        const suggestionsBox = document.getElementById('suggestions');
+        
+        if (!products || products.length === 0) {
+            suggestionsBox.style.display = 'none';
+            return;
+        }
+        
+        let html = '';
+        products.forEach(product => {
+            // 注意：你的接口返回的是 product_id 字段
+            html += `<div class="suggestion-item" onclick="selectProduct('${escapeHtml(product.product_id)}')">
+                        ${escapeHtml(product.product_id)}
+                    </div>`;
+        });
+        
+        suggestionsBox.innerHTML = html;
+        suggestionsBox.style.display = 'block';
+    }
+
+    // 选择建议的产品
+    function selectProduct(productId) {
+        const input = document.getElementById('product_id_input');
+        const suggestionsBox = document.getElementById('suggestions');
+        
+        input.value = productId;
+        suggestionsBox.style.display = 'none';
+        
+        // 自动查询
+        fetchData(productId);
+    }
+
+    // 生成复选框
+    function generateCheckboxes(dataList) {
+        // 提取所有不重复的NAME
+        const uniqueNames = [...new Set(dataList.map(item => item.name).filter(name => name))];
+        uniqueNames.sort(); // 排序
+        
+        const checkboxGroup = document.getElementById('checkbox-group');
+        
+        if (uniqueNames.length === 0) {
+            checkboxGroup.innerHTML = '<div>暂无分类数据</div>';
+            return;
+        }
+        
+        // 生成复选框HTML
+        let html = '';
+        uniqueNames.forEach(name => {
+            const escapedName = escapeHtml(name);
+            html += `
+                <div class="checkbox-item">
+                    <input type="checkbox" id="chk_${escapedName.replace(/\s/g, '_')}" value="${escapedName}" onchange="onCheckboxChange()">
+                    <label for="chk_${escapedName.replace(/\s/g, '_')}">${escapedName}</label>
+                </div>
+            `;
+        });
+        
+        checkboxGroup.innerHTML = html;
+        
+        // 默认全选
+        const checkboxes = document.querySelectorAll('#checkbox-group input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            cb.checked = true;
+        });
+        currentFilterNames = [...uniqueNames];
+    }
+
+    // 复选框变化时触发
+    function onCheckboxChange() {
+        // 获取所有选中的NAME
+        const checkboxes = document.querySelectorAll('#checkbox-group input[type="checkbox"]');
+        currentFilterNames = [];
+        checkboxes.forEach(cb => {
+            if (cb.checked) {
+                currentFilterNames.push(cb.value);
+            }
+        });
+        
+        // 应用筛选
+        applyFilter();
+    }
+
+    // 应用筛选
+    function applyFilter() {
+        const tableBody = document.getElementById('table_body');
+        const emptyMsg = document.getElementById('empty_msg');
+        
+        // 如果没有选中任何项，显示空
+        if (currentFilterNames.length === 0) {
+            tableBody.innerHTML = '';
+            emptyMsg.textContent = "请至少选择一个名称";
+            emptyMsg.style.display = 'block';
+            return;
+        }
+        
+        // 筛选数据
+        const filteredData = allDefectsData.filter(item => 
+            currentFilterNames.includes(item.name)
+        );
+        
+        emptyMsg.style.display = 'none';
+        
+        if (filteredData.length === 0) {
+            tableBody.innerHTML = '';
+            emptyMsg.textContent = "当前筛选条件下无数据";
+            emptyMsg.style.display = 'block';
+        } else {
+            renderTableData(filteredData);
+        }
+    }
+
+    // 渲染表格数据（不重新生成复选框）
+    function renderTableData(dataList) {
+        const tableBody = document.getElementById('table_body');
+        let html = '';
+        
+        dataList.forEach(item => {
+            html += `
+                <tr>
+                    <td>${escapeHtml(item.grade || '-')}</td>
+                    <td>${escapeHtml(item.code)}</td>
+                    <td>${escapeHtml(item.name)}</td>
+                    <td>${item.bsl !== null && item.bsl !== undefined ? escapeHtml(String(item.bsl)) : '-'}</td>
+                </tr>
+            `;
+        });
+        
+        tableBody.innerHTML = html;
+    }
+
+    // 重置筛选（全选）
+    function resetFilter() {
+        const checkboxes = document.querySelectorAll('#checkbox-group input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            cb.checked = true;
+        });
+        onCheckboxChange();
+    }
+
+    // 全选
+    function selectAll() {
+        const checkboxes = document.querySelectorAll('#checkbox-group input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            cb.checked = true;
+        });
+        onCheckboxChange();
+    }
+
+    // 取消全选
+    function deselectAll() {
+        const checkboxes = document.querySelectorAll('#checkbox-group input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            cb.checked = false;
+        });
+        onCheckboxChange();
+    }
+
+    // 防止XSS攻击的简单转义函数
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+</script>
+
+</body>
+</html>
