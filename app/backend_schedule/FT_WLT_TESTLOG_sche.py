@@ -103,7 +103,7 @@ class TaskQueueConsumer(threading.Thread):
             year = str(task_date.year)
             month = str(task_date.month)
             day = str(task_date.day)
-            ftp_path = f"{self._config.WLT_TEST_DATA_REMOTE_PATH}Data[{year}-{month}-{day}]{item}"
+            ftp_path = f"{self._config.WLT_TEST_DATA_REMOTE_PATH}Data[{year}-{month}-{day}]/{item}"
             parts = item.split('_')
             wafer_id = f"{parts[3]}-{parts[4]}"
             step = 'WLT' + parts[5]
