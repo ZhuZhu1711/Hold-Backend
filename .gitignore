@@ -16,3 +16,4 @@ testlog_temp_dir/*
 build/
 dist/
 venv/
+venv_packages/

@@ -19,6 +19,12 @@
         /* 搜索框 */
         .search-box input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 250px; }
 
+        /* 筛选框 */
+        .filters { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
+        .filters select, .filters input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
+        .filters select { width: 200px; }
+        .filters input { width: 200px; }
+
         /* 标签页样式 */
         .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 20px; }
         .tab { padding: 10px 20px; cursor: pointer; font-weight: bold; color: #666; }
@@ -41,6 +47,9 @@
         .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; color: white; }
         .badge-ate { background-color: #17a2b8; } /* 青色 */
         .badge-wlt { background-color: #6f42c1; } /* 紫色 */
+
+        /* 排序箭头 */
+        .sort-arrow { font-weight: bold; color: #007bff; }
     </style>
 </head>
 <body>
@@ -54,6 +63,14 @@
             <input type="text" id="search-input" placeholder="搜索产品ID..." onkeyup="if(event.key==='Enter') loadProducts()">
         </div>
 
+        <!-- 筛选控件 -->
+        <div class="filters">
+            <select id="engineer-filter" onchange="applyFilters()">
+                <option value="">所有工程师</option>
+            </select>
+            <input type="text" id="product-id-filter" placeholder="筛选产品ID" onkeyup="applyFilters()">
+        </div>
+
         <!-- 标签页导航 -->
         <div class="tabs">
             <div class="tab active" onclick="switchTab('ate')">ATE 产品</div>
@@ -63,10 +80,10 @@
         <table>
             <thead>
                 <tr>
-                    <th>产品ID</th>
-                    <th>Gross Die</th>
-                    <th>负责工程师</th>
-                    <th>更新时间</th>
+                    <th onclick="sortBy('product_id')">产品ID <span id="sort-arrow-product_id"></span></th>
+                    <th onclick="sortBy('gross_die')">Gross Die <span id="sort-arrow-gross_die"></span></th>
+                    <th onclick="sortBy('engineer_name')">负责工程师 <span id="sort-arrow-engineer_name"></span></th>
+                    <th onclick="sortBy('update_dt')">更新时间 <span id="sort-arrow-update_dt"></span></th>
                     <th>操作</th>
                 </tr>
             </thead>
@@ -86,13 +103,13 @@
                 
                 <div class="form-group">
                     <label>产品ID</label>
-                    <input type="text" id="p_product_id" readonly style="background:#eee;">
+                    <input type="text" id="p_product_id">
                 </div>
                 
                 <div class="form-group">
                     <label>产品类型 (Line Type)</label>
                     <!-- 这里改为只读显示，或者如果需要可以在新增时选择，但通常类型是固定的 -->
-                    <input type="text" id="p_line_type_display" readonly style="background:#eee; font-weight:bold;">
+                    <input type="text" id="p_line_type_display" style="font-weight:bold;">
                 </div>
 
                 <div class="form-group">
@@ -116,6 +133,8 @@
         let allProducts = []; // 存储所有产品数据
         let engineers = [];   // 存储工程师列表
         let currentTab = 'ate'; // 当前标签页状态
+        let currentSort = { column: '', direction: 'asc' }; // 排序状态
+        let filters = { engineer: '', productId: '' }; // 筛选状态
 
         // 1. 加载产品列表
         function loadProducts() {
@@ -130,21 +149,53 @@
                 });
         }
 
-        // 2. 渲染表格（根据当前标签页过滤）
+        // 2. 渲染表格（根据当前标签页过滤、筛选和排序）
         function renderTable() {
             const tbody = document.getElementById('product-table-body');
             let html = '';
             
-            // 过滤数据
-            const filteredData = allProducts.filter(p => {
+            // 首先按标签页过滤
+            let data = allProducts.filter(p => {
                 if (currentTab === 'ate') return p.line_type == 0;
                 return p.line_type != 0; // WLT
             });
 
-            if (filteredData.length === 0) {
+            // 应用筛选
+            data = data.filter(p => {
+                if (filters.engineer && p.engineer_id != filters.engineer) return false;
+                if (filters.productId && !p.product_id.toLowerCase().includes(filters.productId.toLowerCase())) return false;
+                return true;
+            });
+
+            // 应用排序
+            if (currentSort.column) {
+                data.sort((a, b) => {
+                    let aVal = a[currentSort.column];
+                    let bVal = b[currentSort.column];
+                    
+                    if (currentSort.column === 'update_dt') {
+                        aVal = new Date(aVal);
+                        bVal = new Date(bVal);
+                    } else if (typeof aVal === 'string') {
+                        aVal = aVal.toLowerCase();
+                        bVal = bVal.toLowerCase();
+                    }
+                    
+                    if (currentSort.direction === 'asc') {
+                        return aVal > bVal ? 1 : (aVal < bVal ? -1 : 0);
+                    } else {
+                        return aVal < bVal ? 1 : (aVal > bVal ? -1 : 0);
+                    }
+                });
+            }
+
+            // 更新排序箭头
+            updateSortArrows();
+
+            if (data.length === 0) {
                 html = '<tr><td colspan="5" style="text-align:center; color:#999;">暂无数据</td></tr>';
             } else {
-                filteredData.forEach(p => {
+                data.forEach(p => {
                     const typeBadge = p.line_type == 0 
                         ? '<span class="badge badge-ate">ATE</span>' 
                         : '<span class="badge badge-wlt">WLT</span>';
@@ -176,18 +227,59 @@
             renderTable();
         }
 
-        // 4. 加载工程师列表
+        // 4. 排序函数
+        function sortBy(column) {
+            if (currentSort.column === column) {
+                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.column = column;
+                currentSort.direction = 'asc';
+            }
+            renderTable();
+        }
+
+        // 5. 更新排序箭头
+        function updateSortArrows() {
+            const columns = ['product_id', 'gross_die', 'engineer_name', 'update_dt'];
+            columns.forEach(col => {
+                const arrowEl = document.getElementById(`sort-arrow-${col}`);
+                if (currentSort.column === col) {
+                    arrowEl.textContent = currentSort.direction === 'asc' ? '↑' : '↓';
+                } else {
+                    arrowEl.textContent = '';
+                }
+            });
+        }
+
+        // 6. 加载工程师列表
         function loadEngineers() {
             fetch('/admin/users/api')
                 .then(res => res.json())
                 .then(res => {
                     if (res.code === 200) {
                         engineers = res.data;
+                        fillEngineerFilter();
                     }
                 });
         }
 
-        // 5. 打开模态框（新增）
+        // 7. 填充工程师筛选下拉框
+        function fillEngineerFilter() {
+            const select = document.getElementById('engineer-filter');
+            select.innerHTML = '<option value="">所有工程师</option>';
+            engineers.forEach(eng => {
+                select.innerHTML += `<option value="${eng.id}">${eng.name} (${eng.employee_no})</option>`;
+            });
+        }
+
+        // 8. 应用筛选
+        function applyFilters() {
+            filters.engineer = document.getElementById('engineer-filter').value;
+            filters.productId = document.getElementById('product-id-filter').value.trim();
+            renderTable();
+        }
+
+        // 9. 打开模态框（新增）
         function openModal() {
             document.getElementById('productForm').reset();
             document.getElementById('p_id').value = '';
@@ -199,7 +291,7 @@
             document.getElementById('productModal').style.display = 'block';
         }
 
-        // 6. 打开模态框（编辑）
+        // 10. 打开模态框（编辑）
         function editProduct(p) {
             document.getElementById('p_id').value = p.id;
             document.getElementById('p_product_id').value = p.product_id;

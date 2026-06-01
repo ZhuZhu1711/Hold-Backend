@@ -1,7 +1,9 @@
 import sys
 import os
+import argparse
 from cryptography import x509
 from cryptography.hazmat.primitives.kdf import pbkdf2
+from waitress import serve
 # ==========================================
 # 路径配置
 # ==========================================
@@ -20,7 +22,6 @@ from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
 
 app = create_app()
-task_scheduler = FlaskTaskScheduler()
 
 # ==========================================
 # 注册蓝图
@@ -35,18 +36,25 @@ app.register_blueprint(test_data_bp)
 # 程序入口
 # ==========================================
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='启动 Flask 应用，可选 debug/release 模式。默认 release。')
+    parser.add_argument('--mode', choices=['debug', 'release'], default='release', help='运行模式，debug 不启动后台任务调度，release 启动。')
+    args = parser.parse_args()
+    is_debug_mode = args.mode == 'debug'
+
     with app.app_context():
         db.create_all()
     
-    # 打印路由表方便调试
+    print(f"运行模式: {args.mode}")
     print("\n=== 🚀 已注册的路由 ===")
     for rule in app.url_map.iter_rules():
         methods = ','.join(sorted([m for m in rule.methods if m not in ('HEAD', 'OPTIONS')]))
         print(f"{methods:7} {rule.rule} -> {rule.endpoint}")
     print("======================\n")
     
-    task_scheduler = FlaskTaskScheduler()    # 启动后台线程
-    task_scheduler.start()
-
-    app.run(host='0.0.0.0', debug=False, port=50001)
+    if not is_debug_mode:
+        task_scheduler = FlaskTaskScheduler()    # 启动后台线程
+        task_scheduler.start()
+        serve(app, host='0.0.0.0', port=50001)
+    else:
+        app.run(host='0.0.0.0', debug=True, port=50001)
     
