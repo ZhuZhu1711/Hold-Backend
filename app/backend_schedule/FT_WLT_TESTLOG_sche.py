@@ -1,6 +1,6 @@
 from app.utils.FtpWorker import FtpListWorker
 from app.utils.database_util import insert_FT_WLT_TESTLOG, query_testlog_history
-from config import Config
+from app.config import Config
 from datetime import date, timedelta
 from queue import Queue
 import threading

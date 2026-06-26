@@ -7,7 +7,6 @@ import re
 import os
 import csv
 import traceback
-import shutil
 
 
 def get_ftp_path_by_wafer(wafer_id: str, step: str):

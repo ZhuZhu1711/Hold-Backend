@@ -1,10 +1,9 @@
 """
 请求测试数据的接口
 """
-from flask import Blueprint, request, jsonify, abort
+from flask import Blueprint, request, jsonify
 from app.controllers import testlog_ctrl
 from datetime import datetime
-import os
 
 
 test_data_bp = Blueprint('test_data', __name__, url_prefix='/api/test_data')

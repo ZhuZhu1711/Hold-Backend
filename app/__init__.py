@@ -1,6 +1,6 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from config import Config
+from app.config import Config
 
 # 1. 创建数据库实例
 # 此时还没有绑定 app，只是一个全局对象

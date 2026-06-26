@@ -18,7 +18,7 @@ if project_root_path not in sys.path:
 # ==========================================
 from app import create_app, db
 # 直接从 routes 包中导入所有蓝图
-from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp
+from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
 
 app = create_app()
@@ -31,6 +31,7 @@ app.register_blueprint(auth_bp)   # 注册认证模块 (/login, /api/login)
 app.register_blueprint(product_bp)
 app.register_blueprint(defect_bp)
 app.register_blueprint(test_data_bp)
+app.register_blueprint(common_data_bp)
 
 # ==========================================
 # 程序入口
