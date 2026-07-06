@@ -35,7 +35,7 @@ def get_bysite_data():
     if step_str not in ['ATE', 'WLT']:
         return jsonify({"error": "invalid step param.Must in ATE | WLT"}), 400
     step_list = ['FA'] if step_str == 'ATE' else ['WLTA', 'WLTB']
-    resp = testlog_ctrl.get_testlog_data_by_wafer(wafer_id, step_list)
+    resp = testlog_ctrl.get_testlog_bysite_str(wafer_id, step_list)
     if resp is not None:
         return jsonify({'code': 200, 'bysite': resp, 'msg': 'bysite获取成功'})
     else:

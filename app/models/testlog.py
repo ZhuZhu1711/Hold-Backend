@@ -3,7 +3,6 @@ FT_WLT_TESTLOG表的映射
 """
 from app import db
 from sqlalchemy import Column, Integer, String, Date, Sequence
-from datetime import date
 
 class FtWltTestlog(db.Model):
     # 指定表名和 Schema

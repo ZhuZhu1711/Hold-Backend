@@ -29,7 +29,23 @@ def get_ftp_path_by_wafer(wafer_id: str, step: str):
         print(f"Database Error: {e}")
         return None
     
-def get_testlog_data_by_wafer(wafer_id: str, step_list: list):
+def get_test_data(wafer_id: str, step: str):
+    """
+    根据Wafer ID 查询最新测试数据:良率+缺陷率
+    
+    Args:
+        wafer_id (str): 晶圆 ID
+        step: FA or WLTA or WLTB
+    Returns:
+        缺陷的test data——json字符串
+    """
+    if not wafer_id or not isinstance(wafer_id, str):
+        return None
+    if not step or not isinstance(step, str):
+        return None
+    
+    
+def get_testlog_bysite_str(wafer_id: str, step_list: list):
     """
     根据 Wafer ID 查询最新testlog并解析
     
