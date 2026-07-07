@@ -5,10 +5,30 @@
 from flask import Blueprint, request, jsonify
 from app.controllers.common_data_ctrl import get_gross_die_value
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
+from app import db
 
 
 common_data_bp = Blueprint('common_data', __name__, url_prefix='/api/common_data')
 
+# latest版本号查询接口
+@common_data_bp.route('/software/latest_version', methods=['GET'])
+def get_latest_version():
+    try:
+        version = db.session.execute(
+            text("SELECT LATEST_VERSION FROM SOFTWARE_INFO")
+        ).scalar()
+        return jsonify({
+            'code': 200,
+            'msg': 'success',
+            'data': {'version': version or "1.0.0"}
+        })
+    except Exception as e:
+        return jsonify({
+            'code': 500,
+            'msg': f'查询失败: {str(e)}',
+            'data': None
+        }), 500
 
 @common_data_bp.route('/product/gross_die', methods=['GET'])
 def get_gross_die():
@@ -32,4 +52,7 @@ def get_gross_die():
         return jsonify({'code': 500, 'msg': f'数据库查询异常: {str(e)}', 'data': None}), 500
     except Exception as e:
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}', 'data': None}), 500
+    
+    
+    
     
