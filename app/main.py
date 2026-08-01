@@ -20,6 +20,7 @@ from app import create_app, db
 # 直接从 routes 包中导入所有蓝图
 from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
+from app.backend_schedule.FT_HOLD_MERGE_sche import HoldMergeScheduler
 
 app = create_app()
 
@@ -56,6 +57,8 @@ if __name__ == '__main__':
     if not is_debug_mode:
         task_scheduler = FlaskTaskScheduler()    # 启动后台线程
         task_scheduler.start()
+        hold_merge_scheduler = HoldMergeScheduler()
+        hold_merge_scheduler.start()
         serve(app, host='0.0.0.0', port=50001)
     else:
         app.run(host='0.0.0.0', debug=True, port=50001)

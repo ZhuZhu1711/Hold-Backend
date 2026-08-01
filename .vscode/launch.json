@@ -4,11 +4,20 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+        // {
+        //     "name": "HOLD_BACKEND: Debug",
+        //     "type": "debugpy",
+        //     "request": "launch",
+        //     "program": "${workspaceFolder}/app/main.py",
+        //     "console": "integratedTerminal",
+        //     "args": ["--mode", "debug"],
+        //     "cwd": "${workspaceFolder}"
+        // },
         {
-            "name": "HOLD_BACKEND: Debug",
+            "name": "Hold Merge: 单次测试",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/app/main.py",
+            "program": "${workspaceFolder}/app/backend_schedule/FT_HOLD_MERGE_sche.py",
             "console": "integratedTerminal",
             "args": ["--mode", "debug"],
             "cwd": "${workspaceFolder}"
