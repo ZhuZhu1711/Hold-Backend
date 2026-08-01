@@ -1,5 +1,6 @@
 from flask import Blueprint, render_template, request, jsonify, session, flash, redirect, url_for
 from app.controllers import product_ctrl
+from app.utils.auth_decorators import current_role_name
 from functools import wraps
 
 product_bp = Blueprint('product', __name__, url_prefix='/admin/products')
@@ -25,7 +26,11 @@ def product_list_page():
     产品管理页面
     URL: /admin/products
     """
-    return render_template('products/list.html')
+    return render_template(
+        'products/list.html',
+        user_name=session.get('user_name'),
+        role_name=current_role_name(),
+    )
 
 # ==========================================
 # 数据接口路由

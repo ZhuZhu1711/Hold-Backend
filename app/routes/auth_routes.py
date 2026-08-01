@@ -77,15 +77,12 @@ def api_login():
     success, msg, user_data = user_ctrl.login_logic(emp_no, password)
     
     if success:
-        # 权限检查：只有 role == 0 才能进入后台
-        if user_data['role'] == 0:
-            # 写入 Session
-            session['user_id'] = user_data['id']
-            session['user_name'] = user_data['name']
-            session['role'] = user_data['role']
-            return jsonify({'code': 200, 'msg': msg, 'data': user_data})
-        else:
-            return jsonify({'code': 403, 'msg': '权限不足：仅限管理员(root)登录'}), 403
+        # Web 后台页面仍仅 root；API 登录对全部角色开放（流转查询等只读接口不按角色限制）
+        session['user_id'] = user_data['id']
+        session['user_name'] = user_data['name']
+        session['role'] = user_data['role']
+        session['employee_no'] = user_data.get('employee_no')
+        return jsonify({'code': 200, 'msg': msg, 'data': user_data})
     else:
         return jsonify({'code': 401, 'msg': msg}), 401
     

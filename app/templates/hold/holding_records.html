@@ -38,7 +38,15 @@
         th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
         th { background: #f8f9fa; position: sticky; top: 0; }
         .empty { padding: 40px; text-align: center; color: #888; }
-        .reason { max-width: 280px; word-break: break-word; }
+        .reason {
+            max-width: 360px;
+            line-height: 1.45;
+            color: #444;
+            white-space: normal;
+        }
+        .reason .line { display: block; word-break: break-word; }
+        .site-equip { white-space: nowrap; }
+        .site-equip .equip { color: #888; font-size: 12px; }
         .badge {
             display: inline-block; padding: 2px 8px; border-radius: 4px;
             background: #28a745; color: #fff; font-size: 12px;
@@ -55,6 +63,7 @@
             <li><a href="/dashboard">仪表盘</a></li>
             <li class="active"><a href="/admin/hold/holding">Holding Record</a></li>
             <li><a href="/admin/hold/history">Hold 历史</a></li>
+            <li><a href="/admin/hold/circulations">Hold 流转</a></li>
             <li><a href="/admin/users">用户管理</a></li>
             <li><a href="/admin/products">产品管理</a></li>
             <li><a href="/admin/defects">缺陷管理</a></li>
@@ -65,7 +74,7 @@
     <main class="main">
         <div class="card">
             <h1>Holding Record 报表</h1>
-            <p class="sub">数据来自 FT_HOLD_RECORD，并用 FT_HOLD_INFO.HOLDING=0 过滤仍在 hold 的记录（已解 hold 已排除）。</p>
+            <p class="sub">查询在线的Hold报表</p>
 
             <div class="filters">
                 <input id="product_id" placeholder="型号 PRODUCT_ID" />
@@ -78,21 +87,17 @@
                 <table>
                     <thead>
                         <tr>
-                            <th>ID</th>
                             <th>型号</th>
-                            <th>站点</th>
-                            <th>设备</th>
+                            <th>站点/设备</th>
                             <th>Lot</th>
                             <th>Wafer</th>
-                            <th>Hold Code</th>
                             <th>原因</th>
                             <th>Hold 时间</th>
                             <th>状态</th>
-                            <th>INFO条数</th>
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="11" class="empty">加载中...</td></tr>
+                        <tr><td colspan="7" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -100,6 +105,35 @@
     </main>
 
     <script>
+        const REASON_MAX_LEN = 80;
+
+        function esc(v) {
+            return String(v ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;');
+        }
+
+        function formatSiteEquip(station, equip) {
+            const s = station || '-';
+            const e = equip || '';
+            if (!e) return esc(s);
+            return `${esc(s)}<div class="equip">${esc(e)}</div>`;
+        }
+
+        /** 多原因按 @ 拆分换行，单条超长截断；title 保留全文 */
+        function formatReason(raw) {
+            const full = String(raw || '').trim();
+            if (!full) return '-';
+            const parts = full.split('@').map(s => s.trim()).filter(Boolean);
+            const lines = (parts.length ? parts : [full]).map(p => {
+                const shown = p.length > REASON_MAX_LEN ? (p.slice(0, REASON_MAX_LEN) + '…') : p;
+                return `<span class="line" title="${esc(p)}">${esc(shown)}</span>`;
+            });
+            return lines.join('');
+        }
+
         async function loadData() {
             const params = new URLSearchParams({
                 product_id: document.getElementById('product_id').value.trim(),
@@ -113,29 +147,25 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="11" class="empty">' + (json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="7" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     return;
                 }
                 const rows = json.data || [];
                 document.getElementById('meta').textContent = '共 ' + rows.length + ' 条在线 Hold Record';
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="11" class="empty">暂无在线 Holding Record</td></tr>';
+                        '<tr><td colspan="7" class="empty">暂无在线 Holding Record</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => `
                     <tr>
-                        <td>${r.ID ?? ''}</td>
-                        <td>${r.PRODUCT_ID ?? ''}</td>
-                        <td>${r.STATION ?? ''}</td>
-                        <td>${r.EQUIP_ID ?? ''}</td>
-                        <td>${r.LOT_ID ?? ''}</td>
-                        <td>${r.WAFER_ID ?? ''}</td>
-                        <td>${r.HOLD_CODE ?? ''}</td>
-                        <td class="reason">${r.HOLD_REASON ?? ''}</td>
-                        <td>${r.HOLD_DTTM ?? '-'}</td>
+                        <td>${esc(r.PRODUCT_ID)}</td>
+                        <td class="site-equip">${formatSiteEquip(r.STATION, r.EQUIP_ID)}</td>
+                        <td>${esc(r.LOT_ID)}</td>
+                        <td>${esc(r.WAFER_ID)}</td>
+                        <td class="reason">${formatReason(r.HOLD_REASON)}</td>
+                        <td>${esc(r.HOLD_DTTM || '-')}</td>
                         <td><span class="badge">Holding</span></td>
-                        <td>${r.INFO_CNT ?? 0}</td>
                     </tr>
                 `).join('');
             } catch (e) {

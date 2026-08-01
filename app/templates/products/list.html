@@ -2,113 +2,153 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>产品管理</title>
     <style>
-        /* 基础样式 */
-        body { font-family: sans-serif; padding: 20px; background: #f4f6f9; }
-        .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px; }
-        
-        /* 顶部操作栏 */
-        .header-actions { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
-        .btn { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; color: white; font-size: 14px; text-decoration: none; display: inline-block;}
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .toolbar {
+            display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;
+            align-items: center; justify-content: space-between;
+        }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        .filters input, .filters select {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 160px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            color: #fff; font-size: 14px; text-decoration: none; display: inline-block;
+        }
         .btn-primary { background: #007bff; }
+        .btn-primary:hover { background: #0069d9; }
         .btn-warning { background: #ffc107; color: #333; }
-        .back-link { color: #007bff; text-decoration: none; }
-
-        /* 搜索框 */
-        .search-box input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 250px; }
-
-        /* 筛选框 */
-        .filters { margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
-        .filters select, .filters input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
-        .filters select { width: 200px; }
-        .filters input { width: 200px; }
-
-        /* 标签页样式 */
-        .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 20px; }
-        .tab { padding: 10px 20px; cursor: pointer; font-weight: bold; color: #666; }
-        .tab.active { color: #007bff; border-bottom: 2px solid #007bff; margin-bottom: -1px; }
-
-        /* 表格样式 */
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #f8f9fa; }
-        
-        /* 模态框样式 */
-        .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.4); }
-        .modal-content { background-color: #fff; margin: 10% auto; padding: 20px; border-radius: 8px; width: 400px; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-        .form-group input, .form-group select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;}
-        .close { float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
-        
-        /* 状态标签 */
-        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; color: white; }
-        .badge-ate { background-color: #17a2b8; } /* 青色 */
-        .badge-wlt { background-color: #6f42c1; } /* 紫色 */
-
-        /* 排序箭头 */
+        .btn-warning:hover { background: #e0a800; }
+        .tabs {
+            display: flex; gap: 4px; border-bottom: 1px solid #eee; margin-bottom: 16px;
+        }
+        .tab {
+            padding: 10px 18px; cursor: pointer; color: #666; font-size: 14px;
+            border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .tab.active { color: #007bff; border-bottom-color: #007bff; font-weight: 600; }
+        .tab:hover { color: #007bff; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; }
+        th { background: #f8f9fa; position: sticky; top: 0; cursor: pointer; user-select: none; }
+        th:hover { background: #e9ecef; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; color: #fff; }
+        .badge-ate { background: #17a2b8; }
+        .badge-wlt { background: #6f42c1; }
         .sort-arrow { font-weight: bold; color: #007bff; }
+        .modal {
+            display: none; position: fixed; z-index: 50; left: 0; top: 0;
+            width: 100%; height: 100%; background: rgba(0,0,0,0.35);
+        }
+        .modal-content {
+            background: #fff; margin: 8% auto; padding: 20px; border-radius: 8px;
+            width: min(420px, 92vw); box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }
+        .modal-content h3 { margin-bottom: 14px; font-size: 18px; }
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: #555; }
+        .form-group input, .form-group select {
+            width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px;
+        }
+        .close { float: right; font-size: 24px; font-weight: bold; cursor: pointer; color: #888; line-height: 1; }
+        .close:hover { color: #333; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header-actions">
-            <a href="/dashboard" class="back-link">← 返回仪表盘</a>
-            <button class="btn btn-primary" onclick="openModal()">+ 新增产品</button>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>后台管理系统</h2>
+            <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
         </div>
+        <ul class="nav-links">
+            <li><a href="/dashboard">仪表盘</a></li>
+            <li><a href="/admin/hold/holding">Holding Record</a></li>
+            <li><a href="/admin/hold/history">Hold 历史</a></li>
+            <li><a href="/admin/hold/circulations">Hold 流转</a></li>
+            <li><a href="/admin/users">用户管理</a></li>
+            <li class="active"><a href="/admin/products">产品管理</a></li>
+            <li><a href="/admin/defects">缺陷管理</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
 
-        <div class="search-box">
-            <input type="text" id="search-input" placeholder="搜索产品ID..." onkeyup="if(event.key==='Enter') loadProducts()">
+    <main class="main">
+        <div class="card">
+            <h1>产品管理</h1>
+            <p class="sub">维护产品型号、Gross Die 与负责工程师绑定。</p>
+
+            <div class="toolbar">
+                <div class="filters">
+                    <input type="text" id="search-input" placeholder="搜索产品ID..." onkeyup="if(event.key==='Enter') loadProducts()">
+                    <select id="engineer-filter" onchange="applyFilters()">
+                        <option value="">所有工程师</option>
+                    </select>
+                    <input type="text" id="product-id-filter" placeholder="筛选产品ID" onkeyup="applyFilters()">
+                    <button class="btn btn-primary" onclick="loadProducts()">查询</button>
+                </div>
+                <button class="btn btn-primary" onclick="openModal()">+ 新增产品</button>
+            </div>
+
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('ate')">ATE 产品</div>
+                <div class="tab" onclick="switchTab('wlt')">WLT 产品</div>
+            </div>
+
+            <div style="overflow:auto; max-height:65vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th onclick="sortBy('product_id')">产品ID <span id="sort-arrow-product_id" class="sort-arrow"></span></th>
+                            <th onclick="sortBy('gross_die')">Gross Die <span id="sort-arrow-gross_die" class="sort-arrow"></span></th>
+                            <th onclick="sortBy('engineer_name')">负责工程师 <span id="sort-arrow-engineer_name" class="sort-arrow"></span></th>
+                            <th onclick="sortBy('update_dt')">更新时间 <span id="sort-arrow-update_dt" class="sort-arrow"></span></th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="product-table-body">
+                        <tr><td colspan="5" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
+    </main>
 
-        <!-- 筛选控件 -->
-        <div class="filters">
-            <select id="engineer-filter" onchange="applyFilters()">
-                <option value="">所有工程师</option>
-            </select>
-            <input type="text" id="product-id-filter" placeholder="筛选产品ID" onkeyup="applyFilters()">
-        </div>
-
-        <!-- 标签页导航 -->
-        <div class="tabs">
-            <div class="tab active" onclick="switchTab('ate')">ATE 产品</div>
-            <div class="tab" onclick="switchTab('wlt')">WLT 产品</div>
-        </div>
-
-        <table>
-            <thead>
-                <tr>
-                    <th onclick="sortBy('product_id')">产品ID <span id="sort-arrow-product_id"></span></th>
-                    <th onclick="sortBy('gross_die')">Gross Die <span id="sort-arrow-gross_die"></span></th>
-                    <th onclick="sortBy('engineer_name')">负责工程师 <span id="sort-arrow-engineer_name"></span></th>
-                    <th onclick="sortBy('update_dt')">更新时间 <span id="sort-arrow-update_dt"></span></th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody id="product-table-body">
-                <!-- 数据将通过JS插入 -->
-            </tbody>
-        </table>
-    </div>
-
-    <!-- 编辑/新增 模态框 -->
     <div id="productModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
             <h3 id="modalTitle">产品信息</h3>
             <form id="productForm">
                 <input type="hidden" id="p_id">
-                
+
                 <div class="form-group">
                     <label>产品ID</label>
                     <input type="text" id="p_product_id">
                 </div>
-                
+
                 <div class="form-group">
                     <label>产品类型 (Line Type)</label>
-                    <!-- 这里改为只读显示，或者如果需要可以在新增时选择，但通常类型是固定的 -->
                     <input type="text" id="p_line_type_display" style="font-weight:bold;">
                 </div>
 
@@ -130,13 +170,12 @@
     </div>
 
     <script>
-        let allProducts = []; // 存储所有产品数据
-        let engineers = [];   // 存储工程师列表
-        let currentTab = 'ate'; // 当前标签页状态
-        let currentSort = { column: '', direction: 'asc' }; // 排序状态
-        let filters = { engineer: '', productId: '' }; // 筛选状态
+        let allProducts = [];
+        let engineers = [];
+        let currentTab = 'ate';
+        let currentSort = { column: '', direction: 'asc' };
+        let filters = { engineer: '', productId: '' };
 
-        // 1. 加载产品列表
         function loadProducts() {
             const searchVal = document.getElementById('search-input').value;
             fetch(`/admin/products/api?search=${searchVal}`)
@@ -144,35 +183,31 @@
                 .then(res => {
                     if (res.code === 200) {
                         allProducts = res.data;
-                        renderTable(); // 渲染表格
+                        renderTable();
                     }
                 });
         }
 
-        // 2. 渲染表格（根据当前标签页过滤、筛选和排序）
         function renderTable() {
             const tbody = document.getElementById('product-table-body');
             let html = '';
-            
-            // 首先按标签页过滤
+
             let data = allProducts.filter(p => {
                 if (currentTab === 'ate') return p.line_type == 0;
-                return p.line_type != 0; // WLT
+                return p.line_type != 0;
             });
 
-            // 应用筛选
             data = data.filter(p => {
                 if (filters.engineer && p.engineer_id != filters.engineer) return false;
                 if (filters.productId && !p.product_id.toLowerCase().includes(filters.productId.toLowerCase())) return false;
                 return true;
             });
 
-            // 应用排序
             if (currentSort.column) {
                 data.sort((a, b) => {
                     let aVal = a[currentSort.column];
                     let bVal = b[currentSort.column];
-                    
+
                     if (currentSort.column === 'update_dt') {
                         aVal = new Date(aVal);
                         bVal = new Date(bVal);
@@ -180,7 +215,7 @@
                         aVal = aVal.toLowerCase();
                         bVal = bVal.toLowerCase();
                     }
-                    
+
                     if (currentSort.direction === 'asc') {
                         return aVal > bVal ? 1 : (aVal < bVal ? -1 : 0);
                     } else {
@@ -189,17 +224,12 @@
                 });
             }
 
-            // 更新排序箭头
             updateSortArrows();
 
             if (data.length === 0) {
-                html = '<tr><td colspan="5" style="text-align:center; color:#999;">暂无数据</td></tr>';
+                html = '<tr><td colspan="5" class="empty">暂无数据</td></tr>';
             } else {
                 data.forEach(p => {
-                    const typeBadge = p.line_type == 0 
-                        ? '<span class="badge badge-ate">ATE</span>' 
-                        : '<span class="badge badge-wlt">WLT</span>';
-                    
                     html += `
                         <tr>
                             <td>${p.product_id}</td>
@@ -216,18 +246,14 @@
             tbody.innerHTML = html;
         }
 
-        // 3. 切换标签页
         function switchTab(type) {
             currentTab = type;
-            // 更新UI样式
             const tabs = document.querySelectorAll('.tab');
             tabs[0].className = type === 'ate' ? 'tab active' : 'tab';
             tabs[1].className = type === 'wlt' ? 'tab active' : 'tab';
-            
             renderTable();
         }
 
-        // 4. 排序函数
         function sortBy(column) {
             if (currentSort.column === column) {
                 currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
@@ -238,7 +264,6 @@
             renderTable();
         }
 
-        // 5. 更新排序箭头
         function updateSortArrows() {
             const columns = ['product_id', 'gross_die', 'engineer_name', 'update_dt'];
             columns.forEach(col => {
@@ -251,7 +276,6 @@
             });
         }
 
-        // 6. 加载工程师列表
         function loadEngineers() {
             fetch('/admin/users/api')
                 .then(res => res.json())
@@ -263,7 +287,6 @@
                 });
         }
 
-        // 7. 填充工程师筛选下拉框
         function fillEngineerFilter() {
             const select = document.getElementById('engineer-filter');
             select.innerHTML = '<option value="">所有工程师</option>';
@@ -272,37 +295,33 @@
             });
         }
 
-        // 8. 应用筛选
         function applyFilters() {
             filters.engineer = document.getElementById('engineer-filter').value;
             filters.productId = document.getElementById('product-id-filter').value.trim();
             renderTable();
         }
 
-        // 9. 打开模态框（新增）
         function openModal() {
             document.getElementById('productForm').reset();
             document.getElementById('p_id').value = '';
             document.getElementById('p_product_id').value = '';
             document.getElementById('p_line_type_display').value = '';
             document.getElementById('modalTitle').innerText = "新增产品";
-            
+
             fillEngineerSelect();
             document.getElementById('productModal').style.display = 'block';
         }
 
-        // 10. 打开模态框（编辑）
         function editProduct(p) {
             document.getElementById('p_id').value = p.id;
             document.getElementById('p_product_id').value = p.product_id;
             document.getElementById('p_gross_die').value = p.gross_die;
-            
-            // 显示类型文本
+
             const typeText = p.line_type == 0 ? "ATE (0)" : `WLT (${p.line_type})`;
             document.getElementById('p_line_type_display').value = typeText;
 
             fillEngineerSelect(p.engineer_id);
-            
+
             document.getElementById('modalTitle').innerText = "修改产品: " + p.product_id;
             document.getElementById('productModal').style.display = 'block';
         }
@@ -320,7 +339,6 @@
             document.getElementById('productModal').style.display = 'none';
         }
 
-        // 7. 保存产品
         function saveProduct() {
             const id = document.getElementById('p_id').value;
             const productId = document.getElementById('p_product_id').value;
@@ -332,19 +350,14 @@
                 return;
             }
 
-            // 简单判断 Line Type，实际应该在新增时让用户选，这里为了演示默认逻辑
-            // 如果ID为空（新增），我们需要决定它是ATE还是WLT。
-            // 这里简单处理：如果没ID，默认创建ATE(0)，或者你可以加个下拉框让用户选
-            let lineType = 0; 
+            let lineType = 0;
             if (!id) {
-                // 这里可以扩展：在新增弹窗里加一个 Line Type 选择框
-                // 暂时默认设为 0 (ATE)
             }
 
             const data = {
                 product_id: productId,
                 gross_die: grossDie,
-                line_type: lineType, 
+                line_type: lineType,
                 engineer_id: engId === "" ? null : engId
             };
 
@@ -368,7 +381,6 @@
             });
         }
 
-        // 初始化
         document.addEventListener('DOMContentLoaded', () => {
             loadProducts();
             loadEngineers();

@@ -1,5 +1,6 @@
-from flask import Blueprint, render_template, request, jsonify
+from flask import Blueprint, render_template, request, jsonify, session
 from app.controllers import user_ctrl
+from app.utils.auth_decorators import current_role_name
 
 user_bp = Blueprint('user', __name__, url_prefix='/admin/users')
 
@@ -10,7 +11,11 @@ def user_list_page():
     用户管理页面
     URL: /admin/users
     """
-    return render_template('users/list.html')
+    return render_template(
+        'users/list.html',
+        user_name=session.get('user_name'),
+        role_name=current_role_name(),
+    )
 
 # --- 数据接口路由 ---
 @user_bp.route('/api', methods=['GET'])

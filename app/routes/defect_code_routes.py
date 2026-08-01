@@ -1,16 +1,22 @@
-from flask import Blueprint, request, jsonify, render_template
+from flask import Blueprint, request, jsonify, render_template, session
 from app.controllers.defect_code_ctrl import (
     get_defects_by_product,
     create_defect,
     delete_defect,
     update_grade
 )
+from app.utils.auth_decorators import current_role_name
 
 defect_bp = Blueprint('defect', __name__, url_prefix='/admin/defects')
 
 @defect_bp.route('')
 def defect_code_list_page():
-    return render_template('defect/list.html')
+    return render_template(
+        'defect/list.html',
+        user_name=session.get('user_name'),
+        role_name=current_role_name(),
+        product_id=request.args.get('product_id', ''),
+    )
 
 @defect_bp.route('/api', methods=['GET'])
 def get_defects():

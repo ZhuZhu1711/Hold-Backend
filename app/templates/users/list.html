@@ -2,82 +2,114 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>用户管理</title>
     <style>
-        /* ... (保持之前的 CSS 不变) ... */
-        body { font-family: sans-serif; padding: 20px; background: #f4f6f9; }
-        .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px; }
-        
-        .header-actions { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
-        .btn { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; color: white; font-size: 14px; }
-        .btn-primary { background: #007bff; }
-        .btn-danger { background: #dc3545; }
-        
-        /* 搜索框样式 */
-        .search-box input {
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            width: 250px;
-            font-size: 14px;
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
         }
-
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #f8f9fa; color: #333; cursor: pointer; user-select: none; }
-        th:hover { background-color: #e2e6ea; }
-        
-        /* 排序箭头样式 */
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .toolbar {
+            display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;
+            align-items: center; justify-content: space-between;
+        }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        .filters input {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 200px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            color: #fff; font-size: 14px;
+        }
+        .btn-primary { background: #007bff; }
+        .btn-primary:hover { background: #0069d9; }
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; }
+        th { background: #f8f9fa; position: sticky; top: 0; user-select: none; }
+        th.sortable { cursor: pointer; }
+        th.sortable:hover { background: #e9ecef; }
+        .empty { padding: 40px; text-align: center; color: #888; }
         .sort-icon::after { content: ' ↕'; font-size: 12px; color: #999; }
         .sort-asc::after { content: ' ↑'; color: #007bff; }
         .sort-desc::after { content: ' ↓'; color: #007bff; }
-
         .role-badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
         .role-0 { background: #ffebee; color: #c62828; }
         .role-1 { background: #e3f2fd; color: #1565c0; }
+        .role-2 { background: #fff3e0; color: #ef6c00; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header-actions">
-            <a href="/dashboard" class="back-link" style="margin:0; text-decoration:none; color:#007bff;">← 返回仪表盘</a>
-            <button class="btn btn-primary" onclick="addUser()">+ 新增用户</button>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>后台管理系统</h2>
+            <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
         </div>
-        
-        <!-- 搜索区域 -->
-        <div style="margin-bottom: 20px;">
-            <div class="search-box">
-                <input type="text" id="search-input" placeholder="搜索工号或姓名..." onkeyup="handleSearch(event)">
+        <ul class="nav-links">
+            <li><a href="/dashboard">仪表盘</a></li>
+            <li><a href="/admin/hold/holding">Holding Record</a></li>
+            <li><a href="/admin/hold/history">Hold 历史</a></li>
+            <li><a href="/admin/hold/circulations">Hold 流转</a></li>
+            <li class="active"><a href="/admin/users">用户管理</a></li>
+            <li><a href="/admin/products">产品管理</a></li>
+            <li><a href="/admin/defects">缺陷管理</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>用户管理</h1>
+            <p class="sub">维护系统账号，支持按工号/姓名搜索与排序。</p>
+
+            <div class="toolbar">
+                <div class="filters">
+                    <input type="text" id="search-input" placeholder="搜索工号或姓名..." onkeyup="handleSearch(event)">
+                    <button class="btn btn-primary" onclick="loadUsers()">查询</button>
+                </div>
+                <button class="btn btn-primary" onclick="addUser()">+ 新增用户</button>
+            </div>
+
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="sortable" onclick="toggleSort('employee_no')" id="th-employee_no">工号 <span class="sort-icon"></span></th>
+                            <th class="sortable" onclick="toggleSort('name')" id="th-name">姓名 <span class="sort-icon"></span></th>
+                            <th>角色</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="user-table-body">
+                        <tr><td colspan="4" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
-
-        <h2>用户列表</h2>
-        <table>
-            <thead>
-                <tr>
-                    <!-- 点击表头触发排序 -->
-                    <th onclick="toggleSort('employee_no')" id="th-employee_no">工号 <span class="sort-icon"></span></th>
-                    <th onclick="toggleSort('name')" id="th-name">姓名 <span class="sort-icon"></span></th>
-                    <th>角色</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody id="user-table-body">
-                <!-- 数据将通过 JS 插入这里 -->
-            </tbody>
-        </table>
-    </div>
+    </main>
 
     <script>
-        // 全局状态
         let currentSort = { by: 'employee_no', order: 'asc' };
 
-        // 1. 加载用户列表
         function loadUsers() {
             const searchVal = document.getElementById('search-input').value;
-            
-            // 构建 URL 参数
             const url = `/admin/users/api?search=${searchVal}&sort_by=${currentSort.by}&order=${currentSort.order}`;
 
             fetch(url)
@@ -87,10 +119,10 @@
                     if (res.code === 200) {
                         let html = '';
                         if (res.data.length === 0) {
-                            html = '<tr><td colspan="4" style="text-align:center; color:#999;">没有找到用户</td></tr>';
+                            html = '<tr><td colspan="4" class="empty">没有找到用户</td></tr>';
                         } else {
                             res.data.forEach(user => {
-                                const roleClass = user.role === 0 ? 'role-0' : 'role-1';
+                                const roleClass = user.role === 0 ? 'role-0' : (user.role === 2 ? 'role-2' : 'role-1');
                                 const roleMap = {
                                     0: '超级管理员',
                                     1: '普通用户',
@@ -98,9 +130,8 @@
                                 };
                                 const roleName = roleMap[user.role] || '未知角色';
                                 const isAdmin = user.role === 0;
-                                // 如果是管理员，禁用删除按钮并显示提示
-                                const deleteBtn = isAdmin 
-                                    ? `<button class="btn" disabled style="background:#ccc; cursor:not-allowed;">不可删</button>`
+                                const deleteBtn = isAdmin
+                                    ? `<button class="btn" disabled>不可删</button>`
                                     : `<button class="btn btn-danger" onclick="deleteUser(${user.id})">删除</button>`;
 
                                 html += `
@@ -108,9 +139,7 @@
                                         <td>${user.employee_no}</td>
                                         <td>${user.name}</td>
                                         <td><span class="role-badge ${roleClass}">${roleName}</span></td>
-                                        <td>
-                                            ${deleteBtn}
-                                        </td>
+                                        <td>${deleteBtn}</td>
                                     </tr>
                                 `;
                             });
@@ -121,33 +150,26 @@
                 });
         }
 
-        // 2. 处理搜索输入
         function handleSearch(e) {
-            if (e.key === 'Enter') { // 按回车键触发
+            if (e.key === 'Enter') {
                 loadUsers();
             }
         }
 
-        // 3. 处理排序切换
         function toggleSort(field) {
             if (currentSort.by === field) {
-                // 如果点击当前列，切换升降序
                 currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
             } else {
-                // 如果点击新列，默认升序
                 currentSort.by = field;
                 currentSort.order = 'asc';
             }
             loadUsers();
         }
 
-        // 更新表头箭头样式
         function updateSortIcons() {
-            // 重置所有图标
             document.querySelectorAll('th span').forEach(span => {
                 span.className = 'sort-icon';
             });
-            // 设置当前激活的图标
             const activeTh = document.getElementById(`th-${currentSort.by}`);
             if (activeTh) {
                 const span = activeTh.querySelector('span');
@@ -155,7 +177,6 @@
             }
         }
 
-        // ... (addUser 和 deleteUser 函数保持不变) ...
         function addUser() {
             const employee_no = prompt("请输入工号:");
             if (!employee_no) return;
@@ -172,7 +193,7 @@
             })
             .then(res => res.json())
             .then(data => {
-                if (data.code === 200) { alert('添加成功！'); loadUsers(); } 
+                if (data.code === 200) { alert('添加成功！'); loadUsers(); }
                 else { alert('添加失败: ' + data.msg); }
             });
         }
@@ -182,12 +203,11 @@
             fetch(`/admin/users/api/${id}`, { method: 'DELETE' })
             .then(res => res.json())
             .then(data => {
-                if (data.code === 200) { alert('删除成功！'); loadUsers(); } 
+                if (data.code === 200) { alert('删除成功！'); loadUsers(); }
                 else { alert('删除失败: ' + data.msg); }
             });
         }
 
-        // 页面加载时执行
         document.addEventListener('DOMContentLoaded', loadUsers);
     </script>
 </body>
