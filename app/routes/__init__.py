@@ -5,5 +5,9 @@ from app.routes.defect_code_routes import defect_bp
 from app.routes.test_data_routes import test_data_bp
 from app.routes.common_data_routes import common_data_bp
 from app.routes.rawdata_routes import rawdata_bp
+from app.routes.hold_report_routes import hold_report_bp
 
-__all__ = ['user_bp', 'auth_bp', 'product_bp', 'defect_bp', 'test_data_bp', 'common_data_bp', 'rawdata_bp']
+__all__ = [
+    'user_bp', 'auth_bp', 'product_bp', 'defect_bp',
+    'test_data_bp', 'common_data_bp', 'rawdata_bp', 'hold_report_bp',
+]

@@ -13,6 +13,8 @@ class Config:
     # Hold info 合并为 hold_record 的定时任务配置
     HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST'
     HOLD_RECORD_TABLE = 'FT_HOLD_RECORD'
+    # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
+    HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30
     # 写入 FT_HOLD_RECORD 时的默认值（表字段 NOT NULL）
     HOLD_RECORD_TYPE = 0

@@ -43,13 +43,17 @@ def login_page():
         user = auth_ctrl.authenticate(employee_no, password)
         
         if user:
-            # --- 关键代码：写入 Session ---
             session['user_id'] = user.ID
             session['user_name'] = user.NAME
             session['employee_no'] = user.EMPLOYEE_NO
-            
-            flash('登录成功', 'success')
-            return redirect(url_for('dashboard'))
+            session['role'] = user.ROLE
+
+            if user.ROLE != 0:
+                session.clear()
+                flash('权限不足：后台仅限管理员(root)登录', 'danger')
+            else:
+                flash('登录成功', 'success')
+                return redirect(url_for('auth.dashboard'))
         else:
             flash('工号或密码错误', 'danger')
 

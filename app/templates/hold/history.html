@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hold 历史报表</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .filters input, .filters select {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 120px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        .meta { margin-bottom: 12px; color: #555; font-size: 13px; }
+        .chart-wrap { position: relative; height: 420px; }
+        .hint { color: #888; font-size: 12px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>后台管理系统</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/dashboard">仪表盘</a></li>
+            <li><a href="/admin/hold/holding">Holding Record</a></li>
+            <li class="active"><a href="/admin/hold/history">Hold 历史</a></li>
+            <li><a href="/admin/users">用户管理</a></li>
+            <li><a href="/admin/products">产品管理</a></li>
+            <li><a href="/admin/defects">缺陷管理</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>Hold 历史报表</h1>
+            <p class="sub">指定型号与月份/周，统计 FT_HOLD_RECORD 的 hold 数量柱状图（root 全量）。</p>
+
+            <div class="filters">
+                <select id="product_id"></select>
+                <select id="period_type" onchange="togglePeriodInputs()">
+                    <option value="month">按月</option>
+                    <option value="week">按周</option>
+                </select>
+                <input id="year" type="number" min="2000" max="2100" style="width:100px;" />
+                <input id="month" type="number" min="1" max="12" placeholder="月份 1-12" style="width:110px;" />
+                <input id="week" type="number" min="1" max="53" placeholder="ISO周 1-53" style="width:120px; display:none;" />
+                <button class="btn" onclick="loadChart()">查询</button>
+            </div>
+            <div class="meta" id="meta">请选择条件后查询</div>
+            <div class="chart-wrap">
+                <canvas id="holdChart"></canvas>
+            </div>
+            <p class="hint">按月：该月每天一根柱；按周：该 ISO 周（周一~周日）每天一根柱。</p>
+        </div>
+    </main>
+
+    <script>
+        let chart;
+
+        function togglePeriodInputs() {
+            const type = document.getElementById('period_type').value;
+            document.getElementById('month').style.display = type === 'month' ? '' : 'none';
+            document.getElementById('week').style.display = type === 'week' ? '' : 'none';
+        }
+
+        async function loadProducts() {
+            const sel = document.getElementById('product_id');
+            sel.innerHTML = '<option value="">加载型号...</option>';
+            const resp = await fetch('/admin/hold/api/products');
+            const json = await resp.json();
+            const list = json.data || [];
+            if (!list.length) {
+                sel.innerHTML = '<option value="">暂无型号数据</option>';
+                return;
+            }
+            sel.innerHTML = list.map(p => `<option value="${p}">${p}</option>`).join('');
+        }
+
+        async function loadChart() {
+            const product_id = document.getElementById('product_id').value.trim();
+            const period_type = document.getElementById('period_type').value;
+            const year = document.getElementById('year').value;
+            const month = document.getElementById('month').value;
+            const week = document.getElementById('week').value;
+
+            if (!product_id) {
+                document.getElementById('meta').textContent = '请先选择型号';
+                return;
+            }
+
+            const params = new URLSearchParams({ product_id, period_type, year });
+            if (period_type === 'month') params.set('month', month);
+            else params.set('week', week);
+
+            document.getElementById('meta').textContent = '查询中...';
+            try {
+                const resp = await fetch('/admin/hold/api/history?' + params.toString());
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('meta').textContent = json.msg || '查询失败';
+                    return;
+                }
+                const data = json.data;
+                document.getElementById('meta').textContent =
+                    `${data.product_id} · ${data.period_label} · 合计 Hold ${data.total} 次`;
+
+                const ctx = document.getElementById('holdChart');
+                if (chart) chart.destroy();
+                chart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.labels,
+                        datasets: [{
+                            label: 'Hold 数量',
+                            data: data.values,
+                            backgroundColor: 'rgba(0, 123, 255, 0.65)',
+                            borderColor: 'rgba(0, 123, 255, 1)',
+                            borderWidth: 1,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: { precision: 0 },
+                                title: { display: true, text: 'Hold 数量' }
+                            },
+                            x: {
+                                ticks: {
+                                    maxRotation: 60,
+                                    minRotation: 0,
+                                    autoSkip: true,
+                                    maxTicksLimit: 31
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: true },
+                            tooltip: { mode: 'index', intersect: false }
+                        }
+                    }
+                });
+            } catch (e) {
+                document.getElementById('meta').textContent = '请求失败: ' + e;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const now = new Date();
+            document.getElementById('year').value = now.getFullYear();
+            document.getElementById('month').value = now.getMonth() + 1;
+            // ISO week approx
+            const tmp = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+            const dayNum = tmp.getUTCDay() || 7;
+            tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+            const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+            const weekNo = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7);
+            document.getElementById('week').value = weekNo;
+            togglePeriodInputs();
+            await loadProducts();
+            if (document.getElementById('product_id').value) {
+                loadChart();
+            }
+        });
+    </script>
+</body>
+</html>

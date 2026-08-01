@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Holding Record 报表</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .filters input {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 160px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+        th { background: #f8f9fa; position: sticky; top: 0; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .reason { max-width: 280px; word-break: break-word; }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            background: #28a745; color: #fff; font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>后台管理系统</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/dashboard">仪表盘</a></li>
+            <li class="active"><a href="/admin/hold/holding">Holding Record</a></li>
+            <li><a href="/admin/hold/history">Hold 历史</a></li>
+            <li><a href="/admin/users">用户管理</a></li>
+            <li><a href="/admin/products">产品管理</a></li>
+            <li><a href="/admin/defects">缺陷管理</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>Holding Record 报表</h1>
+            <p class="sub">数据来自 FT_HOLD_RECORD，并用 FT_HOLD_INFO.HOLDING=0 过滤仍在 hold 的记录（已解 hold 已排除）。</p>
+
+            <div class="filters">
+                <input id="product_id" placeholder="型号 PRODUCT_ID" />
+                <input id="station" placeholder="站点 STATION" />
+                <input id="keyword" placeholder="Wafer / Lot / Code / Reason" />
+                <button class="btn" onclick="loadData()">查询</button>
+            </div>
+            <div class="meta" id="meta">加载中...</div>
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>型号</th>
+                            <th>站点</th>
+                            <th>设备</th>
+                            <th>Lot</th>
+                            <th>Wafer</th>
+                            <th>Hold Code</th>
+                            <th>原因</th>
+                            <th>Hold 时间</th>
+                            <th>状态</th>
+                            <th>INFO条数</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody">
+                        <tr><td colspan="11" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        async function loadData() {
+            const params = new URLSearchParams({
+                product_id: document.getElementById('product_id').value.trim(),
+                station: document.getElementById('station').value.trim(),
+                keyword: document.getElementById('keyword').value.trim(),
+            });
+            document.getElementById('meta').textContent = '查询中...';
+            try {
+                const resp = await fetch('/admin/hold/api/holding_records?' + params.toString());
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('meta').textContent = json.msg || '查询失败';
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="11" class="empty">' + (json.msg || '查询失败') + '</td></tr>';
+                    return;
+                }
+                const rows = json.data || [];
+                document.getElementById('meta').textContent = '共 ' + rows.length + ' 条在线 Hold Record';
+                if (!rows.length) {
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="11" class="empty">暂无在线 Holding Record</td></tr>';
+                    return;
+                }
+                document.getElementById('tbody').innerHTML = rows.map(r => `
+                    <tr>
+                        <td>${r.ID ?? ''}</td>
+                        <td>${r.PRODUCT_ID ?? ''}</td>
+                        <td>${r.STATION ?? ''}</td>
+                        <td>${r.EQUIP_ID ?? ''}</td>
+                        <td>${r.LOT_ID ?? ''}</td>
+                        <td>${r.WAFER_ID ?? ''}</td>
+                        <td>${r.HOLD_CODE ?? ''}</td>
+                        <td class="reason">${r.HOLD_REASON ?? ''}</td>
+                        <td>${r.HOLD_DTTM ?? '-'}</td>
+                        <td><span class="badge">Holding</span></td>
+                        <td>${r.INFO_CNT ?? 0}</td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                document.getElementById('meta').textContent = '请求失败: ' + e;
+            }
+        }
+        document.addEventListener('DOMContentLoaded', loadData);
+        document.querySelectorAll('.filters input').forEach(el => {
+            el.addEventListener('keyup', ev => { if (ev.key === 'Enter') loadData(); });
+        });
+    </script>
+</body>
+</html>
