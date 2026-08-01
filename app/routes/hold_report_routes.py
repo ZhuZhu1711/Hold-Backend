@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, session
 
 from app.controllers import hold_report_ctrl
-from app.utils.auth_decorators import root_required, current_role_name
+from app.utils.auth_decorators import root_required, login_required, current_role_name
 
 hold_report_bp = Blueprint('hold_report', __name__, url_prefix='/admin/hold')
 
@@ -57,6 +57,21 @@ def api_holding_records():
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data, 'total': len(data)})
     return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
+
+
+@hold_report_bp.route('/api/hold_count', methods=['GET'])
+@login_required
+def api_hold_count():
+    """
+    按 wafer_id 统计 hold_record 次数。
+    Query: wafer_id (必填)
+    """
+    wafer_id = request.args.get('wafer_id', '').strip()
+    success, msg, data = hold_report_ctrl.get_hold_count_by_wafer(wafer_id)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if ('请指定' in msg or '无效' in msg) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
 @hold_report_bp.route('/api/history', methods=['GET'])

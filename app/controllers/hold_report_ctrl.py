@@ -124,6 +124,39 @@ def get_holding_records(product_id='', station='', keyword='', limit=500):
         return False, f'查询失败: {e}', []
 
 
+def get_hold_count_by_wafer(wafer_id):
+    """
+    按 wafer_id 统计 FT_HOLD_RECORD 中的 hold 次数（记录条数）。
+    """
+    if wafer_id is None or not str(wafer_id).strip():
+        return False, '请指定 wafer_id', None
+
+    wafer_id = str(wafer_id).strip()
+    try:
+        _, record_table, _ = _table_names()
+        row = db.session.execute(
+            text(f"""
+                SELECT COUNT(*) AS CNT
+                FROM {record_table}
+                WHERE WAFER_ID = :wafer_id
+            """),
+            {'wafer_id': wafer_id},
+        ).fetchone()
+        count = int(row[0] or 0) if row else 0
+        return True, '获取成功', {
+            'wafer_id': wafer_id,
+            'hold_count': count,
+        }
+    except ValueError as e:
+        return False, str(e), None
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return False, f'数据库查询异常: {e}', None
+    except Exception as e:
+        db.session.rollback()
+        return False, f'查询失败: {e}', None
+
+
 def get_hold_product_options(keyword=''):
     """报表筛选用：从 hold_record 取型号列表。"""
     try:

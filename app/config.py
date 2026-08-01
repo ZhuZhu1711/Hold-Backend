@@ -19,6 +19,10 @@ class Config:
     # 写入 FT_HOLD_RECORD 时的默认值（表字段 NOT NULL）
     HOLD_RECORD_TYPE = 0
     HOLD_RECORD_STATUS = 0
+    # 生产 OP 用户 ID（CIRCULATION_HISTORY 流转目标，见 dispose_api.md）
+    PRODUCTION_OP_ID = 181
+    # 系统/root 用户 ID
+    SYSTEM_USER_ID = 1
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
     # 仅转换下列白名单内的记录；HOLD_CODE 与 STATION 各自独立，无绑定关系

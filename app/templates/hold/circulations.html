@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hold 流转报表</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .filters input, .filters select {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 140px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        .btn-ghost {
+            background: #e9ecef; color: #333;
+        }
+        .btn-ghost:hover { background: #dee2e6; }
+        .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+        th { background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .detail { max-width: 200px; word-break: break-word; color: #555; }
+        .link {
+            color: #007bff; cursor: pointer; text-decoration: underline;
+            background: none; border: none; font: inherit; padding: 0;
+        }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 12px; color: #fff; white-space: nowrap;
+        }
+        .d-0 { background: #6c757d; }
+        .d-1 { background: #28a745; }
+        .d-2 { background: #fd7e14; }
+        .d-3 { background: #17a2b8; }
+        .d-5 { background: #6610f2; }
+        .d-6, .d-66 { background: #6f42c1; }
+        .d-7 { background: #20c997; }
+        .d-8 { background: #e83e8c; }
+        .d-99 { background: #343a40; }
+        .d-other { background: #007bff; }
+
+        .drawer-mask {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 40;
+        }
+        .drawer-mask.open { display: block; }
+        .drawer {
+            display: none; position: fixed; top: 0; right: 0; width: min(720px, 96vw); height: 100vh;
+            background: #fff; z-index: 50; box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+            padding: 20px; overflow: auto;
+        }
+        .drawer.open { display: block; }
+        .drawer-head {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            gap: 12px; margin-bottom: 14px;
+        }
+        .drawer-head h2 { font-size: 18px; }
+        .record-grid {
+            display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px;
+            background: #f8f9fa; border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 13px;
+        }
+        .record-grid .k { color: #888; }
+        .timeline { border-left: 3px solid #dee2e6; margin-left: 8px; padding-left: 16px; }
+        .tl-item { position: relative; padding-bottom: 16px; }
+        .tl-item::before {
+            content: ''; position: absolute; left: -22px; top: 4px;
+            width: 10px; height: 10px; border-radius: 50%; background: #007bff;
+            border: 2px solid #fff; box-shadow: 0 0 0 1px #007bff;
+        }
+        .tl-meta { font-size: 12px; color: #888; margin-bottom: 4px; }
+        .tl-body { font-size: 13px; color: #333; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>后台管理系统</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/dashboard">仪表盘</a></li>
+            <li><a href="/admin/hold/holding">Holding Record</a></li>
+            <li><a href="/admin/hold/history">Hold 历史</a></li>
+            <li class="active"><a href="/admin/hold/circulations">Hold 流转</a></li>
+            <li><a href="/admin/users">用户管理</a></li>
+            <li><a href="/admin/products">产品管理</a></li>
+            <li><a href="/admin/defects">缺陷管理</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>Hold Record 流转报表</h1>
+            <p class="sub">可查询 Hold Record 的流转记录。</p>
+
+            <div class="filters">
+                <input id="hold_record_id" placeholder="Record ID" style="min-width:110px;" />
+                <input id="product_id" placeholder="型号 PRODUCT_ID" />
+                <input id="wafer_id" placeholder="Wafer" />
+                <input id="lot_id" placeholder="Lot" />
+                <select id="dispose">
+                    <option value="">全部行为</option>
+                    <option value="0">0 创建</option>
+                    <option value="1">1 放行</option>
+                    <option value="2">2 降级</option>
+                    <option value="3">3 重测</option>
+                    <option value="5">5 分析</option>
+                    <option value="6">6 分析(返回)</option>
+                    <option value="7">7 转交</option>
+                    <option value="8">8 回退</option>
+                    <option value="66">66 分析(返回)</option>
+                    <option value="99">99 关闭</option>
+                </select>
+                <input id="keyword" placeholder="关键字 / 备注" />
+                <button class="btn" onclick="loadData()">查询</button>
+                <button class="btn btn-ghost" onclick="resetFilters()">重置</button>
+            </div>
+            <div class="meta" id="meta">加载中...</div>
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>流转ID</th>
+                            <th>Record</th>
+                            <th>型号</th>
+                            <th>Wafer</th>
+                            <th>Lot</th>
+                            <th>站点</th>
+                            <th>行为</th>
+                            <th>处置人</th>
+                            <th>下一负责人</th>
+                            <th>处置时间</th>
+                            <th>备注</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody">
+                        <tr><td colspan="11" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <div class="drawer-mask" id="mask" onclick="closeDrawer()"></div>
+    <aside class="drawer" id="drawer">
+        <div class="drawer-head">
+            <div>
+                <h2 id="drawerTitle">流转详情</h2>
+                <div class="meta" id="drawerMeta" style="margin:6px 0 0;"></div>
+            </div>
+            <button class="btn btn-ghost" onclick="closeDrawer()">关闭</button>
+        </div>
+        <div class="record-grid" id="recordGrid"></div>
+        <div class="timeline" id="timeline"></div>
+    </aside>
+
+    <script>
+        function esc(v) {
+            return String(v ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;');
+        }
+
+        function disposeBadge(dispose, label) {
+            const code = Number(dispose);
+            const cls = [0,1,2,3,5,6,7,8,66,99].includes(code) ? ('d-' + code) : 'd-other';
+            return `<span class="badge ${cls}">${esc(label || dispose)}</span>`;
+        }
+
+        function resetFilters() {
+            ['hold_record_id','product_id','wafer_id','lot_id','keyword'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+            document.getElementById('dispose').value = '';
+            loadData();
+        }
+
+        async function loadData() {
+            const params = new URLSearchParams({
+                hold_record_id: document.getElementById('hold_record_id').value.trim(),
+                product_id: document.getElementById('product_id').value.trim(),
+                wafer_id: document.getElementById('wafer_id').value.trim(),
+                lot_id: document.getElementById('lot_id').value.trim(),
+                dispose: document.getElementById('dispose').value,
+                keyword: document.getElementById('keyword').value.trim(),
+                limit: 1000,
+            });
+            document.getElementById('meta').textContent = '查询中...';
+            try {
+                const resp = await fetch('/admin/hold/api/circulations?' + params.toString());
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('meta').textContent = json.msg || '查询失败';
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="11" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                    return;
+                }
+                const rows = json.data || [];
+                document.getElementById('meta').textContent = '共 ' + rows.length + ' 条流转记录';
+                if (!rows.length) {
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="11" class="empty">暂无流转记录</td></tr>';
+                    return;
+                }
+                document.getElementById('tbody').innerHTML = rows.map(r => `
+                    <tr>
+                        <td>${esc(r.ID)}</td>
+                        <td>
+                            <button class="link" onclick="openRecord(${Number(r.HOLD_RECORD_ID)})">
+                                ${esc(r.HOLD_RECORD_ID)}
+                            </button>
+                        </td>
+                        <td>${esc(r.PRODUCT_ID)}</td>
+                        <td>${esc(r.WAFER_ID)}</td>
+                        <td>${esc(r.LOT_ID)}</td>
+                        <td>${esc(r.STATION)}</td>
+                        <td>${disposeBadge(r.DISPOSE, r.DISPOSE_LABEL)}</td>
+                        <td>${esc(r.DISPOSED_OWNER_NAME || r.DISPOSED_OWNER_ID)}</td>
+                        <td>${esc(r.NEXT_OWNER_NAME || r.NEXT_OWNER_ID || '-')}</td>
+                        <td>${esc(r.DISPOSE_DTTM || '-')}</td>
+                        <td class="detail">${esc(r.DISPOSE_DETAIL || '')}</td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                document.getElementById('meta').textContent = '请求失败: ' + e;
+            }
+        }
+
+        function closeDrawer() {
+            document.getElementById('drawer').classList.remove('open');
+            document.getElementById('mask').classList.remove('open');
+        }
+
+        async function openRecord(recordId) {
+            document.getElementById('drawerTitle').textContent = 'Record #' + recordId + ' 流转详情';
+            document.getElementById('drawerMeta').textContent = '加载中...';
+            document.getElementById('recordGrid').innerHTML = '';
+            document.getElementById('timeline').innerHTML = '';
+            document.getElementById('drawer').classList.add('open');
+            document.getElementById('mask').classList.add('open');
+
+            try {
+                const resp = await fetch('/admin/hold/api/records/' + recordId + '/circulations');
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('drawerMeta').textContent = json.msg || '加载失败';
+                    return;
+                }
+                const record = (json.data && json.data.record) || {};
+                const circs = (json.data && json.data.circulations) || [];
+                document.getElementById('drawerMeta').textContent =
+                    '共 ' + circs.length + ' 步流转 · STATUS=' + (record.STATUS ?? '-');
+
+                const fields = [
+                    ['型号', record.PRODUCT_ID],
+                    ['Wafer', record.WAFER_ID],
+                    ['Lot', record.LOT_ID],
+                    ['站点', record.STATION],
+                    ['设备', record.EQUIP_ID],
+                    ['Hold Code', record.HOLD_CODE],
+                    ['Hold 时间', record.HOLD_DTTM],
+                    ['最新流转ID', record.LAST_CIRCULATION_ID],
+                ];
+                document.getElementById('recordGrid').innerHTML = fields.map(([k, v]) => `
+                    <div><div class="k">${esc(k)}</div><div>${esc(v ?? '-')}</div></div>
+                `).join('');
+
+                if (!circs.length) {
+                    document.getElementById('timeline').innerHTML =
+                        '<div class="empty">暂无流转记录</div>';
+                    return;
+                }
+                document.getElementById('timeline').innerHTML = circs.map(c => `
+                    <div class="tl-item">
+                        <div class="tl-meta">${esc(c.DISPOSE_DTTM || '-')} · #${esc(c.ID)}</div>
+                        <div class="tl-body">
+                            ${disposeBadge(c.DISPOSE, c.DISPOSE_LABEL)}
+                            &nbsp;${esc(c.DISPOSED_OWNER_NAME || c.DISPOSED_OWNER_ID)}
+                            → ${esc(c.NEXT_OWNER_NAME || c.NEXT_OWNER_ID || '-')}
+                            ${c.DISPOSE_DETAIL ? '<div class="detail" style="margin-top:4px;">备注: ' + esc(c.DISPOSE_DETAIL) + '</div>' : ''}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                document.getElementById('drawerMeta').textContent = '请求失败: ' + e;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadData);
+        document.querySelectorAll('.filters input').forEach(el => {
+            el.addEventListener('keyup', ev => { if (ev.key === 'Enter') loadData(); });
+        });
+        document.addEventListener('keydown', ev => {
+            if (ev.key === 'Escape') closeDrawer();
+        });
+    </script>
+</body>
+</html>
