@@ -103,17 +103,17 @@ def query_testlog_history(test_date: date):
         connection.close()
 
 
-def query_online_hold_info(
-    table_name: str = 'FT_HOLD_INFO_TEST',
-    hold_codes=None,
-    stations=None,
-):
+def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     """
     查询指定表中在线且尚未关联 hold_record 的 hold_info
     （HOLDING = 0 且 HOLD_RECORD_ID 为 NULL/0）。
-    HOLD_RECORD_ID = -1 视为转换失败的脏数据，轮询一律跳过，需人工处置。
-    hold_codes / stations 为独立白名单（无绑定关系）：两者都非空时，
-    额外过滤 HOLD_CODE IN (...) AND STATION IN (...)；任一侧为空则返回 []。
+    HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
+
+    仅捞取满足 dispose_api.md「处置单划分」的候选行：
+      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027), STATION∉(FAOIFINISH,FFVI)
+      FVI : HOLD_CODE=023, STATION∈(FAOIFINISH,FFVI)
+      WLT : PRODUCT_ID LIKE '%-2.6', HOLD_CODE∈(004,022), STATION=WOQC
+    精确 RECORD_TYPE 仍由调用方按同样规则判定后写入 FT_HOLD_RECORD。
 
     为保证 MES 多条同 wafer 记录插入完整：固定排除 HOLD_DTTM 最新的那个
     WAFER_ID 的全部记录（HOLD_DTTM 为 VARCHAR2，格式 YYYY-MM-DD HH24:MI:SS，
@@ -126,29 +126,32 @@ def query_online_hold_info(
         logger.error(f"非法 hold_info 表名: {table_name}")
         return None
 
-    codes = [c for c in (hold_codes or []) if c]
-    stas = [s for s in (stations or []) if s]
-    if not codes or not stas:
-        logger.warning(
-            "HOLD_MERGE_HOLD_CODES 或 HOLD_MERGE_STATIONS 未配置，跳过查询"
-        )
-        return []
-
     connection = oracledb.connect(
         user=USER,
         password=PWD,
         dsn=DSN
     )
-    code_binds = {f'c{i}': v for i, v in enumerate(codes)}
-    station_binds = {f's{i}': v for i, v in enumerate(stas)}
-    code_ph = ', '.join(f':c{i}' for i in range(len(codes)))
-    station_ph = ', '.join(f':s{i}' for i in range(len(stas)))
-    # 仅待处理(NULL/0)；排除已关联(>0)与脏数据(-1)
-    base_filter = f"""
+    # 仅待处理(NULL/0)；排除已关联(>0)与脏数据(-1)；
+    # 处置单划分三选一（与 resolve_record_type 保持一致）
+    base_filter = """
             HOLDING = 0
             AND NVL(HOLD_RECORD_ID, 0) = 0
-            AND HOLD_CODE IN ({code_ph})
-            AND STATION IN ({station_ph})
+            AND (
+                (
+                    PRODUCT_ID LIKE '%-3.5'
+                    AND HOLD_CODE IN ('023', '024', '025', '027')
+                    AND STATION NOT IN ('FAOIFINISH', 'FFVI')
+                )
+                OR (
+                    HOLD_CODE = '023'
+                    AND STATION IN ('FAOIFINISH', 'FFVI')
+                )
+                OR (
+                    PRODUCT_ID LIKE '%-2.6'
+                    AND HOLD_CODE IN ('004', '022')
+                    AND STATION = 'WOQC'
+                )
+            )
     """
     tbl = table_name.upper()
 
@@ -191,7 +194,7 @@ def query_online_hold_info(
 
     try:
         with connection.cursor() as cursor:
-            cursor.execute(sql, {**code_binds, **station_binds})
+            cursor.execute(sql)
             columns = [col[0] for col in cursor.description]
             rows = cursor.fetchall()
             return [dict(zip(columns, row)) for row in rows]

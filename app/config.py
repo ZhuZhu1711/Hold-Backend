@@ -16,8 +16,9 @@ class Config:
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30
-    # 写入 FT_HOLD_RECORD 时的默认值（表字段 NOT NULL）
-    HOLD_RECORD_TYPE = 0
+    # 写入 FT_HOLD_RECORD 时 STATUS 默认值（表字段 NOT NULL）
+    # RECORD_TYPE 由 dispose_api.md「处置单划分」按 PRODUCT_ID/HOLD_CODE/STATION 判定：
+    #   0=FT异常反馈单  1=FVI异常反馈单  2=WLT异常反馈单；不满足规则则不转换
     HOLD_RECORD_STATUS = 0
     # 生产 OP 用户 ID（CIRCULATION_HISTORY 流转目标，见 dispose_api.md）
     PRODUCTION_OP_ID = 181
@@ -25,20 +26,3 @@ class Config:
     SYSTEM_USER_ID = 1
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
-    # 仅转换下列白名单内的记录；HOLD_CODE 与 STATION 各自独立，无绑定关系
-    # 需同时满足：HOLD_CODE ∈ 列表 且 STATION ∈ 列表；任一侧为空则不转换
-    HOLD_MERGE_HOLD_CODES = [
-        '023', '024', '027',             # 良率
-        '025',                           # 缺陷率
-        '026',                           # 工程品
-        '028'                            # 重码
-    ]
-    HOLD_MERGE_STATIONS = [
-        'FATE-FA',
-        'FAOIFINISH',
-        'FFVI',
-        'FIQC_MERGE',
-        'FPQC',
-        'FIQC FUNCTION TEST',
-        'FIQC WG TEST'
-    ]
