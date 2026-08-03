@@ -26,3 +26,19 @@ class Config:
     SYSTEM_USER_ID = 1
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
+
+    HOLD_MERGE_HOLD_CODES = [
+        '023', '024', '027',             # 良率
+        '025',                           # 缺陷率
+        '026',                           # 工程品
+        '028'                            # 重码
+    ]
+    HOLD_MERGE_STATIONS = [
+        'FATE-FA',
+        'FAOIFINISH',
+        'FFVI',
+        'FIQC_MERGE',
+        'FPQC',
+        'FIQC FUNCTION TEST',
+        'FIQC WG TEST'
+    ]

@@ -60,7 +60,7 @@
     <main class="main">
         <div class="card">
             <h1>Hold 历史报表</h1>
-            <p class="sub">指定型号与月份/周统计Hold数量</p>
+            <p class="sub">指定型号与月份/周，按处置单类型统计 Hold 数量（簇状柱形图）</p>
 
             <div class="filters">
                 <select id="product_id"></select>
@@ -77,12 +77,19 @@
             <div class="chart-wrap">
                 <canvas id="holdChart"></canvas>
             </div>
-            <p class="hint">按月：该月每天一根柱；按周：该 ISO 周（周一~周日）每天一根柱。</p>
+            <p class="hint">按月：该月每天一组柱；按周：该 ISO 周（周一~周日）每天一组柱。每组按 FT / FVI / WLT 处置单类型并列展示。</p>
         </div>
     </main>
 
     <script>
         let chart;
+
+        // 与 dispose_api.md 处置单大类一致
+        const SERIES_COLORS = {
+            0: { bg: 'rgba(0, 123, 255, 0.65)', border: 'rgba(0, 123, 255, 1)' },       // FT
+            1: { bg: 'rgba(40, 167, 69, 0.65)', border: 'rgba(40, 167, 69, 1)' },        // FVI
+            2: { bg: 'rgba(255, 152, 0, 0.65)', border: 'rgba(255, 152, 0, 1)' },        // WLT
+        };
 
         function togglePeriodInputs() {
             const type = document.getElementById('period_type').value;
@@ -128,8 +135,27 @@
                     return;
                 }
                 const data = json.data;
+                const series = data.series || [];
+                const typeSummary = series
+                    .map(s => `${s.name} ${s.total}`)
+                    .join(' · ');
                 document.getElementById('meta').textContent =
-                    `${data.product_id} · ${data.period_label} · 合计 Hold ${data.total} 次`;
+                    `${data.product_id} · ${data.period_label} · 合计 Hold ${data.total} 次`
+                    + (typeSummary ? `（${typeSummary}）` : '');
+
+                const datasets = series.map(s => {
+                    const colors = SERIES_COLORS[s.record_type] || {
+                        bg: 'rgba(108, 117, 125, 0.65)',
+                        border: 'rgba(108, 117, 125, 1)',
+                    };
+                    return {
+                        label: s.name,
+                        data: s.values,
+                        backgroundColor: colors.bg,
+                        borderColor: colors.border,
+                        borderWidth: 1,
+                    };
+                });
 
                 const ctx = document.getElementById('holdChart');
                 if (chart) chart.destroy();
@@ -137,13 +163,7 @@
                     type: 'bar',
                     data: {
                         labels: data.labels,
-                        datasets: [{
-                            label: 'Hold 数量',
-                            data: data.values,
-                            backgroundColor: 'rgba(0, 123, 255, 0.65)',
-                            borderColor: 'rgba(0, 123, 255, 1)',
-                            borderWidth: 1,
-                        }]
+                        datasets,
                     },
                     options: {
                         responsive: true,
@@ -152,9 +172,11 @@
                             y: {
                                 beginAtZero: true,
                                 ticks: { precision: 0 },
-                                title: { display: true, text: 'Hold 数量' }
+                                title: { display: true, text: 'Hold 数量' },
+                                stacked: false,
                             },
                             x: {
+                                stacked: false,
                                 ticks: {
                                     maxRotation: 60,
                                     minRotation: 0,
@@ -164,7 +186,7 @@
                             }
                         },
                         plugins: {
-                            legend: { display: true },
+                            legend: { display: true, position: 'top' },
                             tooltip: { mode: 'index', intersect: false }
                         }
                     }

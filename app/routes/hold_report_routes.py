@@ -41,22 +41,26 @@ def hold_history_page():
 def api_holding_records():
     """
     当前仍在 hold 的 record 列表。
-    Query: product_id, station, keyword, limit
+    Query: product_id, station, keyword, record_type(0/1/2), limit
+    record_type 对应处置单大类：0=FT异常反馈单 1=FVI异常反馈单 2=WLT异常反馈单
     """
     product_id = request.args.get('product_id', '').strip()
     station = request.args.get('station', '').strip()
     keyword = request.args.get('keyword', '').strip()
+    record_type = request.args.get('record_type', '').strip()
     limit = request.args.get('limit', 500)
 
     success, msg, data = hold_report_ctrl.get_holding_records(
         product_id=product_id,
         station=station,
         keyword=keyword,
+        record_type=record_type if record_type != '' else None,
         limit=limit,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data, 'total': len(data)})
-    return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
+    status = 400 if ('无效' in msg or '须为' in msg) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': []}), status
 
 
 @hold_report_bp.route('/api/hold_count', methods=['GET'])
@@ -78,13 +82,15 @@ def api_hold_count():
 @root_required
 def api_hold_history():
     """
-    Hold 历史柱状图数据。
+    Hold 历史簇状柱状图数据（按处置单 RECORD_TYPE 拆分）。
     Query:
       product_id  (必填)
       period_type month | week
       year
       month       (period_type=month 时必填, 1-12)
       week        (period_type=week 时必填, ISO 周 1-53)
+    返回 series: [{record_type, name, values, total}, ...]
+      0=FT异常反馈单 1=FVI异常反馈单 2=WLT异常反馈单
     """
     product_id = request.args.get('product_id', '').strip()
     period_type = request.args.get('period_type', 'month').strip()
