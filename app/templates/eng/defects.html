@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>缺陷 / BSL 维护</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .filters input, .filters select {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 160px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; }
+        th { background: #f8f9fa; position: sticky; top: 0; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        td input, td select {
+            width: 100%; max-width: 140px; padding: 6px 8px;
+            border: 1px solid #ddd; border-radius: 4px; font-size: 13px;
+        }
+        td input.name-input { max-width: 220px; }
+        .actions { white-space: nowrap; display: flex; gap: 6px; }
+        .modal-mask {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+            z-index: 100; align-items: center; justify-content: center;
+        }
+        .modal-mask.show { display: flex; }
+        .modal {
+            background: #fff; border-radius: 8px; padding: 20px; width: 420px; max-width: 92vw;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }
+        .modal h3 { margin-bottom: 14px; font-size: 16px; }
+        .form-row { margin-bottom: 12px; }
+        .form-row label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .form-row input {
+            width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+        }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>产品工程师</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/eng/">工作台</a></li>
+            <li class="active"><a href="/eng/defects">缺陷 / BSL</a></li>
+            <li><a href="/eng/holds">Hold Record</a></li>
+            <li><a href="/eng/circulations">Hold 流转</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>缺陷 Code / BSL 维护</h1>
+            <p class="sub">仅可维护自己负责的型号。可新增、修改等级/代码/名称/BSL，或删除。</p>
+
+            <div class="filters">
+                <select id="product_id">
+                    <option value="">加载所属型号...</option>
+                </select>
+                <button class="btn" onclick="loadDefects()">查询</button>
+                <button class="btn btn-success" onclick="openCreateModal()">新增缺陷</button>
+            </div>
+            <div class="meta" id="meta">请选择型号</div>
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>等级</th>
+                            <th>代码</th>
+                            <th>名称</th>
+                            <th>BSL</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody">
+                        <tr><td colspan="5" class="empty">请选择所属型号后查询</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <div class="modal-mask" id="createModal">
+        <div class="modal">
+            <h3>新增缺陷</h3>
+            <div class="form-row">
+                <label>型号</label>
+                <input id="c_product" readonly />
+            </div>
+            <div class="form-row">
+                <label>等级 GRADE</label>
+                <input id="c_grade" placeholder="如 A / B" />
+            </div>
+            <div class="form-row">
+                <label>代码 CODE</label>
+                <input id="c_code" type="number" placeholder="必填" />
+            </div>
+            <div class="form-row">
+                <label>名称 NAME</label>
+                <input id="c_name" placeholder="必填" />
+            </div>
+            <div class="form-row">
+                <label>BSL</label>
+                <input id="c_bsl" type="number" step="any" placeholder="可选" />
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" onclick="closeCreateModal()">取消</button>
+                <button class="btn btn-success" onclick="createDefect()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let products = [];
+        let currentRows = [];
+
+        function esc(v) {
+            return String(v ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;');
+        }
+
+        async function loadProducts() {
+            const sel = document.getElementById('product_id');
+            const resp = await fetch('/eng/api/products');
+            const json = await resp.json();
+            products = json.data || [];
+            if (!products.length) {
+                sel.innerHTML = '<option value="">暂无所属型号</option>';
+                document.getElementById('meta').textContent = '当前账号没有绑定型号';
+                return;
+            }
+            const preset = {{ (product_id or '')|tojson }};
+            sel.innerHTML = products.map(p =>
+                `<option value="${esc(p.product_id)}">${esc(p.product_id)}</option>`
+            ).join('');
+            if (preset) {
+                sel.value = preset;
+            }
+            if (sel.value) {
+                loadDefects();
+            }
+        }
+
+        async function loadDefects() {
+            const productId = document.getElementById('product_id').value;
+            if (!productId) {
+                document.getElementById('meta').textContent = '请选择型号';
+                return;
+            }
+            document.getElementById('meta').textContent = '查询中...';
+            try {
+                const resp = await fetch('/eng/api/defects?product_id=' + encodeURIComponent(productId));
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('meta').textContent = json.msg || '查询失败';
+                    document.getElementById('tbody').innerHTML =
+                        `<tr><td colspan="5" class="empty">${esc(json.msg || '查询失败')}</td></tr>`;
+                    return;
+                }
+                currentRows = json.data || [];
+                document.getElementById('meta').textContent =
+                    `${productId} · 共 ${currentRows.length} 条缺陷代码`;
+                renderTable();
+            } catch (e) {
+                document.getElementById('meta').textContent = '请求失败: ' + e;
+            }
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('tbody');
+            if (!currentRows.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty">该型号暂无缺陷代码，可点击新增</td></tr>';
+                return;
+            }
+            tbody.innerHTML = currentRows.map(r => `
+                <tr data-id="${r.id}">
+                    <td><input class="edit-grade" value="${esc(r.grade ?? '')}" /></td>
+                    <td><input class="edit-code" type="number" value="${esc(r.code ?? '')}" /></td>
+                    <td><input class="edit-name name-input" value="${esc(r.name ?? '')}" /></td>
+                    <td><input class="edit-bsl" type="number" step="any" value="${esc(r.bsl ?? '')}" /></td>
+                    <td class="actions">
+                        <button class="btn btn-sm" onclick="saveRow(${r.id})">保存</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteRow(${r.id})">删除</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function rowInputs(id) {
+            const tr = document.querySelector(`tr[data-id="${id}"]`);
+            if (!tr) return null;
+            return {
+                grade: tr.querySelector('.edit-grade').value.trim(),
+                code: tr.querySelector('.edit-code').value.trim(),
+                name: tr.querySelector('.edit-name').value.trim(),
+                bsl: tr.querySelector('.edit-bsl').value.trim(),
+            };
+        }
+
+        async function saveRow(id) {
+            const payload = rowInputs(id);
+            if (!payload) return;
+            if (!payload.code || !payload.name) {
+                alert('代码与名称必填');
+                return;
+            }
+            const body = {
+                grade: payload.grade,
+                code: Number(payload.code),
+                name: payload.name,
+                bsl: payload.bsl === '' ? null : Number(payload.bsl),
+            };
+            const resp = await fetch('/eng/api/defects/' + id, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const json = await resp.json();
+            if (json.code !== 200) {
+                alert(json.msg || '保存失败');
+                return;
+            }
+            document.getElementById('meta').textContent = '已保存 #' + id;
+        }
+
+        async function deleteRow(id) {
+            if (!confirm('确认删除该缺陷代码？')) return;
+            const resp = await fetch('/eng/api/defects/' + id, { method: 'DELETE' });
+            const json = await resp.json();
+            if (json.code !== 200) {
+                alert(json.msg || '删除失败');
+                return;
+            }
+            loadDefects();
+        }
+
+        function openCreateModal() {
+            const productId = document.getElementById('product_id').value;
+            if (!productId) {
+                alert('请先选择型号');
+                return;
+            }
+            document.getElementById('c_product').value = productId;
+            document.getElementById('c_grade').value = '';
+            document.getElementById('c_code').value = '';
+            document.getElementById('c_name').value = '';
+            document.getElementById('c_bsl').value = '';
+            document.getElementById('createModal').classList.add('show');
+        }
+
+        function closeCreateModal() {
+            document.getElementById('createModal').classList.remove('show');
+        }
+
+        async function createDefect() {
+            const product_code = document.getElementById('c_product').value.trim();
+            const grade = document.getElementById('c_grade').value.trim();
+            const code = document.getElementById('c_code').value.trim();
+            const name = document.getElementById('c_name').value.trim();
+            const bsl = document.getElementById('c_bsl').value.trim();
+            if (!code || !name) {
+                alert('代码与名称必填');
+                return;
+            }
+            const resp = await fetch('/eng/api/defects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    product_code,
+                    grade,
+                    code: Number(code),
+                    name,
+                    bsl: bsl === '' ? null : Number(bsl),
+                }),
+            });
+            const json = await resp.json();
+            if (json.code !== 200) {
+                alert(json.msg || '新增失败');
+                return;
+            }
+            closeCreateModal();
+            loadDefects();
+        }
+
+        document.addEventListener('DOMContentLoaded', loadProducts);
+        document.getElementById('product_id').addEventListener('change', loadDefects);
+        document.getElementById('createModal').addEventListener('click', (e) => {
+            if (e.target.id === 'createModal') closeCreateModal();
+        });
+    </script>
+</body>
+</html>

@@ -89,6 +89,27 @@
             background: #5b3a7d;
         }
 
+        .remember-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #555;
+            user-select: none;
+        }
+
+        .remember-row input {
+            width: 16px;
+            height: 16px;
+            accent-color: #764ba2;
+            cursor: pointer;
+        }
+
+        .remember-row label {
+            cursor: pointer;
+        }
+
         /* 错误提示 */
         .error-msg {
             color: #ff4d4d;
@@ -116,11 +137,15 @@
         <form id="loginForm">
             <div class="form-group">
                 <label for="employee_no">工号</label>
-                <input type="text" id="employee_no" name="employee_no" placeholder="请输入工号" required>
+                <input type="text" id="employee_no" name="employee_no" placeholder="请输入工号" required autocomplete="username">
             </div>
             <div class="form-group">
                 <label for="password">密码</label>
-                <input type="password" id="password" name="password" placeholder="请输入密码" required>
+                <input type="password" id="password" name="password" placeholder="请输入密码" required autocomplete="current-password">
+            </div>
+            <div class="remember-row">
+                <input type="checkbox" id="remember" name="remember" checked>
+                <label for="remember">记住我（30 天内自动登录）</label>
             </div>
             <button type="submit" class="btn-login">登 录</button>
             <div class="error-msg" id="errorMsg"></div>
@@ -129,29 +154,29 @@
 
     <script>
         document.getElementById('loginForm').addEventListener('submit', function(e) {
-            e.preventDefault(); // 阻止表单默认提交
+            e.preventDefault();
             
             const errorMsg = document.getElementById('errorMsg');
             const btn = document.querySelector('.btn-login');
             
-            // 获取输入值
             const employeeNo = document.getElementById('employee_no').value;
             const password = document.getElementById('password').value;
+            const remember = document.getElementById('remember').checked;
 
-            // 简单的 Loading 状态
             btn.textContent = '验证中...';
             btn.disabled = true;
             errorMsg.textContent = '';
 
-            // 发送 AJAX 请求
             fetch('/api/login', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                credentials: 'same-origin',
                 body: JSON.stringify({
                     employee_no: employeeNo,
-                    password: password
+                    password: password,
+                    remember: remember
                 })
             })
             .then(response => response.json())
@@ -160,14 +185,15 @@
                 btn.disabled = false;
 
                 if (data.code === 200) {
-                    // 登录成功，跳转
                     errorMsg.style.color = 'green';
-                    errorMsg.textContent = '登录成功，跳转中...';
+                    errorMsg.textContent = remember
+                        ? '登录成功，已开启自动登录...'
+                        : '登录成功，跳转中...';
+                    const redirect = (data.data && data.data.redirect) || '/dashboard';
                     setTimeout(() => {
-                        window.location.href = '/dashboard';
+                        window.location.href = redirect;
                     }, 500);
                 } else {
-                    // 登录失败
                     errorMsg.style.color = '#ff4d4d';
                     errorMsg.textContent = data.msg;
                 }

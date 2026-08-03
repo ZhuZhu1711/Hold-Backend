@@ -15,6 +15,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
 from app.config import Config
+from app.utils.database_util import query_fvi_defect_details
+from app.controllers.dispose_ctrl import DISPOSE_LABELS, DISPOSE_CLOSE
 
 
 _ALLOWED_HOLD_INFO_TABLES = {'FT_HOLD_INFO', 'FT_HOLD_INFO_TEST'}
@@ -57,23 +59,138 @@ def _row_to_dict(row):
     return data
 
 
+def _parse_page(page=1, page_size=20, max_page_size=200):
+    """解析分页参数，返回 (page, page_size, offset)。"""
+    try:
+        page = int(page if page is not None else 1)
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(page_size if page_size is not None else 20)
+    except (TypeError, ValueError):
+        page_size = 20
+    page = max(1, page)
+    page_size = max(1, min(page_size, int(max_page_size or 200)))
+    offset = (page - 1) * page_size
+    return page, page_size, offset
+
+
+def _page_payload(items, total, page, page_size):
+    total = max(0, int(total or 0))
+    pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 1
+    page = min(page, pages)
+    return {
+        'items': items,
+        'total': total,
+        'page': page,
+        'page_size': page_size,
+        'pages': pages,
+    }
+
+
 def get_holding_records(
     product_id='',
     station='',
     keyword='',
     record_type=None,
-    limit=500,
+    page=1,
+    page_size=20,
+    owner_eng_id=None,
+    product_ids=None,
+    current_owner_id=None,
+    limit=None,
 ):
     """
-    查询当前仍在 hold 的 hold_record 列表（root 全量）。
+    查询当前仍在 hold 的 hold_record 列表（分页）。
     HOLDING=0 才是在线 hold；用 INFO 关联字段踢掉已解 hold 的 record。
     record_type：按处置单大类筛选（0=FT / 1=FVI / 2=WLT），空则不过滤。
+    owner_eng_id：仅返回 PRODUCT_INFO.PRO_ENG_ID 等于该工程师的型号。
+    product_ids：精确匹配型号列表（与 product_id 模糊可叠加）。
+    current_owner_id：仅返回最新流转 NEXT_OWNER_ID 等于该用户的记录（待办）。
+    limit：兼容旧参数，等价于 page_size（仅第 1 页）。
+    成功返回 (True, msg, page_payload)。
     """
     try:
         info_table, record_table, link_col = _table_names()
-        limit = max(1, min(int(limit or 500), 5000))
+        if limit is not None and (page is None or str(page) in ('', '1')):
+            # 旧调用：limit 当作 page_size，固定第 1 页
+            page, page_size, offset = _parse_page(1, limit)
+        else:
+            page, page_size, offset = _parse_page(page, page_size)
 
-        sql = f"""
+        where_sql = " WHERE 1 = 1"
+        params = {'offset': offset, 'page_size': page_size}
+
+        if owner_eng_id is not None:
+            where_sql += """
+                AND r.PRODUCT_ID IN (
+                    SELECT p.PRODUCT_ID
+                    FROM PRODUCT_INFO p
+                    WHERE p.PRO_ENG_ID = :owner_eng_id
+                )
+            """
+            params['owner_eng_id'] = int(owner_eng_id)
+
+        if current_owner_id is not None and str(current_owner_id).strip() != '':
+            where_sql += " AND c.NEXT_OWNER_ID = :current_owner_id"
+            params['current_owner_id'] = int(current_owner_id)
+
+        exact_pids = [
+            str(p).strip() for p in (product_ids or []) if p is not None and str(p).strip()
+        ]
+        if exact_pids:
+            ph = ', '.join(f':pid{i}' for i in range(len(exact_pids)))
+            where_sql += f" AND r.PRODUCT_ID IN ({ph})"
+            for i, pid in enumerate(exact_pids):
+                params[f'pid{i}'] = pid
+
+        if product_id:
+            where_sql += " AND UPPER(r.PRODUCT_ID) LIKE UPPER(:product_id)"
+            params['product_id'] = f"%{product_id.strip()}%"
+        if station:
+            where_sql += " AND UPPER(r.STATION) LIKE UPPER(:station)"
+            params['station'] = f"%{station.strip()}%"
+        if keyword:
+            where_sql += """
+                AND (
+                    UPPER(r.WAFER_ID) LIKE UPPER(:keyword)
+                    OR UPPER(r.LOT_ID) LIKE UPPER(:keyword)
+                    OR UPPER(r.HOLD_CODE) LIKE UPPER(:keyword)
+                    OR UPPER(r.HOLD_REASON) LIKE UPPER(:keyword)
+                )
+            """
+            params['keyword'] = f"%{keyword.strip()}%"
+        if record_type is not None and str(record_type).strip() != '':
+            try:
+                rt = int(record_type)
+            except (TypeError, ValueError):
+                return False, 'record_type 无效', _page_payload([], 0, page, page_size)
+            if rt not in RECORD_TYPE_LABELS:
+                return False, 'record_type 须为 0/1/2（FT/FVI/WLT）', _page_payload([], 0, page, page_size)
+            where_sql += " AND r.RECORD_TYPE = :record_type"
+            params['record_type'] = rt
+
+        from_sql = f"""
+            FROM {record_table} r
+            INNER JOIN {info_table} i
+                ON i.{link_col} = r.ID
+               AND NVL(i.HOLDING, 1) = 0
+            LEFT JOIN CIRCULATION_HISTORY c
+                ON c.ID = r.LAST_CIRCULATION_ID
+            LEFT JOIN USERS u
+                ON u.ID = c.NEXT_OWNER_ID
+        """
+
+        count_sql = f"""
+            SELECT COUNT(DISTINCT r.ID) AS CNT
+            {from_sql}
+            {where_sql}
+        """
+        total = int(
+            db.session.execute(text(count_sql), params).scalar() or 0
+        )
+
+        data_sql = f"""
             SELECT
                 r.ID,
                 r.PRODUCT_ID,
@@ -90,51 +207,22 @@ def get_holding_records(
                 r.STATUS,
                 r.LAST_CIRCULATION_ID,
                 r.HOLD_DTTM,
+                c.NEXT_OWNER_ID AS CURRENT_OWNER_ID,
+                c.DISPOSE AS LAST_DISPOSE,
+                u.NAME AS CURRENT_OWNER_NAME,
                 COUNT(i.ID) AS INFO_CNT
-            FROM {record_table} r
-            INNER JOIN {info_table} i
-                ON i.{link_col} = r.ID
-               AND NVL(i.HOLDING, 1) = 0
-            WHERE 1 = 1
-        """
-        params = {'limit': limit}
-
-        if product_id:
-            sql += " AND UPPER(r.PRODUCT_ID) LIKE UPPER(:product_id)"
-            params['product_id'] = f"%{product_id.strip()}%"
-        if station:
-            sql += " AND UPPER(r.STATION) LIKE UPPER(:station)"
-            params['station'] = f"%{station.strip()}%"
-        if keyword:
-            sql += """
-                AND (
-                    UPPER(r.WAFER_ID) LIKE UPPER(:keyword)
-                    OR UPPER(r.LOT_ID) LIKE UPPER(:keyword)
-                    OR UPPER(r.HOLD_CODE) LIKE UPPER(:keyword)
-                    OR UPPER(r.HOLD_REASON) LIKE UPPER(:keyword)
-                )
-            """
-            params['keyword'] = f"%{keyword.strip()}%"
-        if record_type is not None and str(record_type).strip() != '':
-            try:
-                rt = int(record_type)
-            except (TypeError, ValueError):
-                return False, 'record_type 无效', []
-            if rt not in RECORD_TYPE_LABELS:
-                return False, 'record_type 须为 0/1/2（FT/FVI/WLT）', []
-            sql += " AND r.RECORD_TYPE = :record_type"
-            params['record_type'] = rt
-
-        sql += """
+            {from_sql}
+            {where_sql}
             GROUP BY
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
-                r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM
+                r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
+                c.NEXT_OWNER_ID, c.DISPOSE, u.NAME
             ORDER BY r.HOLD_DTTM DESC NULLS LAST, r.ID DESC
-            FETCH FIRST :limit ROWS ONLY
+            OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
         """
 
-        rows = db.session.execute(text(sql), params).fetchall()
+        rows = db.session.execute(text(data_sql), params).fetchall()
         data = []
         for r in rows:
             item = _row_to_dict(r)
@@ -144,16 +232,29 @@ def get_holding_records(
             except (TypeError, ValueError):
                 rt_key = None
             item['RECORD_TYPE_NAME'] = RECORD_TYPE_LABELS.get(rt_key, '-')
+            last_dispose = item.get('LAST_DISPOSE')
+            try:
+                ld = int(last_dispose) if last_dispose is not None else None
+            except (TypeError, ValueError):
+                ld = None
+            item['LAST_DISPOSE_LABEL'] = DISPOSE_LABELS.get(
+                ld, str(last_dispose) if last_dispose is not None else '-'
+            )
+            try:
+                status_val = int(item.get('STATUS')) if item.get('STATUS') is not None else 0
+            except (TypeError, ValueError):
+                status_val = 0
+            item['IS_CLOSED'] = status_val == DISPOSE_CLOSE
             data.append(item)
-        return True, '获取成功', data
+        return True, '获取成功', _page_payload(data, total, page, page_size)
     except ValueError as e:
-        return False, str(e), []
+        return False, str(e), _page_payload([], 0, 1, 20)
     except SQLAlchemyError as e:
         db.session.rollback()
-        return False, f'数据库查询异常: {e}', []
+        return False, f'数据库查询异常: {e}', _page_payload([], 0, 1, 20)
     except Exception as e:
         db.session.rollback()
-        return False, f'查询失败: {e}', []
+        return False, f'查询失败: {e}', _page_payload([], 0, 1, 20)
 
 
 def get_hold_count_by_wafer(wafer_id):
@@ -335,3 +436,38 @@ def get_hold_history(product_id, period_type, year, month=None, week=None):
     except Exception as e:
         db.session.rollback()
         return False, f'查询失败: {e}', None
+
+
+def get_fvi_defect_details(lot_id, line_type='FT'):
+    """
+    FVI 异常反馈单缺陷明细。
+    返回:
+      items: [{defect_code, defect_code_raw, defect_desc, qty}, ...]
+      summary: 组合展示文案，如 "A01 Scratch×3；B02 Particle×1"
+    """
+    if lot_id is None or not str(lot_id).strip():
+        return False, '请指定 lot_id', None
+
+    lot_id = str(lot_id).strip()
+    rows = query_fvi_defect_details(lot_id, line_type=line_type)
+    if rows is None:
+        return False, '查询 FVI 缺陷明细失败', None
+
+    parts = []
+    for item in rows:
+        code = item.get('defect_code') or '-'
+        desc = item.get('defect_desc') or ''
+        qty = item.get('qty') if item.get('qty') is not None else 0
+        if desc:
+            parts.append(f'{code} {desc}×{qty}')
+        else:
+            parts.append(f'{code}×{qty}')
+
+    return True, '获取成功', {
+        'lot_id': lot_id,
+        'line_type': (line_type or 'FT').strip() or 'FT',
+        'items': rows,
+        'summary': '；'.join(parts) if parts else '',
+        'total_qty': sum(int(i.get('qty') or 0) for i in rows),
+        'count': len(rows),
+    }

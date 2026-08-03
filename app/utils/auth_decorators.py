@@ -3,7 +3,7 @@
 
 角色约定（USERS.ROLE）：
   0 = root（最高权限，可查看全部数据）
-  1 = 普通工程师
+  1 = 产品工程师（仅所属型号）
 """
 from functools import wraps
 
@@ -14,7 +14,7 @@ ROLE_ENGINEER = 1
 
 ROLE_NAMES = {
     ROLE_ROOT: '超级管理员',
-    ROLE_ENGINEER: '普通工程师',
+    ROLE_ENGINEER: '产品工程师',
 }
 
 
@@ -73,9 +73,27 @@ def root_required(f):
     return role_required(ROLE_ROOT)(f)
 
 
+def engineer_required(f):
+    """仅产品工程师（ROLE=1）可访问。"""
+    return role_required(ROLE_ENGINEER)(f)
+
+
 def is_root():
     return session.get('role') == ROLE_ROOT
 
 
+def is_engineer():
+    return session.get('role') == ROLE_ENGINEER
+
+
 def current_role_name():
     return ROLE_NAMES.get(session.get('role'), '未知角色')
+
+
+def home_endpoint_for_role(role=None):
+    """按角色返回登录后首页 endpoint。"""
+    if role is None:
+        role = session.get('role')
+    if role == ROLE_ENGINEER:
+        return 'engineer.dashboard'
+    return 'auth.dashboard'

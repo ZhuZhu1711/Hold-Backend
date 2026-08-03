@@ -45,12 +45,13 @@ DISPOSE_LABELS = {
 }
 
 # 工程师可发起（当前 owner 应为工程师侧）
+# 转交(7) 方案待定，暂时屏蔽，不放入 ENGINEER_DISPOSES
 ENGINEER_DISPOSES = {
     DISPOSE_RELEASE,
     DISPOSE_DOWNGRADE,
     DISPOSE_RETEST,
     DISPOSE_ANALYZE,
-    DISPOSE_TRANSFER,
+    # DISPOSE_TRANSFER,  # TODO: 转交方案确定后再开放
 }
 
 # 生产 OP 可发起（当前 owner 应为生产 OP）
@@ -217,11 +218,23 @@ def _actor_may_dispose(dispose: int, actor_user_id: int, actor_role, current_own
     return True, ''
 
 
-def list_dispose_actions():
-    """返回全部用户可发起的处置行为说明。"""
+def list_dispose_actions(group=None):
+    """
+    返回可发起的处置行为说明。
+    group: engineer | production | system | None(全部用户可发起)
+    """
+    if group == 'engineer':
+        codes = ENGINEER_DISPOSES
+    elif group == 'production':
+        codes = PRODUCTION_DISPOSES
+    elif group == 'system':
+        codes = SYSTEM_DISPOSES
+    else:
+        codes = USER_DISPOSES
+
     actions = []
-    for code in sorted(USER_DISPOSES):
-        group = (
+    for code in sorted(codes):
+        g = (
             'engineer' if code in ENGINEER_DISPOSES
             else 'production' if code in PRODUCTION_DISPOSES
             else 'system'
@@ -229,9 +242,46 @@ def list_dispose_actions():
         actions.append({
             'dispose': code,
             'label': DISPOSE_LABELS.get(code, str(code)),
-            'group': group,
+            'group': g,
         })
     return True, '获取成功', actions
+
+
+def dispose_engineer_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_detail=None):
+    """工程师处置：仅允许 ENGINEER_DISPOSES。"""
+    try:
+        dispose = int(dispose)
+    except (TypeError, ValueError):
+        return False, 'dispose 无效', None
+    if dispose not in ENGINEER_DISPOSES:
+        return False, '非工程师处置行为', None
+    return dispose_record(
+        hold_record_id=hold_record_id,
+        dispose=dispose,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        dispose_detail=dispose_detail,
+    )
+
+
+def dispose_production_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_detail=None):
+    """
+    生产处置：仅允许 PRODUCTION_DISPOSES。
+    供外部生产系统联动调用（本后台不实现生产处置 UI）。
+    """
+    try:
+        dispose = int(dispose)
+    except (TypeError, ValueError):
+        return False, 'dispose 无效', None
+    if dispose not in PRODUCTION_DISPOSES:
+        return False, '非生产处置行为', None
+    return dispose_record(
+        hold_record_id=hold_record_id,
+        dispose=dispose,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        dispose_detail=dispose_detail,
+    )
 
 
 def _enrich_circulation_rows(rows):
@@ -295,63 +345,55 @@ def query_circulations(
     lot_id='',
     dispose=None,
     keyword='',
-    limit=500,
+    page=1,
+    page_size=20,
+    limit=None,
 ):
     """
-    流转记录查询（全量可读，不按角色/型号归属过滤）。
+    流转记录查询（全量可读，不按角色/型号归属过滤，分页）。
     可按 hold_record_id / product_id / wafer_id / lot_id / dispose / keyword 筛选。
+    成功返回 (True, msg, page_payload)。
     """
     try:
-        record_table = _record_table()
-        limit = max(1, min(int(limit or 500), 5000))
+        from app.controllers.hold_report_ctrl import _parse_page, _page_payload
 
-        sql = f"""
-            SELECT
-                c.ID, c.HOLD_RECORD_ID, c.DISPOSED_OWNER_ID, c.DISPOSE,
-                c.NEXT_OWNER_ID, c.DISPOSE_SOURCE, c.DISPOSE_DTTM,
-                c.DISPOSE_TYPE, c.DISPOSE_DETAIL,
-                u1.NAME AS DISPOSED_OWNER_NAME,
-                u2.NAME AS NEXT_OWNER_NAME,
-                r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
-                r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.STATUS,
-                r.HOLD_DTTM
-            FROM CIRCULATION_HISTORY c
-            INNER JOIN {record_table} r
-                ON r.ID = c.HOLD_RECORD_ID
-            LEFT JOIN USERS u1 ON u1.ID = c.DISPOSED_OWNER_ID
-            LEFT JOIN USERS u2 ON u2.ID = c.NEXT_OWNER_ID
-            WHERE 1 = 1
-        """
-        params = {'limit': limit}
+        record_table = _record_table()
+        if limit is not None and (page is None or str(page) in ('', '1')):
+            page, page_size, offset = _parse_page(1, limit)
+        else:
+            page, page_size, offset = _parse_page(page, page_size)
+
+        where_sql = " WHERE 1 = 1"
+        params = {'offset': offset, 'page_size': page_size}
 
         if hold_record_id is not None and str(hold_record_id).strip() != '':
             try:
                 params['hold_record_id'] = int(hold_record_id)
             except (TypeError, ValueError):
-                return False, 'hold_record_id 无效', []
-            sql += " AND c.HOLD_RECORD_ID = :hold_record_id"
+                return False, 'hold_record_id 无效', _page_payload([], 0, page, page_size)
+            where_sql += " AND c.HOLD_RECORD_ID = :hold_record_id"
 
         if product_id:
-            sql += " AND UPPER(r.PRODUCT_ID) LIKE UPPER(:product_id)"
+            where_sql += " AND UPPER(r.PRODUCT_ID) LIKE UPPER(:product_id)"
             params['product_id'] = f"%{str(product_id).strip()}%"
 
         if wafer_id:
-            sql += " AND UPPER(r.WAFER_ID) LIKE UPPER(:wafer_id)"
+            where_sql += " AND UPPER(r.WAFER_ID) LIKE UPPER(:wafer_id)"
             params['wafer_id'] = f"%{str(wafer_id).strip()}%"
 
         if lot_id:
-            sql += " AND UPPER(r.LOT_ID) LIKE UPPER(:lot_id)"
+            where_sql += " AND UPPER(r.LOT_ID) LIKE UPPER(:lot_id)"
             params['lot_id'] = f"%{str(lot_id).strip()}%"
 
         if dispose is not None and str(dispose).strip() != '':
             try:
                 params['dispose'] = int(dispose)
             except (TypeError, ValueError):
-                return False, 'dispose 无效', []
-            sql += " AND c.DISPOSE = :dispose"
+                return False, 'dispose 无效', _page_payload([], 0, page, page_size)
+            where_sql += " AND c.DISPOSE = :dispose"
 
         if keyword:
-            sql += """
+            where_sql += """
                 AND (
                     UPPER(r.WAFER_ID) LIKE UPPER(:keyword)
                     OR UPPER(r.LOT_ID) LIKE UPPER(:keyword)
@@ -362,67 +404,99 @@ def query_circulations(
             """
             params['keyword'] = f"%{str(keyword).strip()}%"
 
+        from_sql = f"""
+            FROM CIRCULATION_HISTORY c
+            INNER JOIN {record_table} r
+                ON r.ID = c.HOLD_RECORD_ID
+            LEFT JOIN USERS u1 ON u1.ID = c.DISPOSED_OWNER_ID
+            LEFT JOIN USERS u2 ON u2.ID = c.NEXT_OWNER_ID
+        """
+
+        count_sql = f"""
+            SELECT COUNT(*) AS CNT
+            {from_sql}
+            {where_sql}
+        """
+        total = int(db.session.execute(text(count_sql), params).scalar() or 0)
+
         # 指定单条 record 时按流转正序；否则按时间倒序便于浏览
         if 'hold_record_id' in params:
-            sql += """
-                ORDER BY c.ID ASC
-                FETCH FIRST :limit ROWS ONLY
-            """
+            order_sql = " ORDER BY c.ID ASC"
         else:
-            sql += """
-                ORDER BY c.DISPOSE_DTTM DESC NULLS LAST, c.ID DESC
-                FETCH FIRST :limit ROWS ONLY
-            """
+            order_sql = " ORDER BY c.DISPOSE_DTTM DESC NULLS LAST, c.ID DESC"
 
-        rows = db.session.execute(text(sql), params).fetchall()
-        return True, '获取成功', _enrich_circulation_rows(rows)
+        data_sql = f"""
+            SELECT
+                c.ID, c.HOLD_RECORD_ID, c.DISPOSED_OWNER_ID, c.DISPOSE,
+                c.NEXT_OWNER_ID, c.DISPOSE_SOURCE, c.DISPOSE_DTTM,
+                c.DISPOSE_TYPE, c.DISPOSE_DETAIL,
+                u1.NAME AS DISPOSED_OWNER_NAME,
+                u2.NAME AS NEXT_OWNER_NAME,
+                r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
+                r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.STATUS,
+                r.HOLD_DTTM
+            {from_sql}
+            {where_sql}
+            {order_sql}
+            OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
+        """
+
+        rows = db.session.execute(text(data_sql), params).fetchall()
+        return True, '获取成功', _page_payload(
+            _enrich_circulation_rows(rows), total, page, page_size
+        )
     except ValueError as e:
-        return False, str(e), []
+        from app.controllers.hold_report_ctrl import _page_payload
+        return False, str(e), _page_payload([], 0, 1, 20)
     except SQLAlchemyError as e:
+        from app.controllers.hold_report_ctrl import _page_payload
         db.session.rollback()
-        return False, f'数据库查询异常: {e}', []
+        return False, f'数据库查询异常: {e}', _page_payload([], 0, 1, 20)
     except Exception as e:
+        from app.controllers.hold_report_ctrl import _page_payload
         db.session.rollback()
-        return False, f'查询失败: {e}', []
+        return False, f'查询失败: {e}', _page_payload([], 0, 1, 20)
 
 
-def get_pending_records(owner_id=None, product_id='', keyword='', limit=500):
+def get_pending_records(
+    owner_id=None,
+    product_id='',
+    keyword='',
+    page=1,
+    page_size=20,
+    limit=None,
+):
     """
-    待办：最新流转 NEXT_OWNER_ID = owner_id，且 STATUS != 关闭。
+    待办：最新流转 NEXT_OWNER_ID = owner_id，且 STATUS != 关闭（分页）。
     root 传 owner_id=None 时查全部未关闭。
+    成功返回 (True, msg, page_payload)。
     """
     try:
-        record_table = _record_table()
-        limit = max(1, min(int(limit or 500), 5000))
+        from app.controllers.hold_report_ctrl import _parse_page, _page_payload
 
-        sql = f"""
-            SELECT
-                r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
-                r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
-                r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
-                c.DISPOSE AS LAST_DISPOSE,
-                c.NEXT_OWNER_ID,
-                c.DISPOSED_OWNER_ID,
-                c.DISPOSE_DTTM AS LAST_DISPOSE_DTTM,
-                u.NAME AS NEXT_OWNER_NAME
-            FROM {record_table} r
-            INNER JOIN CIRCULATION_HISTORY c
-                ON c.ID = r.LAST_CIRCULATION_ID
-            LEFT JOIN USERS u ON u.ID = c.NEXT_OWNER_ID
-            WHERE NVL(r.STATUS, 0) <> :closed
-        """
-        params = {'closed': DISPOSE_CLOSE, 'limit': limit}
+        record_table = _record_table()
+        if limit is not None and (page is None or str(page) in ('', '1')):
+            page, page_size, offset = _parse_page(1, limit)
+        else:
+            page, page_size, offset = _parse_page(page, page_size)
+
+        where_sql = " WHERE NVL(r.STATUS, 0) <> :closed"
+        params = {
+            'closed': DISPOSE_CLOSE,
+            'offset': offset,
+            'page_size': page_size,
+        }
 
         if owner_id is not None:
-            sql += " AND c.NEXT_OWNER_ID = :owner_id"
+            where_sql += " AND c.NEXT_OWNER_ID = :owner_id"
             params['owner_id'] = int(owner_id)
 
         if product_id:
-            sql += " AND UPPER(r.PRODUCT_ID) LIKE UPPER(:product_id)"
+            where_sql += " AND UPPER(r.PRODUCT_ID) LIKE UPPER(:product_id)"
             params['product_id'] = f"%{str(product_id).strip()}%"
 
         if keyword:
-            sql += """
+            where_sql += """
                 AND (
                     UPPER(r.WAFER_ID) LIKE UPPER(:keyword)
                     OR UPPER(r.LOT_ID) LIKE UPPER(:keyword)
@@ -432,27 +506,55 @@ def get_pending_records(owner_id=None, product_id='', keyword='', limit=500):
             """
             params['keyword'] = f"%{str(keyword).strip()}%"
 
-        sql += """
-            ORDER BY c.DISPOSE_DTTM DESC NULLS LAST, r.ID DESC
-            FETCH FIRST :limit ROWS ONLY
+        from_sql = f"""
+            FROM {record_table} r
+            INNER JOIN CIRCULATION_HISTORY c
+                ON c.ID = r.LAST_CIRCULATION_ID
+            LEFT JOIN USERS u ON u.ID = c.NEXT_OWNER_ID
         """
 
-        rows = db.session.execute(text(sql), params).fetchall()
+        count_sql = f"""
+            SELECT COUNT(*) AS CNT
+            {from_sql}
+            {where_sql}
+        """
+        total = int(db.session.execute(text(count_sql), params).scalar() or 0)
+
+        data_sql = f"""
+            SELECT
+                r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
+                r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
+                r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
+                c.DISPOSE AS LAST_DISPOSE,
+                c.NEXT_OWNER_ID,
+                c.DISPOSED_OWNER_ID,
+                c.DISPOSE_DTTM AS LAST_DISPOSE_DTTM,
+                u.NAME AS NEXT_OWNER_NAME
+            {from_sql}
+            {where_sql}
+            ORDER BY c.DISPOSE_DTTM DESC NULLS LAST, r.ID DESC
+            OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
+        """
+
+        rows = db.session.execute(text(data_sql), params).fetchall()
         data = []
         for r in rows:
             item = _row_to_dict(r)
             last_dispose = item.get('LAST_DISPOSE')
             item['LAST_DISPOSE_LABEL'] = DISPOSE_LABELS.get(last_dispose, str(last_dispose))
             data.append(item)
-        return True, '获取成功', data
+        return True, '获取成功', _page_payload(data, total, page, page_size)
     except ValueError as e:
-        return False, str(e), []
+        from app.controllers.hold_report_ctrl import _page_payload
+        return False, str(e), _page_payload([], 0, 1, 20)
     except SQLAlchemyError as e:
+        from app.controllers.hold_report_ctrl import _page_payload
         db.session.rollback()
-        return False, f'数据库查询异常: {e}', []
+        return False, f'数据库查询异常: {e}', _page_payload([], 0, 1, 20)
     except Exception as e:
+        from app.controllers.hold_report_ctrl import _page_payload
         db.session.rollback()
-        return False, f'查询失败: {e}', []
+        return False, f'查询失败: {e}', _page_payload([], 0, 1, 20)
 
 
 def dispose_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_detail=None):

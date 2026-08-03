@@ -10,11 +10,17 @@ def create_app():
     # 2. 创建 Flask 应用实例
     app = Flask(__name__)
     
-    # 3. 配置数据库
+    # 3. 配置数据库与 Session Cookie
     app.config['SQLALCHEMY_DATABASE_URI'] = Config.SQLALCHEMY_DATABASE_URI
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = Config.SQLALCHEMY_TRACK_MODIFICATIONS
     app.config['SECRET_KEY'] = Config.SQLALCHEMY_SECRET_KEY
-    
+    app.config['PERMANENT_SESSION_LIFETIME'] = Config.PERMANENT_SESSION_LIFETIME
+    app.config['SESSION_REFRESH_EACH_REQUEST'] = Config.SESSION_REFRESH_EACH_REQUEST
+    app.config['SESSION_COOKIE_NAME'] = Config.SESSION_COOKIE_NAME
+    app.config['SESSION_COOKIE_HTTPONLY'] = Config.SESSION_COOKIE_HTTPONLY
+    app.config['SESSION_COOKIE_SAMESITE'] = Config.SESSION_COOKIE_SAMESITE
+    app.config['SESSION_COOKIE_SECURE'] = Config.SESSION_COOKIE_SECURE
+
     # 4. 将 db 实例与 app 绑定
     db.init_app(app)
     

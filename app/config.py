@@ -1,11 +1,29 @@
 import oracledb
 import os
+from datetime import timedelta
 
 class Config:
 
     SQLALCHEMY_DATABASE_URI = 'oracle+oracledb://FT_OWEN:Mee0MvpgXU!Lcp@172.18.202.5:1521/?service_name=jsqy'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_SECRET_KEY = os.urandom(24)
+    # Flask Session 签名密钥：必须跨进程/重启稳定，否则持久 Cookie 登录态会失效
+    # 生产环境请通过环境变量 HOLD_SECRET_KEY 覆盖
+    SQLALCHEMY_SECRET_KEY = os.environ.get(
+        'HOLD_SECRET_KEY',
+        'hold-backend-session-secret-change-in-production',
+    )
+
+    # Session + 持久 Cookie（自动登录）
+    # 勾选「记住我」后 session.permanent=True，Cookie 带 Expires/Max-Age
+    PERMANENT_SESSION_LIFETIME = timedelta(days=30)
+    SESSION_REFRESH_EACH_REQUEST = True  # 滑动续期：有请求则延长有效期
+    SESSION_COOKIE_NAME = 'hold_session'
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    # HTTPS 部署时可设环境变量 HOLD_SESSION_SECURE=1
+    SESSION_COOKIE_SECURE = os.environ.get('HOLD_SESSION_SECURE', '').lower() in (
+        '1', 'true', 'yes',
+    )
 
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'

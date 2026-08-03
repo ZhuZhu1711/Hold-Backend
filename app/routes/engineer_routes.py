@@ -1,0 +1,226 @@
+"""
+产品工程师页面与 API。
+
+范围：仅 PRODUCT_INFO.PRO_ENG_ID = 当前用户 的型号。
+功能：
+  1. 维护所属型号缺陷 code / BSL
+  2. 查看所属型号 Hold Record（处置功能预留）
+"""
+from flask import Blueprint, render_template, request, jsonify, session
+
+from app.controllers import engineer_ctrl, dispose_ctrl
+from app.utils.auth_decorators import engineer_required, current_role_name
+
+engineer_bp = Blueprint('engineer', __name__, url_prefix='/eng')
+
+
+def _eng_id():
+    return session.get('user_id')
+
+
+def _page_ctx(**extra):
+    ctx = {
+        'user_name': session.get('user_name'),
+        'role_name': current_role_name(),
+    }
+    ctx.update(extra)
+    return ctx
+
+
+# ==========================================
+# 页面
+# ==========================================
+
+@engineer_bp.route('/')
+@engineer_bp.route('/dashboard')
+@engineer_required
+def dashboard():
+    return render_template('eng/dashboard.html', **_page_ctx())
+
+
+@engineer_bp.route('/defects')
+@engineer_required
+def defects_page():
+    return render_template(
+        'eng/defects.html',
+        **_page_ctx(product_id=request.args.get('product_id', '')),
+    )
+
+
+@engineer_bp.route('/holds')
+@engineer_required
+def holds_page():
+    return render_template('eng/holds.html', **_page_ctx())
+
+
+@engineer_bp.route('/circulations')
+@engineer_required
+def circulations_page():
+    """Hold 流转查询：全量可读，不按所属型号过滤（与 root 报表同源）。"""
+    return render_template('eng/circulations.html', **_page_ctx())
+
+
+# ==========================================
+# API：所属型号
+# ==========================================
+
+@engineer_bp.route('/api/products', methods=['GET'])
+@engineer_required
+def api_owned_products():
+    search = request.args.get('search', '').strip()
+    success, msg, data = engineer_ctrl.get_owned_products(_eng_id(), search=search)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
+
+
+# ==========================================
+# API：缺陷 code / BSL
+# ==========================================
+
+@engineer_bp.route('/api/defects', methods=['GET'])
+@engineer_required
+def api_list_defects():
+    product_code = request.args.get('product_id', '').strip()
+    if not product_code:
+        return jsonify({'code': 400, 'msg': '缺少参数 product_id', 'data': []}), 400
+    success, msg, data = engineer_ctrl.get_owned_defects(_eng_id(), product_code)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data, 'total': len(data)})
+    status = 403 if '不属于' in msg else (404 if '不存在' in msg else 500)
+    return jsonify({'code': status, 'msg': msg, 'data': []}), status
+
+
+@engineer_bp.route('/api/defects', methods=['POST'])
+@engineer_required
+def api_create_defect():
+    data = request.get_json(silent=True) or {}
+    success, msg, item = engineer_ctrl.create_owned_defect(_eng_id(), data)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': item})
+    status = 403 if '不属于' in msg else 400
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@engineer_bp.route('/api/defects/<int:defect_id>', methods=['PUT'])
+@engineer_required
+def api_update_defect(defect_id):
+    data = request.get_json(silent=True) or {}
+    success, msg, item = engineer_ctrl.update_owned_defect(_eng_id(), defect_id, data)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': item})
+    status = 403 if '不属于' in msg else (404 if '不存在' in msg else 400)
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@engineer_bp.route('/api/defects/<int:defect_id>', methods=['DELETE'])
+@engineer_required
+def api_delete_defect(defect_id):
+    success, msg = engineer_ctrl.delete_owned_defect(_eng_id(), defect_id)
+    if success:
+        return jsonify({'code': 200, 'msg': msg})
+    status = 403 if '不属于' in msg else (404 if '不存在' in msg else 400)
+    return jsonify({'code': status, 'msg': msg}), status
+
+
+# ==========================================
+# API：Hold Record（只读，处置预留）
+# ==========================================
+
+@engineer_bp.route('/api/holding_records', methods=['GET'])
+@engineer_required
+def api_holding_records():
+    product_id = request.args.get('product_id', '').strip()
+    station = request.args.get('station', '').strip()
+    keyword = request.args.get('keyword', '').strip()
+    record_type = request.args.get('record_type', '').strip()
+    page = request.args.get('page', 1)
+    page_size = request.args.get('page_size', 20)
+    pending_only = request.args.get('pending_only', '').strip().lower() in (
+        '1', 'true', 'yes', 'y',
+    )
+
+    success, msg, payload = engineer_ctrl.get_owned_holding_records(
+        eng_user_id=_eng_id(),
+        product_id=product_id,
+        station=station,
+        keyword=keyword,
+        record_type=record_type if record_type != '' else None,
+        page=page,
+        page_size=page_size,
+        pending_only=pending_only,
+    )
+    if success:
+        return jsonify({
+            'code': 200,
+            'msg': msg,
+            'data': payload.get('items') or [],
+            'total': payload.get('total', 0),
+            'page': payload.get('page', 1),
+            'page_size': payload.get('page_size', 20),
+            'pages': payload.get('pages', 1),
+        })
+    status = 400 if ('无效' in msg or '须为' in msg) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': [], 'total': 0}), status
+
+
+@engineer_bp.route('/api/dispose_actions', methods=['GET'])
+@engineer_required
+def api_dispose_actions():
+    """工程师可发起的处置行为：放行/降级/重测/分析（转交暂屏蔽）。"""
+    success, msg, data = dispose_ctrl.list_dispose_actions(group='engineer')
+    return jsonify({'code': 200, 'msg': msg, 'data': data})
+
+
+@engineer_bp.route('/api/dispose', methods=['POST'])
+@engineer_required
+def api_dispose():
+    """
+    工程师处置（dispose_api.md「工程师处置」）。
+    Body JSON:
+      hold_record_id  (必填)
+      dispose         (必填：1放行 2降级 3重测 5分析；转交7暂屏蔽)
+      dispose_detail  (可选，备注，最长 100)
+    须为当前负责人。
+    """
+    data = request.get_json(silent=True) or {}
+    hold_record_id = data.get('hold_record_id')
+    dispose = data.get('dispose')
+    dispose_detail = data.get('dispose_detail')
+
+    if hold_record_id is None or dispose is None:
+        return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
+
+    success, msg, result = dispose_ctrl.dispose_engineer_record(
+        hold_record_id=hold_record_id,
+        dispose=dispose,
+        actor_user_id=_eng_id(),
+        actor_role=session.get('role'),
+        dispose_detail=dispose_detail,
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': result})
+
+    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非工程师')
+    status = 400 if any(k in msg for k in bad_keys) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@engineer_bp.route('/api/fvi_defect_details', methods=['GET'])
+@engineer_required
+def api_fvi_defect_details():
+    """
+    所属型号 FVI 缺陷明细。
+    Query: lot_id (必填), line_type (默认 FT)
+    """
+    lot_id = request.args.get('lot_id', '').strip()
+    line_type = request.args.get('line_type', 'FT').strip() or 'FT'
+    success, msg, data = engineer_ctrl.get_owned_fvi_defect_details(
+        eng_user_id=_eng_id(),
+        lot_id=lot_id,
+        line_type=line_type,
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 403 if '所属' in msg else (400 if '请指定' in msg or '无效' in msg else 500)
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status

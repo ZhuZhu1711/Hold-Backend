@@ -41,8 +41,12 @@ def circulations_page():
 @dispose_bp.route('/api/dispose_actions', methods=['GET'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_dispose_actions():
-    """全部可发起的处置行为码说明。"""
-    success, msg, data = dispose_ctrl.list_dispose_actions()
+    """
+    可发起的处置行为码说明。
+    Query: group=engineer|production|system（可选）
+    """
+    group = request.args.get('group', '').strip() or None
+    success, msg, data = dispose_ctrl.list_dispose_actions(group=group)
     return jsonify({'code': 200, 'msg': msg, 'data': data})
 
 
@@ -50,10 +54,10 @@ def api_dispose_actions():
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_dispose():
     """
-    执行一次处置流转。
+    执行一次处置流转（工程师 / root）。
     Body JSON:
       hold_record_id  (必填)
-      dispose         (必填，见 dispose_api.md)
+      dispose         (必填，工程师：1放行 2降级 3重测 5分析；转交7暂屏蔽)
       dispose_detail  (可选，备注，最长 100)
     """
     data = request.get_json(silent=True) or {}
@@ -65,7 +69,55 @@ def api_dispose():
         return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
 
     actor_user_id, actor_role = _actor()
-    success, msg, result = dispose_ctrl.dispose_record(
+    # 非 root 走工程师处置约束；root 可代操作全部 USER_DISPOSES
+    if is_root():
+        success, msg, result = dispose_ctrl.dispose_record(
+            hold_record_id=hold_record_id,
+            dispose=dispose,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            dispose_detail=dispose_detail,
+        )
+    else:
+        success, msg, result = dispose_ctrl.dispose_engineer_record(
+            hold_record_id=hold_record_id,
+            dispose=dispose,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            dispose_detail=dispose_detail,
+        )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': result})
+
+    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非工程师')
+    status = 400 if any(k in msg for k in bad_keys) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@dispose_bp.route('/api/production/dispose', methods=['POST'])
+@login_required
+def api_production_dispose():
+    """
+    生产处置接口（供外部生产系统联动调用，本后台无生产处置 UI）。
+    需先 /api/login；操作人应为生产 OP（USERS.ID=PRODUCTION_OP_ID，默认 181），root 可代操作。
+
+    Body JSON:
+      hold_record_id  (必填)
+      dispose         (必填：6 分析返回 / 66 分析返回 / 8 回退)
+      dispose_detail  (可选，备注，最长 100)
+
+    规则见 dispose_api.md「生产处置」。
+    """
+    data = request.get_json(silent=True) or {}
+    hold_record_id = data.get('hold_record_id')
+    dispose = data.get('dispose')
+    dispose_detail = data.get('dispose_detail')
+
+    if hold_record_id is None or dispose is None:
+        return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
+
+    actor_user_id, actor_role = _actor()
+    success, msg, result = dispose_ctrl.dispose_production_record(
         hold_record_id=hold_record_id,
         dispose=dispose,
         actor_user_id=actor_user_id,
@@ -75,7 +127,7 @@ def api_dispose():
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
 
-    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前')
+    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非生产')
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
@@ -84,28 +136,37 @@ def api_dispose():
 @login_required
 def api_query_circulations():
     """
-    流转记录查询（全角色可读，含他人型号）。
+    流转记录查询（全角色可读，含他人型号，分页）。
     Query:
       hold_record_id  指定 record
       product_id      型号（模糊）
       wafer_id / lot_id
       dispose         行为码
       keyword         wafer/lot/型号/hold_code/备注
-      limit           默认 500，最大 5000
+      page / page_size  默认 1 / 20
     """
-    success, msg, data = dispose_ctrl.query_circulations(
+    success, msg, payload = dispose_ctrl.query_circulations(
         hold_record_id=request.args.get('hold_record_id'),
         product_id=request.args.get('product_id', '').strip(),
         wafer_id=request.args.get('wafer_id', '').strip(),
         lot_id=request.args.get('lot_id', '').strip(),
         dispose=request.args.get('dispose'),
         keyword=request.args.get('keyword', '').strip(),
-        limit=request.args.get('limit', 500),
+        page=request.args.get('page', 1),
+        page_size=request.args.get('page_size', 20),
     )
     if success:
-        return jsonify({'code': 200, 'msg': msg, 'data': data, 'total': len(data)})
+        return jsonify({
+            'code': 200,
+            'msg': msg,
+            'data': payload.get('items') or [],
+            'total': payload.get('total', 0),
+            'page': payload.get('page', 1),
+            'page_size': payload.get('page_size', 20),
+            'pages': payload.get('pages', 1),
+        })
     status = 400 if ('无效' in msg) else 500
-    return jsonify({'code': status, 'msg': msg, 'data': []}), status
+    return jsonify({'code': status, 'msg': msg, 'data': [], 'total': 0}), status
 
 
 @dispose_bp.route('/api/records/<int:record_id>/circulations', methods=['GET'])
@@ -128,11 +189,12 @@ def api_circulations(record_id):
 def api_pending_records():
     """
     待办列表：最新流转 NEXT_OWNER_ID = 当前用户（root 默认全量，可传 owner_id 过滤）。
-    Query: product_id, keyword, limit, owner_id(仅 root)
+    Query: product_id, keyword, page, page_size, owner_id(仅 root)
     """
     product_id = request.args.get('product_id', '').strip()
     keyword = request.args.get('keyword', '').strip()
-    limit = request.args.get('limit', 500)
+    page = request.args.get('page', 1)
+    page_size = request.args.get('page_size', 20)
 
     actor_user_id, _ = _actor()
     if is_root():
@@ -143,16 +205,25 @@ def api_pending_records():
             try:
                 owner_id = int(owner_raw)
             except (TypeError, ValueError):
-                return jsonify({'code': 400, 'msg': 'owner_id 无效', 'data': []}), 400
+                return jsonify({'code': 400, 'msg': 'owner_id 无效', 'data': [], 'total': 0}), 400
     else:
         owner_id = actor_user_id
 
-    success, msg, data = dispose_ctrl.get_pending_records(
+    success, msg, payload = dispose_ctrl.get_pending_records(
         owner_id=owner_id,
         product_id=product_id,
         keyword=keyword,
-        limit=limit,
+        page=page,
+        page_size=page_size,
     )
     if success:
-        return jsonify({'code': 200, 'msg': msg, 'data': data, 'total': len(data)})
-    return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
+        return jsonify({
+            'code': 200,
+            'msg': msg,
+            'data': payload.get('items') or [],
+            'total': payload.get('total', 0),
+            'page': payload.get('page', 1),
+            'page_size': payload.get('page_size', 20),
+            'pages': payload.get('pages', 1),
+        })
+    return jsonify({'code': 500, 'msg': msg, 'data': [], 'total': 0}), 500
