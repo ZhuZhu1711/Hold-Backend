@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hold 流转报表</title>
+    <title>Hold 流转查询</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
@@ -33,9 +33,7 @@
             background: #007bff; color: #fff; font-size: 14px;
         }
         .btn:hover { background: #0069d9; }
-        .btn-ghost {
-            background: #e9ecef; color: #333;
-        }
+        .btn-ghost { background: #e9ecef; color: #333; }
         .btn-ghost:hover { background: #dee2e6; }
         .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
         .pager {
@@ -102,25 +100,22 @@
 <body>
     <nav class="sidebar">
         <div class="sidebar-header">
-            <h2>后台管理系统</h2>
+            <h2>产品工程师</h2>
             <p>{{ user_name }} · {{ role_name }}</p>
         </div>
         <ul class="nav-links">
-            <li><a href="/dashboard">仪表盘</a></li>
-            <li><a href="/admin/hold/holding">Holding Record</a></li>
-            <li><a href="/admin/hold/history">Hold 历史</a></li>
-            <li class="active"><a href="/admin/hold/circulations">Hold 流转</a></li>
-            <li><a href="/admin/users">用户管理</a></li>
-            <li><a href="/admin/products">产品管理</a></li>
-            <li><a href="/admin/defects">缺陷管理</a></li>
+            <li><a href="/eng/">工作台</a></li>
+            <li><a href="/eng/defects">缺陷 / BSL</a></li>
+            <li><a href="/eng/holds">Hold Record</a></li>
+            <li class="active"><a href="/eng/circulations">Hold 流转</a></li>
             <li><a href="/logout">退出</a></li>
         </ul>
     </nav>
 
     <main class="main">
         <div class="card">
-            <h1>Hold Record 流转报表</h1>
-            <p class="sub">可查询 Hold Record 的流转记录。</p>
+            <h1>Hold Record 流转查询</h1>
+            <p class="sub">全量可查，不限所属型号；可查看他人处置记录。</p>
 
             <div class="filters">
                 <input id="hold_record_id" placeholder="Record ID" style="min-width:110px;" />

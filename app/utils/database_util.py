@@ -440,3 +440,72 @@ def insert_hold_record_and_link(
         return _fail(str(e))
     finally:
         connection.close()
+
+
+def _short_defect_code(raw) -> str:
+    """取 DEFECT_CODE 最后一个 '-' 之后的文本。"""
+    text = str(raw or '').strip()
+    if not text:
+        return ''
+    if '-' in text:
+        return text.rsplit('-', 1)[-1].strip()
+    return text
+
+
+def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
+    """
+    查询 FVI 缺陷明细（MES DB link）。
+    SELECT DEFECT_CODE, DEFECT_DESC, QTY
+      FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
+     WHERE d.LOT_RRN = (
+           SELECT l.LOT_RRN FROM MESPROD.LOT@MES16019 l
+            WHERE l.LOT_ID = :lot_id AND l.LINE_TYPE = :line_type
+     )
+
+    返回 list[dict]:
+      defect_code      截取后的短码
+      defect_code_raw  原始 DEFECT_CODE
+      defect_desc
+      qty
+    失败返回 None。
+    """
+    lot_id = (lot_id or '').strip()
+    if not lot_id:
+        logger.warning("query_fvi_defect_details: lot_id 为空")
+        return None
+
+    line_type = (line_type or 'FT').strip() or 'FT'
+    sql = """
+        SELECT DEFECT_CODE, DEFECT_DESC, QTY
+        FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
+        WHERE d.LOT_RRN = (
+            SELECT l.LOT_RRN
+            FROM MESPROD.LOT@MES16019 l
+            WHERE l.LOT_ID = :lot_id
+              AND l.LINE_TYPE = :line_type
+        )
+        ORDER BY QTY DESC NULLS LAST, DEFECT_CODE
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, {'lot_id': lot_id, 'line_type': line_type})
+            rows = cursor.fetchall()
+            result = []
+            for code_raw, desc, qty in rows:
+                result.append({
+                    'defect_code': _short_defect_code(code_raw),
+                    'defect_code_raw': str(code_raw).strip() if code_raw is not None else '',
+                    'defect_desc': str(desc).strip() if desc is not None else '',
+                    'qty': int(qty) if qty is not None else 0,
+                })
+            return result
+    except Exception as e:
+        logger.error(
+            f"查询 FVI 缺陷明细失败 lot_id={lot_id}: {e}",
+            exc_info=True,
+        )
+        return None
+    finally:
+        connection.close()

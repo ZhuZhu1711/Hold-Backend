@@ -1,19 +1,41 @@
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for, flash
 from app.controllers import user_ctrl, auth_ctrl
-from functools import wraps
+from app.utils.auth_decorators import (
+    login_required,
+    ROLE_ROOT,
+    ROLE_ENGINEER,
+    home_endpoint_for_role,
+    current_role_name,
+)
 
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/')
 
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # 检查 session 中是否有 user_id
-        if not session.get('user_id'):
-            flash('请先登录', 'warning') # 可选：显示提示信息
-            return redirect(url_for('auth.login_page'))
-        return f(*args, **kwargs)
-    return decorated_function
+
+def _as_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _establish_session(user_id, user_name, employee_no, role, remember=True):
+    """
+    写入登录 Session。
+    remember=True 时启用持久 Cookie（自动登录，默认 30 天，请求滑动续期）。
+    """
+    session.clear()
+    session['user_id'] = user_id
+    session['user_name'] = user_name
+    session['employee_no'] = employee_no
+    session['role'] = role
+    session.permanent = bool(remember)
+
+
+def _home_path_for_role(role=None):
+    return url_for(home_endpoint_for_role(role))
+
 
 # ==========================================
 # 页面路由
@@ -22,42 +44,41 @@ def login_required(f):
 @auth_bp.route('/')
 def index():
     """
-    首页重定向
+    首页：已登录按角色进后台，否则去登录页（持久 Cookie 可自动登录）。
     URL: /
     """
-    # 访问根目录时，自动跳转到登录页
+    if session.get('user_id'):
+        return redirect(url_for(home_endpoint_for_role()))
     return redirect(url_for('auth.login_page'))
+
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
 def login_page():
-    # 1. 如果已经登录了，直接跳转到仪表盘（实现“免密”体验）
+    # 已登录：按角色跳转首页（含持久 Cookie 自动登录）
     if session.get('user_id'):
-        return redirect(url_for('auth.dashboard'))
+        return redirect(url_for(home_endpoint_for_role()))
 
-    # 2. 处理登录提交
     if request.method == 'POST':
         employee_no = request.form.get('employee_no')
         password = request.form.get('password')
-        
-        # 调用控制器验证
-        user = auth_ctrl.authenticate(employee_no, password)
-        
-        if user:
-            session['user_id'] = user.ID
-            session['user_name'] = user.NAME
-            session['employee_no'] = user.EMPLOYEE_NO
-            session['role'] = user.ROLE
+        remember = _as_bool(request.form.get('remember'), default=True)
 
-            if user.ROLE != 0:
-                session.clear()
-                flash('权限不足：后台仅限管理员(root)登录', 'danger')
+        user = auth_ctrl.authenticate(employee_no, password)
+
+        if user:
+            if user.ROLE not in (ROLE_ROOT, ROLE_ENGINEER):
+                flash('权限不足：仅超级管理员或产品工程师可登录后台', 'danger')
             else:
+                _establish_session(
+                    user.ID, user.NAME, user.EMPLOYEE_NO, user.ROLE, remember=remember
+                )
                 flash('登录成功', 'success')
-                return redirect(url_for('auth.dashboard'))
+                return redirect(url_for(home_endpoint_for_role(user.ROLE)))
         else:
             flash('工号或密码错误', 'danger')
 
     return render_template('login.html')
+
 
 # ==========================================
 # 数据接口路由
@@ -68,50 +89,74 @@ def api_login():
     """
     处理登录请求
     URL: /api/login
+
+    Body JSON:
+      employee_no, password
+      remember  是否持久 Cookie 自动登录，默认 true
     """
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     emp_no = data.get('employee_no')
     password = data.get('password')
-    
-    # 调用控制器逻辑
+    remember = _as_bool(data.get('remember'), default=True)
+
     success, msg, user_data = user_ctrl.login_logic(emp_no, password)
-    
-    if success:
-        # Web 后台页面仍仅 root；API 登录对全部角色开放（流转查询等只读接口不按角色限制）
-        session['user_id'] = user_data['id']
-        session['user_name'] = user_data['name']
-        session['role'] = user_data['role']
-        session['employee_no'] = user_data.get('employee_no')
-        return jsonify({'code': 200, 'msg': msg, 'data': user_data})
-    else:
+
+    if not success:
         return jsonify({'code': 401, 'msg': msg}), 401
-    
+
+    role = user_data.get('role')
+    if role not in (ROLE_ROOT, ROLE_ENGINEER):
+        return jsonify({
+            'code': 403,
+            'msg': '权限不足：仅超级管理员或产品工程师可登录后台',
+        }), 403
+
+    _establish_session(
+        user_data['id'],
+        user_data['name'],
+        user_data.get('employee_no'),
+        role,
+        remember=remember,
+    )
+    redirect_url = _home_path_for_role(role)
+    return jsonify({
+        'code': 200,
+        'msg': msg,
+        'data': {
+            **user_data,
+            'remember': bool(remember),
+            'redirect': redirect_url,
+        },
+    })
+
+
 @auth_bp.route('dashboard')
 @login_required
 def dashboard():
     """
-    管理后台主页
+    管理后台主页（仅 root）
     URL: /dashboard
     """
-    # 1. 权限检查
-    if not session.get('user_id') or session.get('role') != 0:
+    if session.get('role') != ROLE_ROOT:
+        if session.get('role') == ROLE_ENGINEER:
+            return redirect(url_for('engineer.dashboard'))
         return redirect(url_for('auth.login_page'))
-    
-    # 2. 准备数据传递给模板
-    context = {
-        "user_name": session.get('user_name'),
-        "role_name": "超级管理员" if session.get('role') == 0 else "普通用户"
-    }
 
-    # 3. 渲染模板
-    return render_template('dashboard.html', **context)
+    return render_template(
+        'dashboard.html',
+        user_name=session.get('user_name'),
+        role_name=current_role_name(),
+    )
+
 
 @auth_bp.route('logout')
 def logout():
     """
-    退出登录
+    退出登录：清空 Session，并清除持久 Cookie。
     URL: /logout
     """
-    session.clear() 
+    session.clear()
+    # 确保响应不再带永久登录 Cookie
+    session.permanent = False
     flash('已安全退出', 'info')
     return redirect(url_for('auth.login_page'))
