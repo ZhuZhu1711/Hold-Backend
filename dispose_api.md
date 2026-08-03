@@ -25,3 +25,14 @@
 
 > 181: 是生产op的ID  
 ~: 代指型号所属工程师的ID(PRODUCT_INFO.PRO_ENG_ID)
+
+
+# 处置单划分
+| 处置单大类 | PRODUCT_ID | HOLD_CODE | STATION | RECORD_TYPE |
+| ----- | ----- | ----- | ----- | ----- |
+| FT异常反馈单 | *-3.5 | 023、024、025、027 | NOT IN ('FAOIFINISH', 'FFVI') | 0 |
+| FVI异常反馈单 | * | 023 | IN('FAOIFINISH', 'FFVI') | 1 |
+| WLT 异常反馈单 | *-2.6 | 004、022 | WOQC | 2 |
+
+> '*'是正则化写法，代表任意匹配  
+> 不满足表中规则的，无需转成record

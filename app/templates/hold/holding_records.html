@@ -25,7 +25,7 @@
         h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
         .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
         .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
-        .filters input {
+        .filters input, .filters select {
             padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 160px;
         }
         .btn {
@@ -77,6 +77,12 @@
             <p class="sub">查询在线的Hold报表</p>
 
             <div class="filters">
+                <select id="record_type">
+                    <option value="">全部处置单类型</option>
+                    <option value="0">FT异常反馈单</option>
+                    <option value="1">FVI异常反馈单</option>
+                    <option value="2">WLT异常反馈单</option>
+                </select>
                 <input id="product_id" placeholder="型号 PRODUCT_ID" />
                 <input id="station" placeholder="站点 STATION" />
                 <input id="keyword" placeholder="Wafer / Lot / Code / Reason" />
@@ -87,6 +93,7 @@
                 <table>
                     <thead>
                         <tr>
+                            <th>处置单类型</th>
                             <th>型号</th>
                             <th>站点/设备</th>
                             <th>Lot</th>
@@ -97,7 +104,7 @@
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="7" class="empty">加载中...</td></tr>
+                        <tr><td colspan="8" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -140,6 +147,10 @@
                 station: document.getElementById('station').value.trim(),
                 keyword: document.getElementById('keyword').value.trim(),
             });
+            const recordType = document.getElementById('record_type').value;
+            if (recordType !== '') {
+                params.set('record_type', recordType);
+            }
             document.getElementById('meta').textContent = '查询中...';
             try {
                 const resp = await fetch('/admin/hold/api/holding_records?' + params.toString());
@@ -147,18 +158,19 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="7" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="8" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     return;
                 }
                 const rows = json.data || [];
                 document.getElementById('meta').textContent = '共 ' + rows.length + ' 条在线 Hold Record';
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="7" class="empty">暂无在线 Holding Record</td></tr>';
+                        '<tr><td colspan="8" class="empty">暂无在线 Holding Record</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => `
                     <tr>
+                        <td>${esc(r.RECORD_TYPE_NAME || '-')}</td>
                         <td>${esc(r.PRODUCT_ID)}</td>
                         <td class="site-equip">${formatSiteEquip(r.STATION, r.EQUIP_ID)}</td>
                         <td>${esc(r.LOT_ID)}</td>
@@ -176,6 +188,7 @@
         document.querySelectorAll('.filters input').forEach(el => {
             el.addEventListener('keyup', ev => { if (ev.key === 'Enter') loadData(); });
         });
+        document.getElementById('record_type').addEventListener('change', loadData);
     </script>
 </body>
 </html>

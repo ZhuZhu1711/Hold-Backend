@@ -16,7 +16,7 @@ if project_root_path not in sys.path:
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from app.config import Config
 from app.utils.database_util import (
@@ -24,6 +24,55 @@ from app.utils.database_util import (
     mark_hold_infos_dirty,
     query_online_hold_info,
 )
+
+# 处置单划分（见 dispose_api.md）：
+#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027}, STATION∉{FAOIFINISH,FFVI}
+#   FVI异常反馈单 RECORD_TYPE=1  PRODUCT_ID *,     HOLD_CODE=023,               STATION∈{FAOIFINISH,FFVI}
+#   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_ID *-2.6, HOLD_CODE∈{004,022},         STATION=WOQC
+# 不满足以上规则的 hold_info 不转成 record。
+_FT_HOLD_CODES = frozenset({'023', '024', '025', '027'})
+_FVI_HOLD_CODES = frozenset({'023'})
+_WLT_HOLD_CODES = frozenset({'004', '022'})
+_FVI_STATIONS = frozenset({'FAOIFINISH', 'FFVI'})
+_WLT_STATIONS = frozenset({'WOQC'})
+
+RECORD_TYPE_FT = 0
+RECORD_TYPE_FVI = 1
+RECORD_TYPE_WLT = 2
+
+
+def resolve_record_type(
+    product_id: str,
+    hold_code: str,
+    station: str,
+) -> Optional[int]:
+    """
+    按 dispose_api.md「处置单划分」判定 RECORD_TYPE。
+    不匹配任何规则时返回 None（无需转成 record）。
+    """
+    pid = (product_id or '').strip()
+    code = (hold_code or '').strip()
+    sta = (station or '').strip().upper()
+
+    # FVI：先判站点限定规则，避免与 FT 的「站点排除」交叉误伤
+    if code in _FVI_HOLD_CODES and sta in _FVI_STATIONS:
+        return RECORD_TYPE_FVI
+
+    if (
+        pid.endswith('-3.5')
+        and code in _FT_HOLD_CODES
+        and sta not in _FVI_STATIONS
+    ):
+        return RECORD_TYPE_FT
+
+    if (
+        pid.endswith('-2.6')
+        and code in _WLT_HOLD_CODES
+        and sta in _WLT_STATIONS
+    ):
+        return RECORD_TYPE_WLT
+
+    return None
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -145,11 +194,12 @@ class HoldInfo:
 @dataclass
 class RoughHoldRecord:
     """
-    按 WAFER_ID 分组、并对 (STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
+    按 (WAFER_ID, RECORD_TYPE) 分组、并对 (STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
     items 为去重后用于拼装 FT_HOLD_RECORD 的条目；
     all_source_ids 含去重前全部源 ID，写入成功后一并回写 HOLD_RECORD_ID。
     """
     wafer_id: str
+    record_type: int
     items: List[HoldInfo] = field(default_factory=list)
     all_source_ids: List[int] = field(default_factory=list)
 
@@ -163,18 +213,19 @@ class RoughHoldRecord:
         codes = sorted({i.hold_code for i in self.items})
         stations = sorted({i.station for i in self.items})
         return (
-            f"wafer={self.wafer_id}, items={len(self.items)}, "
-            f"source_ids={len(self.source_ids)}, codes={codes}, stations={stations}"
+            f"wafer={self.wafer_id}, record_type={self.record_type}, "
+            f"items={len(self.items)}, source_ids={len(self.source_ids)}, "
+            f"codes={codes}, stations={stations}"
         )
 
     def to_record_dict(
         self,
-        record_type: int = 0,
         status: int = 0,
     ) -> Optional[dict]:
         """
         将去重后的 items 归纳为一条 FT_HOLD_RECORD 行数据。
         基础字段取时间最早一条；HOLD_CODE / HOLD_REASON 按时间序去重后用 @ 拼接。
+        RECORD_TYPE 取本 rough record 按处置单划分判定的值。
         """
         if not self.items:
             return None
@@ -204,7 +255,7 @@ class RoughHoldRecord:
             'SOURCE': first.source if first.source is not None else 0,
             'SECOND_CODE': second_code,
             'ROUTE_ID': route_id,
-            'RECORD_TYPE': record_type,
+            'RECORD_TYPE': self.record_type,
             'STATUS': status,
             # FT_HOLD_RECORD.HOLD_DTTM 为 DATE，取最早一条的时间
             'HOLD_DTTM': first.hold_dttm,
@@ -249,39 +300,65 @@ def dedupe_hold_infos(
 def build_rough_hold_records(
     rows: List[dict],
     window: timedelta = timedelta(hours=1),
-) -> List[RoughHoldRecord]:
-    """查询结果 → 按 wafer 分组 → 去重 → 粗糙 hold record 列表。"""
-    by_wafer = defaultdict(list)
+) -> Tuple[List[RoughHoldRecord], List[int]]:
+    """
+    查询结果 → 按处置单划分判定 RECORD_TYPE → 按 (wafer, record_type) 分组
+    → 去重 → 粗糙 hold record 列表。
+
+    返回 (records, skipped_ids)：
+      records     可写入的 RoughHoldRecord
+      skipped_ids 不满足处置单划分、无需转成 record 的源 hold_info ID
+    """
+    by_key = defaultdict(list)
+    skipped_ids: List[int] = []
+
     for row in rows:
         info = HoldInfo.from_row(row)
         if not info.wafer_id:
             logger.warning(f"跳过无 WAFER_ID 的 hold_info id={info.id}")
+            if info.id is not None:
+                skipped_ids.append(info.id)
             continue
-        by_wafer[info.wafer_id].append(info)
+
+        rtype = resolve_record_type(info.product_id, info.hold_code, info.station)
+        if rtype is None:
+            logger.info(
+                f"hold_info id={info.id} 不满足处置单划分，无需转成 record "
+                f"(product={info.product_id}, code={info.hold_code}, "
+                f"station={info.station})"
+            )
+            if info.id is not None:
+                skipped_ids.append(info.id)
+            continue
+
+        by_key[(info.wafer_id, rtype)].append(info)
 
     records: List[RoughHoldRecord] = []
-    for wafer_id in sorted(by_wafer.keys()):
-        raw_items = by_wafer[wafer_id]
+    for wafer_id, rtype in sorted(by_key.keys(), key=lambda k: (k[0], k[1])):
+        raw_items = by_key[(wafer_id, rtype)]
         all_source_ids = [i.id for i in raw_items if i.id is not None]
         deduped = dedupe_hold_infos(raw_items, window=window)
         if len(deduped) < len(raw_items):
             logger.info(
-                f"wafer={wafer_id}: {len(raw_items)} → {len(deduped)} "
+                f"wafer={wafer_id} record_type={rtype}: "
+                f"{len(raw_items)} → {len(deduped)} "
                 f"（去掉 {len(raw_items) - len(deduped)} 条重复）"
             )
         records.append(
             RoughHoldRecord(
                 wafer_id=wafer_id,
+                record_type=rtype,
                 items=deduped,
                 all_source_ids=all_source_ids,
             )
         )
-    return records
+    return records, skipped_ids
 
 
 class HoldMergeScheduler(threading.Thread):
     """
-    定时将 FT_HOLD_INFO 中同一 wafer 的多条在线 hold 合并为一条 FT_HOLD_RECORD。
+    定时将 FT_HOLD_INFO 中满足处置单划分的在线 hold，
+    按 (WAFER_ID, RECORD_TYPE) 合并写入 FT_HOLD_RECORD。
     """
 
     def __init__(self):
@@ -292,9 +369,6 @@ class HoldMergeScheduler(threading.Thread):
         self.interval_minutes = getattr(self.config, 'HOLD_MERGE_INTERVAL_MINUTES', 30)
         self.hold_info_table = getattr(self.config, 'HOLD_INFO_TABLE', 'FT_HOLD_INFO_TEST')
         self.hold_record_table = getattr(self.config, 'HOLD_RECORD_TABLE', 'FT_HOLD_RECORD')
-        self.hold_codes = getattr(self.config, 'HOLD_MERGE_HOLD_CODES', [])
-        self.stations = getattr(self.config, 'HOLD_MERGE_STATIONS', [])
-        self.record_type = getattr(self.config, 'HOLD_RECORD_TYPE', 0)
         self.record_status = getattr(self.config, 'HOLD_RECORD_STATUS', 0)
         self.dedup_window = timedelta(
             hours=getattr(self.config, 'HOLD_DEDUP_WINDOW_HOURS', 1)
@@ -307,24 +381,32 @@ class HoldMergeScheduler(threading.Thread):
     def _run_job(self):
         try:
             self.logger.info(">>> Hold 合并定时任务开始执行...")
-            hold_infos = query_online_hold_info(
-                self.hold_info_table,
-                hold_codes=self.hold_codes,
-                stations=self.stations,
-            )
+            hold_infos = query_online_hold_info(self.hold_info_table)
             if hold_infos is None:
                 self.logger.error("查询在线 hold_info 失败")
                 return
 
             self.logger.info(
                 f"从表 {self.hold_info_table} 查询到 {len(hold_infos)} 条在线 hold_info "
-                f"(HOLDING=0, HOLD_RECORD_ID∈{{NULL,0}}，已排除 -1 脏数据, "
-                f"HOLD_CODE∈{self.hold_codes}, STATION∈{self.stations})"
+                f"(HOLDING=0, HOLD_RECORD_ID∈{{NULL,0}}，已排除 -1 脏数据，"
+                f"已按处置单划分预过滤)"
             )
 
-            rough_records = build_rough_hold_records(
+            rough_records, skipped_ids = build_rough_hold_records(
                 hold_infos, window=self.dedup_window
             )
+            if skipped_ids:
+                # 不满足划分规则：标记 -1，避免轮询反复捞取
+                mark_hold_infos_dirty(
+                    skipped_ids,
+                    info_table=self.hold_info_table,
+                    reason='不满足处置单划分，无需转成 record',
+                )
+                self.logger.info(
+                    f"跳过 {len(skipped_ids)} 条不满足处置单划分的 hold_info，"
+                    f"已标记 HOLD_RECORD_ID=-1"
+                )
+
             self.logger.info(
                 f"归纳得到 {len(rough_records)} 条粗糙 hold_record "
                 f"（去重窗口={self.dedup_window}）"
@@ -333,10 +415,7 @@ class HoldMergeScheduler(threading.Thread):
             ok, fail = 0, 0
             for rec in rough_records:
                 self.logger.info(f"  - {rec.summary()}")
-                row = rec.to_record_dict(
-                    record_type=self.record_type,
-                    status=self.record_status,
-                )
+                row = rec.to_record_dict(status=self.record_status)
                 if not row:
                     mark_hold_infos_dirty(
                         rec.source_ids,
@@ -358,19 +437,22 @@ class HoldMergeScheduler(threading.Thread):
                     # insert_hold_record_and_link 失败时已置 HOLD_RECORD_ID=-1
                     fail += 1
                     self.logger.error(
-                        f"写入失败 wafer={rec.wafer_id} codes={row.get('HOLD_CODE')}，"
-                        f"已标记 HOLD_RECORD_ID=-1"
+                        f"写入失败 wafer={rec.wafer_id} "
+                        f"record_type={row.get('RECORD_TYPE')} "
+                        f"codes={row.get('HOLD_CODE')}，已标记 HOLD_RECORD_ID=-1"
                     )
                 else:
                     ok += 1
                     self.logger.info(
                         f"写入成功 wafer={rec.wafer_id} → "
                         f"{self.hold_record_table}.ID={new_id}, "
+                        f"RECORD_TYPE={row.get('RECORD_TYPE')}, "
                         f"HOLD_CODE={row.get('HOLD_CODE')}"
                     )
 
             self.logger.info(
-                f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}"
+                f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"
+                f"跳过 {len(skipped_ids)}"
             )
         except Exception as e:
             self.logger.error(f"Hold 合并定时任务执行出错: {e}", exc_info=True)
@@ -379,7 +461,7 @@ class HoldMergeScheduler(threading.Thread):
         self.logger.info(
             f"Hold 合并调度器已启动，间隔 {self.interval_minutes} 分钟，"
             f"源表={self.hold_info_table}，"
-            f"HOLD_CODE={self.hold_codes}，STATION={self.stations}"
+            f"RECORD_TYPE 按 dispose_api.md 处置单划分判定"
         )
         # 使用独立 Scheduler，避免与其他定时任务共用全局 schedule 冲突
         sch = schedule.Scheduler()

@@ -21,6 +21,13 @@ _ALLOWED_HOLD_INFO_TABLES = {'FT_HOLD_INFO', 'FT_HOLD_INFO_TEST'}
 _ALLOWED_HOLD_RECORD_TABLES = {'FT_HOLD_RECORD'}
 _ALLOWED_LINK_COLUMNS = {'HOLD_RECORD_ID', 'PROCESSED'}
 
+# dispose_api.md「处置单划分」处置单大类 ↔ RECORD_TYPE
+RECORD_TYPE_LABELS = {
+    0: 'FT异常反馈单',
+    1: 'FVI异常反馈单',
+    2: 'WLT异常反馈单',
+}
+
 
 def _table_names():
     info_table = (getattr(Config, 'HOLD_INFO_TABLE', None) or 'FT_HOLD_INFO_TEST').upper()
@@ -50,10 +57,17 @@ def _row_to_dict(row):
     return data
 
 
-def get_holding_records(product_id='', station='', keyword='', limit=500):
+def get_holding_records(
+    product_id='',
+    station='',
+    keyword='',
+    record_type=None,
+    limit=500,
+):
     """
     查询当前仍在 hold 的 hold_record 列表（root 全量）。
     HOLDING=0 才是在线 hold；用 INFO 关联字段踢掉已解 hold 的 record。
+    record_type：按处置单大类筛选（0=FT / 1=FVI / 2=WLT），空则不过滤。
     """
     try:
         info_table, record_table, link_col = _table_names()
@@ -101,6 +115,15 @@ def get_holding_records(product_id='', station='', keyword='', limit=500):
                 )
             """
             params['keyword'] = f"%{keyword.strip()}%"
+        if record_type is not None and str(record_type).strip() != '':
+            try:
+                rt = int(record_type)
+            except (TypeError, ValueError):
+                return False, 'record_type 无效', []
+            if rt not in RECORD_TYPE_LABELS:
+                return False, 'record_type 须为 0/1/2（FT/FVI/WLT）', []
+            sql += " AND r.RECORD_TYPE = :record_type"
+            params['record_type'] = rt
 
         sql += """
             GROUP BY
@@ -112,7 +135,16 @@ def get_holding_records(product_id='', station='', keyword='', limit=500):
         """
 
         rows = db.session.execute(text(sql), params).fetchall()
-        data = [_row_to_dict(r) for r in rows]
+        data = []
+        for r in rows:
+            item = _row_to_dict(r)
+            rt = item.get('RECORD_TYPE')
+            try:
+                rt_key = int(rt) if rt is not None else None
+            except (TypeError, ValueError):
+                rt_key = None
+            item['RECORD_TYPE_NAME'] = RECORD_TYPE_LABELS.get(rt_key, '-')
+            data.append(item)
         return True, '获取成功', data
     except ValueError as e:
         return False, str(e), []
@@ -195,8 +227,8 @@ def _iso_week_range(year, week):
 
 def get_hold_history(product_id, period_type, year, month=None, week=None):
     """
-    Hold 历史柱状图数据。
-    period_type=month: 按天聚合（该月每天一根柱）
+    Hold 历史簇状柱状图数据（按处置单 RECORD_TYPE 拆分）。
+    period_type=month: 按天聚合（该月每天一组柱）
     period_type=week:  按天聚合（该 ISO 周 Mon~Sun）
     """
     try:
@@ -240,13 +272,16 @@ def get_hold_history(product_id, period_type, year, month=None, week=None):
             period_label = f'{year:04d}-W{week:02d}'
 
         sql = f"""
-            SELECT TO_CHAR(HOLD_DTTM, 'YYYY-MM-DD') AS DAY_KEY, COUNT(*) AS CNT
+            SELECT
+                TO_CHAR(HOLD_DTTM, 'YYYY-MM-DD') AS DAY_KEY,
+                RECORD_TYPE,
+                COUNT(*) AS CNT
             FROM {record_table}
             WHERE PRODUCT_ID = :product_id
               AND HOLD_DTTM >= :start_dt
               AND HOLD_DTTM < :end_dt
-            GROUP BY TO_CHAR(HOLD_DTTM, 'YYYY-MM-DD')
-            ORDER BY DAY_KEY
+            GROUP BY TO_CHAR(HOLD_DTTM, 'YYYY-MM-DD'), RECORD_TYPE
+            ORDER BY DAY_KEY, RECORD_TYPE
         """
         rows = db.session.execute(
             text(sql),
@@ -256,16 +291,41 @@ def get_hold_history(product_id, period_type, year, month=None, week=None):
                 'end_dt': datetime.combine(end, datetime.min.time()),
             },
         ).fetchall()
-        count_map = {r[0]: int(r[1]) for r in rows}
-        values = [count_map.get(label, 0) for label in labels]
+
+        # (day, record_type) -> count
+        count_map = {}
+        for day_key, rtype, cnt in rows:
+            try:
+                rt = int(rtype) if rtype is not None else None
+            except (TypeError, ValueError):
+                rt = None
+            if rt is None:
+                continue
+            count_map[(day_key, rt)] = int(cnt or 0)
+
+        series = []
+        total = 0
+        totals_by_type = {}
+        for rt, name in RECORD_TYPE_LABELS.items():
+            values = [count_map.get((label, rt), 0) for label in labels]
+            type_total = sum(values)
+            totals_by_type[rt] = type_total
+            total += type_total
+            series.append({
+                'record_type': rt,
+                'name': name,
+                'values': values,
+                'total': type_total,
+            })
 
         return True, '获取成功', {
             'product_id': product_id,
             'period_type': period_type,
             'period_label': period_label,
             'labels': labels,
-            'values': values,
-            'total': sum(values),
+            'series': series,
+            'totals_by_type': totals_by_type,
+            'total': total,
         }
     except ValueError as e:
         return False, str(e), None
