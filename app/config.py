@@ -1,5 +1,5 @@
-import oracledb
 import os
+import sys
 from datetime import timedelta
 
 class Config:
@@ -29,7 +29,20 @@ class Config:
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
 
     # Hold info 合并为 hold_record 的定时任务配置
-    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST'
+    def _argv_is_debug_mode():
+        for i, a in enumerate(sys.argv):
+            a_l = a.lower()
+            if a_l.startswith('--mode='):
+                if a_l.split('=', 1)[1] == 'debug':
+                    return True
+            if a_l == '--mode':
+                if i + 1 < len(sys.argv) and sys.argv[i + 1].lower() == 'debug':
+                    return True
+            if a_l in ('mode==debug', 'mode=debug', 'debug'):
+                return True
+        return False
+
+    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if _argv_is_debug_mode() else 'FT_HOLD_INFO'
     HOLD_RECORD_TABLE = 'FT_HOLD_RECORD'
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
