@@ -1,0 +1,123 @@
+[33mcommit 8e90ed07af977b7916f46eb3493139bbdfa76b37[m[33m ([m[1;36mHEAD -> [m[1;32mfeature-get_testlog_api[m[33m, [m[1;31morigin/master[m[33m, [m[1;31morigin/feature-get_testlog_api[m[33m, [m[1;32mmaster[m[33m)[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Wed Aug 5 15:11:47 2026 +0800
+
+    0805
+
+[33mcommit ec4648dba4a7b16eb4d0ed9441b5aa6c312cd29b[m
+Merge: 82ae8b2 0c10215
+Author: XHU_508_Z <80305290+ZhuZhu1711@users.noreply.github.com>
+Date:   Mon Aug 3 16:22:44 2026 +0800
+
+    Merge pull request #2 from ZhuZhu1711/product_engineer_page
+    
+    finish develop
+
+[33mcommit 0c1021549d097218d909ac475d62cb10d60712e2[m[33m ([m[1;31morigin/product_engineer_page[m[33m, [m[1;32mproduct_engineer_page[m[33m)[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Mon Aug 3 16:20:45 2026 +0800
+
+    finish develop
+
+[33mcommit 82ae8b225597b7a91c1ee4bd8f93dbfe0dd95b6b[m
+Merge: 8555219 8487ede
+Author: XHU_508_Z <80305290+ZhuZhu1711@users.noreply.github.com>
+Date:   Mon Aug 3 14:42:57 2026 +0800
+
+    Merge pull request #1 from ZhuZhu1711/feature-convert_record_improve
+    
+    Feature convert record improve
+
+[33mcommit 8487ede3b1bbf914d2c758ee26d39d0b20e35e26[m[33m ([m[1;31morigin/feature-convert_record_improve[m[33m, [m[1;32mfeature-convert_record_improve[m[33m)[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Mon Aug 3 14:38:05 2026 +0800
+
+    develop finish
+
+[33mcommit e12fa9c5f52071e9cd860857dc62472e1d3ba96e[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Sun Aug 2 10:19:24 2026 +0800
+
+    temp
+
+[33mcommit 855521917bcc0b68dc782fda401cbb23bf25d0d2[m
+Merge: 23e3bd9 69f73d9
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Sat Aug 1 15:48:30 2026 +0800
+
+    Merge branch 'feature-dispose_api' into 'master'
+    
+    finish api v1 develop
+    
+    See merge request ZDX/HOLD_BACKEND!2
+
+[33mcommit 69f73d99fa2f0f25a35f5efeec09640298e8ae48[m[33m ([m[1;31morigin/feature-dispose_api[m[33m, [m[1;32mfeature-dispose_api[m[33m)[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Sat Aug 1 15:31:14 2026 +0800
+
+    finish api v1 develop
+
+[33mcommit 23e3bd97fbe6f127d13d7a45b21b24dd2cbbea89[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Sat Aug 1 13:29:29 2026 +0800
+
+    feature-hold report develop
+
+[33mcommit 83e4d58b8d593ab96d3e29fa5315e72693308da9[m
+Merge: 7f611df 26d1178
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Sat Aug 1 11:23:11 2026 +0800
+
+    Merge branch 'feature-Convert_hold_to_record' into 'master'
+    
+    finish convert feature develop
+    
+    See merge request ZDX/HOLD_BACKEND!1
+
+[33mcommit 26d117893cea497aa5ee3ae90e7d49a4ec07b6fa[m[33m ([m[1;31morigin/feature-Convert_hold_to_record[m[33m, [m[1;32mfeature-Convert_hold_to_record[m[33m)[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Sat Aug 1 11:10:06 2026 +0800
+
+    finish convert feature develop
+
+[33mcommit 7f611dfea8a961e3687411c8b831c9df9aa94a35[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Tue Jul 7 09:52:22 2026 +0800
+
+    add version api
+
+[33mcommit 8f1fa9689febd38d9bc9d72ee05d66f9faea2202[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Mon Jul 6 13:57:26 2026 +0800
+
+    new api: query yield
+
+[33mcommit c4416c4dec4d2cc9ee90f7f04cea630a934bafcd[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Mon Jun 29 11:25:59 2026 +0800
+
+    优化gross die api.完美
+
+[33mcommit 569e8b45be72a204d19347a32d6c5cb732bb3558[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Fri Jun 26 15:40:55 2026 +0800
+
+    增加常用数据接口，实现gross_die获取api
+
+[33mcommit 34707117fcad6ea1c0570c557df28f5b269a9880[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Mon Jun 1 17:30:26 2026 +0800
+
+    WSGI;命令行启动
+
+[33mcommit 4f1b11ccb5ef0126cd88d1a517283f78669017eb[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Tue May 12 14:00:37 2026 +0800
+
+    修复缺少/ bug
+
+[33mcommit 1bc06fda3c73cef8dc48f48b687a6d04f8120738[m
+Author: Zhu Dongxian <dongxian_zhu@gcoreinc.com>
+Date:   Mon Apr 20 13:40:44 2026 +0800
+
+    第一个版本

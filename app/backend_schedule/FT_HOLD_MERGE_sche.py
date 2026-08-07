@@ -22,6 +22,7 @@ from app.config import Config
 from app.utils.database_util import (
     insert_hold_record_and_link,
     mark_hold_infos_dirty,
+    normalize_lot_id,
     query_online_hold_info,
 )
 
@@ -248,7 +249,7 @@ class RoughHoldRecord:
             'PRODUCT_ID': first.product_id,
             'STATION': first.station,
             'EQUIP_ID': first.equip_id,
-            'LOT_ID': first.lot_id,
+            'LOT_ID': normalize_lot_id(first.lot_id),
             'WAFER_ID': self.wafer_id,
             'HOLD_CODE': hold_code,
             'HOLD_REASON': hold_reason,

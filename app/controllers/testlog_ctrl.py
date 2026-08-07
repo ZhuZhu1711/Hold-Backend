@@ -9,26 +9,52 @@ import csv
 import traceback
 
 
-def get_ftp_path_by_wafer(wafer_id: str, step: str):
+def get_ftp_paths(product_id: str, wafer_id: str, step: str):
     """
-    根据 Wafer ID 和 工步 查询 FTP 路径
-    
+    根据 product_id + wafer_id + step 查询 FTP_PATH 列表（含 test_date，按日期倒序）
+
     Args:
-        wafer_id (str): 晶圆 ID
-        step: 工步
+        product_id: 产品 ID
+        wafer_id: 晶圆 ID
+        step: 工步类型，仅允许 ATE | WLT
+              ATE → STEP = 'FA'
+              WLT → STEP LIKE 'WLT_'
     Returns:
-        路径列表
+        (success, msg, data)
     """
+    if not product_id or not isinstance(product_id, str):
+        return False, "product_id 无效", []
     if not wafer_id or not isinstance(wafer_id, str):
-        return None
+        return False, "wafer_id 无效", []
+    if step not in ('ATE', 'WLT'):
+        return False, "invalid step param. Must in ATE | WLT", []
 
     try:
-        records = FtWltTestlog.query.filter_by(WAFER_ID=wafer_id).all()
-        return records
+        query = FtWltTestlog.query.filter(
+            FtWltTestlog.PRODUCT_ID == product_id,
+            FtWltTestlog.WAFER_ID == wafer_id,
+        )
+        if step == 'ATE':
+            query = query.filter(FtWltTestlog.STEP == 'FA')
+        else:
+            query = query.filter(FtWltTestlog.STEP.like('WLT_'))
+
+        records = query.order_by(desc(FtWltTestlog.TEST_DATE)).all()
+        data = [
+            {
+                "ftp_path": r.FTP_PATH,
+                "test_date": r.TEST_DATE.strftime("%Y-%m-%d") if r.TEST_DATE else None,
+                "step": r.STEP
+            }
+            for r in records
+        ]
+        return True, "查询成功", data
     except Exception as e:
         print(f"Database Error: {e}")
-        return None
-    
+        return False, str(e), []
+
+
+
 def get_test_data(wafer_id: str, step: str):
     """
     根据Wafer ID 查询最新测试数据:良率+缺陷率
@@ -47,45 +73,69 @@ def get_test_data(wafer_id: str, step: str):
     
 def get_testlog_bysite_str(wafer_id: str, step_list: list):
     """
-    根据 Wafer ID 查询最新testlog并解析
-    
+    根据 Wafer ID 查询最新 testlog 并解析。
+    对 step_list 中每个 step 分别取 TEST_DATE 最新的一条记录。
+
     Args:
-        wafer_id (str): 晶圆 ID
-        step: FA or WLTA or WLTB
-        
+        wafer_id: 晶圆 ID
+        step_list: 工步列表，如 ['FA'] 或 ['WLTA', 'WLTB']
+
     Returns:
-        缺陷的Bysite——json字符串
+        bysite 结果列表；无数据时返回 None
     """
     if not wafer_id or not isinstance(wafer_id, str):
         return None
+    if not step_list:
+        return None
 
     try:
-        record = FtWltTestlog.query.filter(FtWltTestlog.WAFER_ID==wafer_id, FtWltTestlog.STEP.in_(step_list)) \
-        .order_by(desc(FtWltTestlog.TEST_DATE)).first()
-        
-        if record:
-            # 1.下载文件
-            try:
-                ftp_path = record.FTP_PATH
-                ftp_conn = testlog_ftp_pool.get_conn()
-                local_dir = "./testlog_temp_dir/"
-                if os.path.exists(local_dir) is False:
-                    os.makedirs(local_dir)
-                local_path = f"{local_dir}{os.path.basename(ftp_path)}"
-                with open(local_path, 'wb') as local_file:
-                    ftp_conn.retrbinary(f"RETR {ftp_path}", local_file.write)
-            except Exception as e:
-                print(e)
-            finally:
-                ftp_conn.close()
-            # 2.解析数据
-            if local_path.lower().endswith('csv'):
-                return parse_CSV(local_path)
-            elif local_path.lower().endswith('xml'):
-                return parse_XML(local_path)
+        results = []
+        for step in step_list:
+            record = (
+                FtWltTestlog.query.filter(
+                    FtWltTestlog.WAFER_ID == wafer_id,
+                    FtWltTestlog.STEP == step,
+                )
+                .order_by(desc(FtWltTestlog.TEST_DATE))
+                .first()
+            )
+            if not record:
+                continue
+
+            parsed = _download_and_parse_testlog(record.FTP_PATH)
+            if parsed is not None:
+                results.append(parsed)
+
+        return results if results else None
     except Exception as e:
         print(f"Database Error: {e}")
         return e
+
+
+def _download_and_parse_testlog(ftp_path: str):
+    """从 FTP 下载 testlog 并按扩展名解析 bysite。"""
+    ftp_conn = None
+    local_path = None
+    try:
+        ftp_conn = testlog_ftp_pool.get_conn()
+        local_dir = "./testlog_temp_dir/"
+        if not os.path.exists(local_dir):
+            os.makedirs(local_dir)
+        local_path = f"{local_dir}{os.path.basename(ftp_path)}"
+        with open(local_path, 'wb') as local_file:
+            ftp_conn.retrbinary(f"RETR {ftp_path}", local_file.write)
+
+        if local_path.lower().endswith('csv'):
+            return parse_CSV(local_path)
+        if local_path.lower().endswith('xml'):
+            return parse_XML(local_path)
+        return None
+    except Exception as e:
+        print(e)
+        return None
+    finally:
+        if ftp_conn is not None:
+            ftp_conn.close()
 
 
 # 辅助函数
@@ -145,13 +195,13 @@ def parse_CSV(log_fpath):
         os.remove(log_fpath)
         
         
-def parse_XML(self, log_fpath):
+def parse_XML(log_fpath):
         tree = etree.parse(log_fpath)
         ### 解析基本信息
         fname_parts = os.path.basename(log_fpath).split('_')
         for part in fname_parts:
             if part.startswith('GC'):
-                self.product_id = part
+                product_id = part
                 break
         lot_id = tree.find('.//LOT_ID').text
         wafer_id:str = tree.find('.//WAFER_ID').text
@@ -164,7 +214,7 @@ def parse_XML(self, log_fpath):
         end_dttm = tree.find('.//END_TIME').text
         test_die = int(tree.findtext('.//TEST_DIE')) if tree.findtext('.//TEST_DIE') is not None else 0
         pass_die = int(tree.findtext('.//PASS_CNT')) if tree.findtext('.//PASS_CNT') is not None else 0
-        fail_die = self.test_die - self.pass_die
+        fail_die = test_die - pass_die
         
         ### 解析binmap data
         binmap_node = tree.find('.//BINMAP')

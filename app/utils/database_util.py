@@ -452,10 +452,23 @@ def _short_defect_code(raw) -> str:
     return text
 
 
+def normalize_lot_id(lot_id) -> str:
+    """
+    MES LOT ID → 用户侧 LOT ID。
+    若含 '-'，截取第一个 '-' 之前的文本（不含 '-'）；否则原样返回。
+    """
+    text = str(lot_id).strip() if lot_id is not None else ''
+    if not text:
+        return ''
+    if '-' in text:
+        return text.split('-', 1)[0].strip()
+    return text
+
+
 def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
     """
     查询 FVI 缺陷明细（MES DB link）。
-    SELECT DEFECT_CODE, DEFECT_DESC, QTY
+    SELECT DEFECT_CODE, DEFECT_DESC, QTY, FROM_BIN_NAME
       FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
      WHERE d.LOT_RRN = (
            SELECT l.LOT_RRN FROM MESPROD.LOT@MES16019 l
@@ -476,7 +489,7 @@ def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
 
     line_type = (line_type or 'FT').strip() or 'FT'
     sql = """
-        SELECT DEFECT_CODE, DEFECT_DESC, QTY
+        SELECT DEFECT_CODE, DEFECT_DESC, QTY, FROM_BIN_NAME
         FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
         WHERE d.LOT_RRN = (
             SELECT l.LOT_RRN
@@ -493,12 +506,13 @@ def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
             cursor.execute(sql, {'lot_id': lot_id, 'line_type': line_type})
             rows = cursor.fetchall()
             result = []
-            for code_raw, desc, qty in rows:
+            for code_raw, desc, qty, grade in rows:
                 result.append({
                     'defect_code': _short_defect_code(code_raw),
                     'defect_code_raw': str(code_raw).strip() if code_raw is not None else '',
                     'defect_desc': str(desc).strip() if desc is not None else '',
                     'qty': int(qty) if qty is not None else 0,
+                    'grade': str(grade).strip() if grade is not None else ''
                 })
             return result
     except Exception as e:
