@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import db
 from app.config import Config
 from app.utils.auth_decorators import ROLE_ROOT
+from app.utils.database_util import normalize_lot_id
 
 
 # ---------- DISPOSE 行为码 ----------
@@ -97,6 +98,8 @@ def _row_to_dict(row):
             data[out_key] = value.strftime('%Y-%m-%d')
         else:
             data[out_key] = value
+    if 'LOT_ID' in data:
+        data['LOT_ID'] = normalize_lot_id(data['LOT_ID'])
     return data
 
 

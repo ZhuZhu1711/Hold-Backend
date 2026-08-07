@@ -286,7 +286,10 @@ def get_owned_fvi_defect_details(eng_user_id, lot_id, line_type='FT'):
                 text("""
                     SELECT COUNT(*) AS CNT
                     FROM FT_HOLD_RECORD r
-                    WHERE r.LOT_ID = :lot_id
+                    WHERE (
+                        r.LOT_ID = :lot_id
+                        OR r.LOT_ID LIKE :lot_id_prefix
+                    )
                       AND r.RECORD_TYPE = 1
                       AND r.PRODUCT_ID IN (
                           SELECT p.PRODUCT_ID
@@ -294,7 +297,11 @@ def get_owned_fvi_defect_details(eng_user_id, lot_id, line_type='FT'):
                           WHERE p.PRO_ENG_ID = :eng_id
                       )
                 """),
-                {'lot_id': lot_id, 'eng_id': eng_user_id},
+                {
+                    'lot_id': lot_id,
+                    'lot_id_prefix': f'{lot_id}-%',
+                    'eng_id': eng_user_id,
+                },
             ).fetchone()
         )
         cnt = int(owned[0] or 0) if owned else 0
