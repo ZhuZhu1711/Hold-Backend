@@ -15,8 +15,16 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
 from app.config import Config
-from app.utils.database_util import normalize_lot_id, query_fvi_defect_details
+from app.utils.database_util import (
+    is_merged_wafer_id,
+    normalize_lot_id,
+    query_fvi_defect_details,
+    query_split_merge_history,
+)
 from app.controllers.dispose_ctrl import DISPOSE_LABELS, DISPOSE_CLOSE
+from app.controllers.rawdata_ctrl import get_latest_defect_bincodes
+from app.controllers import testlog_ctrl
+
 
 
 _ALLOWED_HOLD_INFO_TABLES = {'FT_HOLD_INFO', 'FT_HOLD_INFO_TEST'}
@@ -472,4 +480,150 @@ def get_fvi_defect_details(lot_id, line_type='FT'):
         'summary': '；'.join(parts) if parts else '',
         'total_qty': sum(int(i.get('qty') or 0) for i in rows),
         'count': len(rows),
+    }
+
+
+def get_split_merge_history(wafer_id):
+    """
+    查询合批 wafer 的来源 lot 列表（MES SPLIT_MERGE_HISTORY）。
+    合批 wafer_id 通常含 '-' 且 '-' 后数字位数 > 2。
+    """
+    if wafer_id is None or not str(wafer_id).strip():
+        return False, '请指定 wafer_id', None
+
+    wafer_id = str(wafer_id).strip()
+    rows = query_split_merge_history(wafer_id)
+    if rows is None:
+        return False, '查询合批记录失败', None
+
+    return True, '获取成功', {
+        'wafer_id': wafer_id,
+        'is_merged_candidate': is_merged_wafer_id(wafer_id),
+        'source_lot_ids': rows,
+        'count': len(rows),
+    }
+
+
+def _resolve_analysis_params(record_type=None, station=None):
+    """
+    由 hold record 的 RECORD_TYPE / STATION 推断 bysite step 与 raw_data operation_id。
+    FT/FVI → ATE + FATE-FA；WLT → WLT + station。
+    """
+    station = (station or '').strip()
+    try:
+        rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
+    except (TypeError, ValueError):
+        rt = None
+
+    if rt == 2:
+        return 'WLT', station or None
+
+    if station.upper().startswith('FATE') if station else False:
+        operation_id = station
+    else:
+        operation_id = 'FATE-FA'
+    return 'ATE', operation_id
+
+
+def _station_to_bysite_step_list(station=None, record_type=None, step_group=None):
+    """
+    Hold STATION → FT_WLT_TESTLOG.STEP 列表（bysite 查询用）。
+
+    数据设计不一致：station 如 FATE-FA，testlog step 为 FA。
+      FATE-FA  → ['FA']
+      FATE-xx  → ['xx']（取 '-' 后段）
+      WLT/WOQC → ['WLTA', 'WLTB']
+      其它     → 按 step_group（ATE→FA；WLT→WLTA/WLTB）回退
+    """
+    station = (station or '').strip()
+    sta_u = station.upper()
+
+    try:
+        rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
+    except (TypeError, ValueError):
+        rt = None
+
+    if '-' in station and sta_u.startswith('FATE-'):
+        suffix = station.split('-', 1)[1].strip()
+        if suffix:
+            return [suffix]
+
+    if rt == 2 or sta_u == 'WOQC' or (step_group or '').upper() == 'WLT':
+        return ['WLTA', 'WLTB']
+
+    return ['FA']
+
+
+def get_hold_analysis(wafer_id, record_type=None, station=None):
+    """
+    Hold Record 数据分析：bysite + raw_data（qty 降序）。
+    合批 wafer 额外附带各源 wafer 的 raw_data。
+    """
+    if wafer_id is None or not str(wafer_id).strip():
+        return False, '请指定 wafer_id', None
+
+    wafer_id = str(wafer_id).strip()
+    step, operation_id = _resolve_analysis_params(record_type, station)
+    step_list = _station_to_bysite_step_list(
+        station=station,
+        record_type=record_type,
+        step_group=step,
+    )
+
+    # 1) bysite
+    bysite = None
+    bysite_msg = ''
+    try:
+        bysite_resp = testlog_ctrl.get_testlog_bysite_str(wafer_id, step_list)
+        if isinstance(bysite_resp, Exception):
+            bysite_msg = f'bysite 查询异常: {bysite_resp}'
+            bysite = None
+        elif bysite_resp is None:
+            bysite_msg = '无 bysite 数据'
+            bysite = None
+        else:
+            bysite = bysite_resp
+            bysite_msg = '获取成功'
+    except Exception as e:
+        bysite_msg = f'bysite 查询失败: {e}'
+        bysite = None
+
+    # 2) raw_data（当前 wafer）
+    raw_data = {}
+    raw_msg = ''
+    if operation_id:
+        ok, raw_msg, raw_data = get_latest_defect_bincodes(wafer_id, operation_id)
+        if not ok:
+            raw_data = {}
+    else:
+        raw_msg = '无法确定 operation_id，跳过 raw_data'
+
+    # 3) 合批源 wafer raw_data
+    is_merged = is_merged_wafer_id(wafer_id)
+    source_lot_ids = []
+    source_raw_data = {}
+    if is_merged:
+        sources = query_split_merge_history(wafer_id)
+        if sources is None:
+            sources = []
+        source_lot_ids = sources
+        if operation_id:
+            for src in source_lot_ids:
+                ok, _, src_raw = get_latest_defect_bincodes(src, operation_id)
+                source_raw_data[src] = src_raw if ok and src_raw else {}
+
+    return True, '获取成功', {
+        'wafer_id': wafer_id,
+        'record_type': record_type,
+        'station': (station or '').strip() or None,
+        'step': step,
+        'step_list': step_list,
+        'operation_id': operation_id,
+        'bysite': bysite,
+        'bysite_msg': bysite_msg,
+        'raw_data': raw_data or {},
+        'raw_msg': raw_msg,
+        'is_merged': is_merged,
+        'source_lot_ids': source_lot_ids,
+        'source_raw_data': source_raw_data,
     }

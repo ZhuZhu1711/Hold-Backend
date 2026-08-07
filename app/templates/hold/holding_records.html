@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Holding Record 报表</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
@@ -81,6 +82,46 @@
         .modal th, .modal td { padding: 8px; border-bottom: 1px solid #eee; text-align: left; }
         .modal th { background: #f8f9fa; }
         .modal-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .modal.lg { width: 960px; max-width: 96vw; }
+        .section-title {
+            font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333;
+            border-left: 3px solid #007bff; padding-left: 8px;
+        }
+        .section-title:first-of-type { margin-top: 0; }
+        .bysite-meta { font-size: 12px; color: #666; margin-bottom: 8px; line-height: 1.5; }
+        .bysite-block { margin-bottom: 14px; }
+        .bysite-block h4 { font-size: 13px; margin-bottom: 6px; color: #555; }
+        .heatmap-wrap { overflow: auto; max-height: 320px; border: 1px solid #eee; border-radius: 6px; }
+        .heatmap {
+            border-collapse: separate; border-spacing: 0; font-size: 11px;
+            width: max-content; min-width: 100%;
+        }
+        .heatmap th, .heatmap td {
+            padding: 4px 6px; text-align: center; border-right: 1px solid #f0f0f0;
+            border-bottom: 1px solid #f0f0f0; white-space: nowrap; min-width: 36px;
+        }
+        .heatmap thead th {
+            background: #f1f3f5; position: sticky; top: 0; z-index: 2; font-weight: 600;
+        }
+        .heatmap .site-col {
+            position: sticky; left: 0; background: #f8f9fa; z-index: 1; font-weight: 600;
+            text-align: left; min-width: 48px;
+        }
+        .heatmap thead .site-col { z-index: 3; background: #e9ecef; }
+        .heatmap td.heat-empty { color: #ccc; background: #fff; }
+        .wafer-checks {
+            display: flex; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 10px;
+            font-size: 13px; color: #444;
+        }
+        .wafer-checks label {
+            display: inline-flex; align-items: center; gap: 6px;
+            cursor: pointer; user-select: none;
+        }
+        .wafer-checks input { accent-color: #007bff; cursor: pointer; }
+        .raw-chart-wrap { position: relative; height: 320px; margin-bottom: 4px; }
     </style>
 </head>
 <body>
@@ -104,7 +145,7 @@
     <main class="main">
         <div class="card">
             <h1>Holding Record 报表</h1>
-            <p class="sub">查询在线的Hold报表。FVI 记录可点击原因查看缺陷明细。</p>
+            <p class="sub">查询在线的Hold报表。FVI 记录可点击原因查看缺陷明细；可点「分析」查看 bysite / raw_data。</p>
 
             <div class="filters">
                 <select id="record_type">
@@ -131,10 +172,11 @@
                             <th>原因</th>
                             <th>Hold 时间</th>
                             <th>状态</th>
+                            <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="8" class="empty">加载中...</td></tr>
+                        <tr><td colspan="9" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -165,12 +207,37 @@
         </div>
     </div>
 
+    <div class="modal-mask" id="analysisModal">
+        <div class="modal lg">
+            <h3>数据分析</h3>
+            <div class="modal-sub" id="analysisSub">-</div>
+            <div id="analysisBody">
+                <div class="empty">加载中...</div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeAnalysisModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const REASON_MAX_LEN = 80;
         const RECORD_TYPE_FVI = 1;
+        const ANALYSIS_API = '/admin/hold/api/analysis';
+        const RAW_WAFER_COLORS = [
+            { bg: 'rgba(0, 123, 255, 0.7)', border: 'rgba(0, 123, 255, 1)' },
+            { bg: 'rgba(40, 167, 69, 0.7)', border: 'rgba(40, 167, 69, 1)' },
+            { bg: 'rgba(255, 152, 0, 0.7)', border: 'rgba(255, 152, 0, 1)' },
+            { bg: 'rgba(111, 66, 193, 0.7)', border: 'rgba(111, 66, 193, 1)' },
+            { bg: 'rgba(220, 53, 69, 0.7)', border: 'rgba(220, 53, 69, 1)' },
+            { bg: 'rgba(23, 162, 184, 0.7)', border: 'rgba(23, 162, 184, 1)' },
+            { bg: 'rgba(108, 117, 125, 0.7)', border: 'rgba(108, 117, 125, 1)' },
+            { bg: 'rgba(232, 62, 140, 0.7)', border: 'rgba(232, 62, 140, 1)' },
+        ];
         let currentPage = 1;
         let pageSize = 20;
         let totalPages = 1;
+        let analysisState = { wafers: [], chart: null };
 
         function esc(v) {
             return String(v ?? '')
@@ -234,6 +301,247 @@
 
         function closeFviModal() {
             document.getElementById('fviModal').classList.remove('show');
+        }
+
+        function destroyRawChart() {
+            if (analysisState.chart) {
+                analysisState.chart.destroy();
+                analysisState.chart = null;
+            }
+        }
+
+        function closeAnalysisModal() {
+            destroyRawChart();
+            document.getElementById('analysisModal').classList.remove('show');
+        }
+
+        function heatBg(qty, maxQty) {
+            const q = Number(qty) || 0;
+            if (q <= 0 || maxQty <= 0) return '';
+            const alpha = 0.12 + 0.78 * (q / maxQty);
+            return `background: rgba(0, 123, 255, ${alpha.toFixed(3)});`;
+        }
+
+        function renderHeatmapTable(sites) {
+            const siteKeys = Object.keys(sites || {}).sort((a, b) => Number(a) - Number(b));
+            if (!siteKeys.length) {
+                return '<div class="empty" style="padding:12px;">无 site 明细</div>';
+            }
+            const binSet = new Set();
+            let maxQty = 0;
+            siteKeys.forEach(site => {
+                Object.entries(sites[site] || {}).forEach(([code, qty]) => {
+                    binSet.add(String(code));
+                    maxQty = Math.max(maxQty, Number(qty) || 0);
+                });
+            });
+            const bins = Array.from(binSet).sort((a, b) => Number(a) - Number(b));
+            const head = `<thead><tr><th class="site-col">Site</th>${
+                bins.map(b => `<th>${esc(b)}</th>`).join('')
+            }</tr></thead>`;
+            const body = `<tbody>${siteKeys.map(site => {
+                const row = sites[site] || {};
+                const cells = bins.map(b => {
+                    const raw = row[b] ?? row[Number(b)];
+                    if (raw == null || raw === '') {
+                        return '<td class="heat-empty">-</td>';
+                    }
+                    const qty = Number(raw) || 0;
+                    return `<td style="${heatBg(qty, maxQty)}">${esc(qty)}</td>`;
+                }).join('');
+                return `<tr><td class="site-col">${esc(site)}</td>${cells}</tr>`;
+            }).join('')}</tbody>`;
+            return `<div class="heatmap-wrap"><table class="heatmap">${head}${body}</table></div>`;
+        }
+
+        function renderBysite(list) {
+            if (!list || !list.length) return '<div class="empty" style="padding:12px;">无 bysite 数据</div>';
+            return list.map((item, idx) => {
+                const meta = [
+                    item.wafer_id && `Wafer: ${item.wafer_id}`,
+                    item.product_id && `型号: ${item.product_id}`,
+                    item.step && `Step: ${item.step}`,
+                    item.equip_id && `设备: ${item.equip_id}`,
+                    item.test_program && `程序: ${item.test_program}`,
+                    item.test_die != null && `TestDie: ${item.test_die}`,
+                    item.end_dttm && `时间: ${item.end_dttm}`,
+                ].filter(Boolean).join(' · ');
+                return `<div class="bysite-block">
+                    <h4>记录 ${idx + 1}</h4>
+                    <div class="bysite-meta">${esc(meta) || '-'}</div>
+                    ${renderHeatmapTable(item.bysite || {})}
+                </div>`;
+            }).join('');
+        }
+
+        function buildWaferSeries(data) {
+            const wafers = [];
+            const currentId = data.wafer_id || 'current';
+            wafers.push({
+                id: currentId,
+                label: currentId,
+                map: data.raw_data || {},
+                isCurrent: true,
+            });
+            if (data.is_merged) {
+                const srcMap = data.source_raw_data || {};
+                (data.source_lot_ids || []).forEach(src => {
+                    wafers.push({
+                        id: src,
+                        label: src,
+                        map: srcMap[src] || {},
+                        isCurrent: false,
+                    });
+                });
+            }
+            return wafers;
+        }
+
+        function renderWaferChecks(wafers) {
+            if (wafers.length <= 1) {
+                return wafers.length
+                    ? `<div class="bysite-meta">Wafer: ${esc(wafers[0].label)}</div>`
+                    : '';
+            }
+            return `<div class="wafer-checks">${wafers.map((w, i) => `
+                <label>
+                    <input type="checkbox" class="wafer-check" value="${esc(w.id)}" checked
+                        data-idx="${i}" />
+                    <span>${esc(w.label)}${w.isCurrent ? '（当前）' : ''}</span>
+                </label>
+            `).join('')}</div>`;
+        }
+
+        function getCheckedWaferIds() {
+            const boxes = document.querySelectorAll('.wafer-check');
+            if (!boxes.length) {
+                return analysisState.wafers.map(w => w.id);
+            }
+            return Array.from(boxes).filter(b => b.checked).map(b => b.value);
+        }
+
+        function initRawChart() {
+            destroyRawChart();
+            const canvas = document.getElementById('rawChart');
+            const emptyEl = document.getElementById('rawChartEmpty');
+            if (!canvas) return;
+
+            const checkedIds = new Set(getCheckedWaferIds());
+            const selected = analysisState.wafers.filter(w => checkedIds.has(w.id));
+            const binSet = new Set();
+            selected.forEach(w => {
+                Object.keys(w.map || {}).forEach(c => binSet.add(String(c)));
+            });
+            const labels = Array.from(binSet).sort((a, b) => Number(a) - Number(b));
+
+            if (!selected.length || !labels.length) {
+                canvas.style.display = 'none';
+                if (emptyEl) emptyEl.style.display = '';
+                return;
+            }
+            canvas.style.display = '';
+            if (emptyEl) emptyEl.style.display = 'none';
+
+            const datasets = selected.map((w) => {
+                const idx = analysisState.wafers.findIndex(x => x.id === w.id);
+                const colors = RAW_WAFER_COLORS[(idx >= 0 ? idx : 0) % RAW_WAFER_COLORS.length];
+                return {
+                    label: w.label + (w.isCurrent ? '（当前）' : ''),
+                    data: labels.map(code => Number((w.map || {})[code]) || 0),
+                    backgroundColor: colors.bg,
+                    borderColor: colors.border,
+                    borderWidth: 1,
+                };
+            });
+
+            analysisState.chart = new Chart(canvas, {
+                type: 'bar',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { precision: 0 },
+                            title: { display: true, text: 'Qty' },
+                        },
+                        x: {
+                            title: { display: true, text: 'Bin Code' },
+                            ticks: { maxRotation: 60, autoSkip: true, maxTicksLimit: 40 },
+                        },
+                    },
+                    plugins: {
+                        legend: { display: true, position: 'top' },
+                        tooltip: { mode: 'index', intersect: false },
+                    },
+                },
+            });
+        }
+
+        function bindWaferChecks() {
+            document.querySelectorAll('.wafer-check').forEach(el => {
+                el.addEventListener('change', () => initRawChart());
+            });
+        }
+
+        function renderAnalysis(data) {
+            analysisState.wafers = buildWaferSeries(data);
+            const bysiteHtml = `
+                <div class="section-title">Bysite${data.step ? `（${esc(data.step)}）` : ''}</div>
+                <div class="bysite-meta">${esc(data.bysite_msg || '')}</div>
+                ${renderBysite(data.bysite)}
+            `;
+            const rawHtml = `
+                <div class="section-title">Raw Data${data.operation_id ? `（${esc(data.operation_id)}）` : ''}</div>
+                <div class="bysite-meta">${esc(data.raw_msg || '')}</div>
+                ${renderWaferChecks(analysisState.wafers)}
+                <div class="raw-chart-wrap">
+                    <canvas id="rawChart"></canvas>
+                    <div class="empty" id="rawChartEmpty" style="display:none;padding:24px;">无 raw_data</div>
+                </div>
+            `;
+            return bysiteHtml + rawHtml;
+        }
+
+        async function showAnalysis(waferId, recordType, station) {
+            if (!waferId) {
+                alert('缺少 Wafer ID');
+                return;
+            }
+            destroyRawChart();
+            document.getElementById('analysisSub').textContent =
+                `Wafer: ${waferId}` + (station ? ` · Station: ${station}` : '');
+            document.getElementById('analysisBody').innerHTML =
+                '<div class="empty">查询中...</div>';
+            document.getElementById('analysisModal').classList.add('show');
+
+            const params = new URLSearchParams({ wafer_id: waferId });
+            if (recordType !== '' && recordType != null) params.set('record_type', recordType);
+            if (station) params.set('station', station);
+
+            try {
+                const resp = await fetch(ANALYSIS_API + '?' + params.toString());
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('analysisBody').innerHTML =
+                        `<div class="empty">${esc(json.msg || '查询失败')}</div>`;
+                    return;
+                }
+                const data = json.data || {};
+                document.getElementById('analysisSub').textContent = [
+                    `Wafer: ${data.wafer_id || waferId}`,
+                    data.step && `step=${data.step}`,
+                    data.operation_id && `op=${data.operation_id}`,
+                    data.is_merged ? '合批' : null,
+                ].filter(Boolean).join(' · ');
+                document.getElementById('analysisBody').innerHTML = renderAnalysis(data);
+                bindWaferChecks();
+                initRawChart();
+            } catch (e) {
+                document.getElementById('analysisBody').innerHTML =
+                    `<div class="empty">请求失败: ${esc(e)}</div>`;
+            }
         }
 
         async function showFviDefects(lotId) {
@@ -303,7 +611,7 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="8" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="9" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     document.getElementById('pager').innerHTML = '';
                     return;
                 }
@@ -317,7 +625,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="8" class="empty">暂无在线 Holding Record</td></tr>';
+                        '<tr><td colspan="9" class="empty">暂无在线 Holding Record</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => {
@@ -336,6 +644,12 @@
                         <td class="${reasonCls}" ${reasonAttrs}>${formatReason(r.HOLD_REASON, isFvi)}</td>
                         <td>${esc(r.HOLD_DTTM || '-')}</td>
                         <td><span class="badge">Holding</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-ghost"
+                                data-analyze-wafer="${esc(r.WAFER_ID)}"
+                                data-analyze-type="${esc(r.RECORD_TYPE ?? '')}"
+                                data-analyze-station="${esc(r.STATION || '')}">分析</button>
+                        </td>
                     </tr>`;
                 }).join('');
                 document.querySelectorAll('.reason.clickable').forEach(el => {
@@ -346,6 +660,13 @@
                             showFviDefects(el.dataset.lotId);
                         }
                     });
+                });
+                document.querySelectorAll('[data-analyze-wafer]').forEach(el => {
+                    el.addEventListener('click', () => showAnalysis(
+                        el.dataset.analyzeWafer,
+                        el.dataset.analyzeType,
+                        el.dataset.analyzeStation,
+                    ));
                 });
             } catch (e) {
                 document.getElementById('meta').textContent = '请求失败: ' + e;
@@ -358,6 +679,9 @@
         document.getElementById('record_type').addEventListener('change', () => loadData(true));
         document.getElementById('fviModal').addEventListener('click', (e) => {
             if (e.target.id === 'fviModal') closeFviModal();
+        });
+        document.getElementById('analysisModal').addEventListener('click', (e) => {
+            if (e.target.id === 'analysisModal') closeAnalysisModal();
         });
     </script>
 </body>
