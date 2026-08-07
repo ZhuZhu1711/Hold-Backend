@@ -143,6 +143,41 @@ def _join_unique(values, sep: str = '@', max_len: Optional[int] = None) -> Optio
     return joined
 
 
+def _norm_grade_num(value) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _merge_grade_num(items: List['HoldInfo']) -> Optional[str]:
+    """
+    合并多条 hold_info 的 GRADE_NUM：
+      1) 全部相同（含全 NULL）→ 任取其一
+      2) 除 NULL 外仅一个非空值 → 用该值
+      3) 除 NULL 外有多个非空值 → 取 HOLD_DTTM 最新一行的值
+    """
+    if not items:
+        return None
+
+    norms = [_norm_grade_num(i.grade_num) for i in items]
+    unique_all = set(norms)
+    if len(unique_all) <= 1:
+        return norms[0] if norms else None
+
+    non_null = {v for v in unique_all if v is not None}
+    if len(non_null) == 1:
+        return next(iter(non_null))
+    if not non_null:
+        return None
+
+    latest = max(
+        items,
+        key=lambda x: (x.hold_dttm or datetime.min, x.id or 0),
+    )
+    return _norm_grade_num(latest.grade_num)
+
+
 @dataclass
 class HoldInfo:
     """单条 FT_HOLD_INFO 的内存表示。"""
@@ -245,6 +280,7 @@ class RoughHoldRecord:
             (i.second_code for i in ordered if i.second_code), None
         )
         route_id = next((i.route_id for i in ordered if i.route_id), None)
+        grade_num = _merge_grade_num(ordered)
         return {
             'PRODUCT_ID': first.product_id,
             'STATION': first.station,
@@ -256,6 +292,7 @@ class RoughHoldRecord:
             'SOURCE': first.source if first.source is not None else 0,
             'SECOND_CODE': second_code,
             'ROUTE_ID': route_id,
+            'GRADE_NUM': grade_num,
             'RECORD_TYPE': self.record_type,
             'STATUS': status,
             # FT_HOLD_RECORD.HOLD_DTTM 为 DATE，取最早一条的时间

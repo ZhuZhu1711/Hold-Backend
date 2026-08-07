@@ -2,7 +2,7 @@
 晶圆测试数据查询控制器
 """
 from app import db
-from sqlalchemy import desc
+from sqlalchemy import desc, text
 from app.models.rawdata import TestWafer, TestBincode
 import json
 
@@ -56,6 +56,66 @@ def get_wafer_yield_and_bin(wafer_id, operation_id):
         'yield': yield_result,
         'bin_ratio': bin_ratio
     }
+
+
+def get_latest_defect_bincodes(wafer_id, operation_id):
+    """
+    查询指定 wafer 在某工序下最新一次测试的缺陷 BIN_CODE / BIN_CODE_QTY。
+
+    Args:
+        wafer_id: 晶圆 ID
+        operation_id: 工序 ID（如 FATE-FA）
+
+    Returns:
+        (True, msg, data) 或 (False, msg, None)
+        data: {bin_code: bin_code_qty, ...}
+    """
+    if wafer_id is None or not str(wafer_id).strip():
+        return False, '请指定 wafer_id', None
+    if operation_id is None or not str(operation_id).strip():
+        return False, '请指定 operation_id', None
+
+    wafer_id = str(wafer_id).strip()
+    operation_id = str(operation_id).strip()
+
+    sql = """
+        SELECT
+            atb.BIN_CODE,
+            atb.BIN_CODE_QTY
+        FROM TEST_BINCODE atb
+        INNER JOIN (
+            SELECT atw.id, atw.product_id
+            FROM TEST_WAFER atw
+            WHERE atw.WAFER_ID = :wafer_id
+              AND atw.operation_id = :operation_id
+            ORDER BY atw.id DESC
+            FETCH FIRST 1 ROW ONLY
+        ) latest_wafer ON atb.TEST_WAFER_SEQ = latest_wafer.id
+        INNER JOIN PRODUCT_INFO pi2 ON latest_wafer.product_id = pi2.product_id
+        GROUP BY
+            atb.BIN_CODE,
+            atb.BIN_CODE_QTY
+        ORDER BY atb.BIN_CODE_QTY DESC NULLS LAST, atb.bin_code
+    """
+
+    try:
+        rows = db.session.execute(
+            text(sql),
+            {'wafer_id': wafer_id, 'operation_id': operation_id},
+        ).fetchall()
+    except Exception as e:
+        db.session.rollback()
+        return False, f'查询失败: {e}', None
+
+    # 按 qty 从高到低插入，保留顺序（Py3.7+ dict）
+    data = {}
+    for bin_code, bin_code_qty in rows:
+        if bin_code is None:
+            continue
+        data[str(int(bin_code))] = int(bin_code_qty) if bin_code_qty is not None else 0
+
+    return True, '获取成功', data
+
 
 
 def _calculate_yield(wafer):

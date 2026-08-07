@@ -304,12 +304,12 @@ def insert_hold_record_and_link(
             ID,
             PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
             HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID,
-            RECORD_TYPE, STATUS, HOLD_DTTM
+            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM
         ) VALUES (
             :new_id,
             :product_id, :station, :equip_id, :lot_id, :wafer_id,
             :hold_code, :hold_reason, :source, :second_code, :route_id,
-            :record_type, :status, :hold_dttm
+            :grade_num, :record_type, :status, :hold_dttm
         )
     """
 
@@ -378,6 +378,7 @@ def insert_hold_record_and_link(
                     'source': record['SOURCE'],
                     'second_code': record.get('SECOND_CODE'),
                     'route_id': record.get('ROUTE_ID'),
+                    'grade_num': record.get('GRADE_NUM'),
                     'record_type': record['RECORD_TYPE'],
                     'status': record['STATUS'],
                     'hold_dttm': record.get('HOLD_DTTM'),
@@ -518,6 +519,63 @@ def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
     except Exception as e:
         logger.error(
             f"查询 FVI 缺陷明细失败 lot_id={lot_id}: {e}",
+            exc_info=True,
+        )
+        return None
+    finally:
+        connection.close()
+
+
+def is_merged_wafer_id(wafer_id) -> bool:
+    """
+    合批后的 wafer id：必含 '-'，且 '-' 后数字位数 > 2
+    （普通片号多为两位，如 LOT-01；合批目标 id 后缀更长）。
+    """
+    text = str(wafer_id).strip() if wafer_id is not None else ''
+    if '-' not in text:
+        return False
+    suffix = text.rsplit('-', 1)[-1].strip()
+    return bool(suffix) and suffix.isdigit() and len(suffix) > 2
+
+
+def query_split_merge_history(wafer_id: str):
+    """
+    查询 wafer 合批记录（MES DB link）。
+    SELECT source_lot_id
+      FROM mesprod.SPLIT_MERGE_HISTORY@MES16019 s
+     WHERE s.TARGET_LOT_ID = :wafer_id
+     ORDER BY source_lot_id ASC
+
+    返回 list[str]（source_lot_id）；失败返回 None。
+    """
+    wafer_id = (wafer_id or '').strip()
+    if not wafer_id:
+        logger.warning("query_split_merge_history: wafer_id 为空")
+        return None
+
+    sql = """
+        SELECT source_lot_id
+        FROM mesprod.SPLIT_MERGE_HISTORY@MES16019 s
+        WHERE s.TARGET_LOT_ID = :wafer_id
+        ORDER BY source_lot_id ASC
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, {'wafer_id': wafer_id})
+            rows = cursor.fetchall()
+            result = []
+            for (source_lot_id,) in rows:
+                if source_lot_id is None:
+                    continue
+                text = str(source_lot_id).strip()
+                if text:
+                    result.append(text)
+            return result
+    except Exception as e:
+        logger.error(
+            f"查询合批记录失败 wafer_id={wafer_id}: {e}",
             exc_info=True,
         )
         return None
