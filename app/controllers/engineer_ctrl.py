@@ -6,7 +6,13 @@ from sqlalchemy import text
 from app import db
 from app.models.product import ProductInfo
 from app.models.defect_code import DefectCode
+from app.models.eng_notes import EngNote
 from app.controllers import hold_report_ctrl
+from app.utils.database_util import query_mes_engineering_notes
+
+NOTE_TYPE_MES = 'MES'
+NOTE_TYPE_MANUL = 'MANUL'
+NOTE_MAX_LEN = 500
 
 
 def get_owned_products(eng_user_id, search=''):
@@ -312,3 +318,224 @@ def get_owned_fvi_defect_details(eng_user_id, lot_id, line_type='FT'):
         return False, f'权限校验失败: {e}', None
 
     return hold_report_ctrl.get_fvi_defect_details(lot_id, line_type=line_type)
+
+
+def _normalize_note_text(note):
+    """strip + 截断至 NOTE_MAX_LEN；空串返回 ''。"""
+    if note is None:
+        return ''
+    text_val = str(note).strip()
+    if not text_val:
+        return ''
+    if len(text_val) > NOTE_MAX_LEN:
+        return text_val[:NOTE_MAX_LEN]
+    return text_val
+
+
+def _owned_note_by_id(eng_user_id, note_id):
+    """取所属型号下的工程备注；不存在或不属于当前工程师返回 None。"""
+    try:
+        note_id = int(note_id)
+        eng_user_id = int(eng_user_id)
+    except (TypeError, ValueError):
+        return None
+    return (
+        EngNote.query
+        .join(ProductInfo, EngNote.PRODUCT_ID == ProductInfo.ID)
+        .filter(
+            EngNote.ID == note_id,
+            ProductInfo.PRO_ENG_ID == eng_user_id,
+        )
+        .first()
+    )
+
+
+def get_owned_eng_notes(eng_user_id, product_code):
+    """查询所属型号可用工程备注列表。"""
+    product = _owned_product_by_code(eng_user_id, product_code)
+    if not product:
+        return False, '型号不存在或不属于当前工程师', []
+
+    try:
+        notes = (
+            EngNote.query
+            .filter(
+                EngNote.PRODUCT_ID == product.ID,
+                EngNote.IS_AVAILABLE == 1,
+            )
+            .order_by(EngNote.TYPE.asc(), EngNote.ID.asc())
+            .all()
+        )
+        data = []
+        for n in notes:
+            item = n.to_dict()
+            item['product_code'] = product.PRODUCT_ID
+            data.append(item)
+        return True, '获取成功', data
+    except Exception as e:
+        db.session.rollback()
+        return False, f'查询失败: {e}', []
+
+
+def create_owned_eng_note(eng_user_id, data):
+    """
+    手动新增工程备注。
+    data: product_code 或 product_id(PK), note
+    TYPE 固定 MANUL。
+    """
+    data = data or {}
+    product = None
+    if data.get('product_code'):
+        product = _owned_product_by_code(eng_user_id, data.get('product_code'))
+    elif data.get('product_id') is not None:
+        # 兼容前端传型号字符串或 PK
+        raw = data.get('product_id')
+        product = _owned_product_by_code(eng_user_id, raw)
+        if not product:
+            product = _owned_product_by_pk(eng_user_id, raw)
+
+    if not product:
+        return False, '型号不存在或不属于当前工程师', None
+
+    note_text = _normalize_note_text(data.get('note'))
+    if not note_text:
+        return False, 'note 必填', None
+
+    try:
+        new_note = EngNote(
+            PRODUCT_ID=product.ID,
+            NOTE=note_text,
+            IS_AVAILABLE=1,
+            TYPE=NOTE_TYPE_MANUL,
+        )
+        db.session.add(new_note)
+        db.session.commit()
+        item = new_note.to_dict()
+        item['product_code'] = product.PRODUCT_ID
+        return True, '新增成功', item
+    except Exception as e:
+        db.session.rollback()
+        return False, f'新增失败: {e}', None
+
+
+def update_owned_eng_note(eng_user_id, note_id, data):
+    """仅允许修改 TYPE=MANUL 的备注文案。"""
+    data = data or {}
+    note = _owned_note_by_id(eng_user_id, note_id)
+    if not note:
+        return False, '备注不存在或不属于当前工程师', None
+
+    if (note.TYPE or '') != NOTE_TYPE_MANUL:
+        return False, '仅可修改手动添加的备注', None
+
+    if int(note.IS_AVAILABLE or 0) != 1:
+        return False, '备注已不可用', None
+
+    note_text = _normalize_note_text(data.get('note'))
+    if not note_text:
+        return False, 'note 不能为空', None
+
+    try:
+        note.NOTE = note_text
+        db.session.commit()
+        item = note.to_dict()
+        if note.product_info:
+            item['product_code'] = note.product_info.PRODUCT_ID
+        return True, '更新成功', item
+    except Exception as e:
+        db.session.rollback()
+        return False, f'更新失败: {e}', None
+
+
+def delete_owned_eng_note(eng_user_id, note_id):
+    """软删除：IS_AVAILABLE=0（MES / MANUL 均可）。"""
+    note = _owned_note_by_id(eng_user_id, note_id)
+    if not note:
+        return False, '备注不存在或不属于当前工程师'
+
+    if int(note.IS_AVAILABLE or 0) != 1:
+        return True, '备注已不可用'
+
+    try:
+        note.IS_AVAILABLE = 0
+        db.session.commit()
+        return True, '删除成功'
+    except Exception as e:
+        db.session.rollback()
+        return False, f'删除失败: {e}'
+
+
+def sync_owned_eng_notes(eng_user_id, product_code):
+    """
+    按型号从 MES 同步工程备注到 FT_ENG_NOTES。
+    - MES 有且本地无：INSERT TYPE=MES
+    - MES 有且本地已软删：恢复 IS_AVAILABLE=1
+    - 本地可用 MES 不在结果中：IS_AVAILABLE=0
+    不触碰 MANUL 行。
+    """
+    product = _owned_product_by_code(eng_user_id, product_code)
+    if not product:
+        return False, '型号不存在或不属于当前工程师', None
+
+    mes_notes = query_mes_engineering_notes(product.PRODUCT_ID)
+    if mes_notes is None:
+        return False, 'MES 工程备注查询失败', None
+
+    mes_set = set()
+    for raw in mes_notes:
+        text_val = _normalize_note_text(raw)
+        if text_val:
+            mes_set.add(text_val)
+
+    try:
+        local_mes = (
+            EngNote.query
+            .filter(
+                EngNote.PRODUCT_ID == product.ID,
+                EngNote.TYPE == NOTE_TYPE_MES,
+            )
+            .all()
+        )
+        by_note = {}
+        for row in local_mes:
+            key = (row.NOTE or '').strip()
+            if key and key not in by_note:
+                by_note[key] = row
+
+        added = 0
+        reactivated = 0
+        expired = 0
+
+        for note_text in mes_set:
+            existing = by_note.get(note_text)
+            if existing is None:
+                db.session.add(EngNote(
+                    PRODUCT_ID=product.ID,
+                    NOTE=note_text,
+                    IS_AVAILABLE=1,
+                    TYPE=NOTE_TYPE_MES,
+                ))
+                added += 1
+            elif int(existing.IS_AVAILABLE or 0) != 1:
+                existing.IS_AVAILABLE = 1
+                reactivated += 1
+
+        for key, row in by_note.items():
+            if key not in mes_set and int(row.IS_AVAILABLE or 0) == 1:
+                row.IS_AVAILABLE = 0
+                expired += 1
+
+        db.session.commit()
+        summary = {
+            'product_code': product.PRODUCT_ID,
+            'mes_count': len(mes_set),
+            'added': added,
+            'reactivated': reactivated,
+            'expired': expired,
+        }
+        return True, (
+            f'同步完成：新增 {added}，恢复 {reactivated}，过期 {expired}'
+        ), summary
+    except Exception as e:
+        db.session.rollback()
+        return False, f'同步失败: {e}', None

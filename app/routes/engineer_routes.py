@@ -60,6 +60,15 @@ def circulations_page():
     return render_template('eng/circulations.html', **_page_ctx())
 
 
+@engineer_bp.route('/notes')
+@engineer_required
+def notes_page():
+    return render_template(
+        'eng/notes.html',
+        **_page_ctx(product_id=request.args.get('product_id', '')),
+    )
+
+
 # ==========================================
 # API：所属型号
 # ==========================================
@@ -224,3 +233,75 @@ def api_fvi_defect_details():
         return jsonify({'code': 200, 'msg': msg, 'data': data})
     status = 403 if '所属' in msg else (400 if '请指定' in msg or '无效' in msg else 500)
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+# ==========================================
+# API：工程备注
+# ==========================================
+
+@engineer_bp.route('/api/notes', methods=['GET'])
+@engineer_required
+def api_list_notes():
+    product_code = request.args.get('product_id', '').strip()
+    if not product_code:
+        return jsonify({'code': 400, 'msg': '缺少参数 product_id', 'data': []}), 400
+    success, msg, data = engineer_ctrl.get_owned_eng_notes(_eng_id(), product_code)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data, 'total': len(data)})
+    status = 403 if '不属于' in msg else (404 if '不存在' in msg else 500)
+    return jsonify({'code': status, 'msg': msg, 'data': []}), status
+
+
+@engineer_bp.route('/api/notes', methods=['POST'])
+@engineer_required
+def api_create_note():
+    data = request.get_json(silent=True) or {}
+    success, msg, item = engineer_ctrl.create_owned_eng_note(_eng_id(), data)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': item})
+    status = 403 if '不属于' in msg else 400
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@engineer_bp.route('/api/notes/sync', methods=['POST'])
+@engineer_required
+def api_sync_notes():
+    data = request.get_json(silent=True) or {}
+    product_code = (
+        (data.get('product_id') or data.get('product_code') or '')
+        or request.args.get('product_id', '')
+    )
+    product_code = str(product_code).strip()
+    if not product_code:
+        return jsonify({'code': 400, 'msg': '缺少参数 product_id', 'data': None}), 400
+
+    success, msg, summary = engineer_ctrl.sync_owned_eng_notes(_eng_id(), product_code)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': summary})
+    status = 403 if '不属于' in msg else (
+        404 if '不存在' in msg else (502 if 'MES' in msg else 500)
+    )
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@engineer_bp.route('/api/notes/<int:note_id>', methods=['PUT'])
+@engineer_required
+def api_update_note(note_id):
+    data = request.get_json(silent=True) or {}
+    success, msg, item = engineer_ctrl.update_owned_eng_note(_eng_id(), note_id, data)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': item})
+    status = 403 if ('不属于' in msg or '仅可修改' in msg) else (
+        404 if '不存在' in msg else 400
+    )
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@engineer_bp.route('/api/notes/<int:note_id>', methods=['DELETE'])
+@engineer_required
+def api_delete_note(note_id):
+    success, msg = engineer_ctrl.delete_owned_eng_note(_eng_id(), note_id)
+    if success:
+        return jsonify({'code': 200, 'msg': msg})
+    status = 403 if '不属于' in msg else (404 if '不存在' in msg else 400)
+    return jsonify({'code': status, 'msg': msg}), status

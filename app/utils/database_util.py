@@ -581,3 +581,49 @@ def query_split_merge_history(wafer_id: str):
         return None
     finally:
         connection.close()
+
+
+def query_mes_engineering_notes(product_model: str):
+    """
+    按型号查询 MES 工程备注（DB link）。
+    SELECT e.ENGINEERING_NOTES
+      FROM MESPROD.ENGINEERING_NOTES_CONFIG@MES16019 e
+     WHERE e.PRODUCT_MODEL = :product_model
+
+    返回 list[str]（去空、strip）；失败返回 None。
+    """
+    product_model = (product_model or '').strip()
+    if not product_model:
+        logger.warning("query_mes_engineering_notes: product_model 为空")
+        return None
+
+    sql = """
+        SELECT e.ENGINEERING_NOTES
+        FROM MESPROD.ENGINEERING_NOTES_CONFIG@MES16019 e
+        WHERE e.PRODUCT_MODEL = :product_model
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, {'product_model': product_model})
+            rows = cursor.fetchall()
+            result = []
+            seen = set()
+            for (note,) in rows:
+                if note is None:
+                    continue
+                text = str(note).strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                result.append(text)
+            return result
+    except Exception as e:
+        logger.error(
+            f"查询 MES 工程备注失败 product_model={product_model}: {e}",
+            exc_info=True,
+        )
+        return None
+    finally:
+        connection.close()
