@@ -504,7 +504,7 @@
             return bysiteHtml + rawHtml;
         }
 
-        async function showAnalysis(waferId, recordType, station) {
+        async function showAnalysis(waferId, recordType, station, lotId) {
             if (!waferId) {
                 alert('缺少 Wafer ID');
                 return;
@@ -517,6 +517,7 @@
             document.getElementById('analysisModal').classList.add('show');
 
             const params = new URLSearchParams({ wafer_id: waferId });
+            if (lotId) params.set('lot_id', lotId);
             if (recordType !== '' && recordType != null) params.set('record_type', recordType);
             if (station) params.set('station', station);
 
@@ -530,7 +531,8 @@
                 }
                 const data = json.data || {};
                 document.getElementById('analysisSub').textContent = [
-                    `Wafer: ${data.wafer_id || waferId}`,
+                    `Wafer: ${data.wafer_id_display || data.wafer_id || waferId}`,
+                    data.lot_id && `Lot: ${data.lot_id}`,
                     data.step && `step=${data.step}`,
                     data.operation_id && `op=${data.operation_id}`,
                     data.is_merged ? '合批' : null,
@@ -647,6 +649,7 @@
                         <td>
                             <button class="btn btn-sm btn-ghost"
                                 data-analyze-wafer="${esc(r.WAFER_ID)}"
+                                data-analyze-lot="${esc(r.LOT_ID || '')}"
                                 data-analyze-type="${esc(r.RECORD_TYPE ?? '')}"
                                 data-analyze-station="${esc(r.STATION || '')}">分析</button>
                         </td>
@@ -666,6 +669,7 @@
                         el.dataset.analyzeWafer,
                         el.dataset.analyzeType,
                         el.dataset.analyzeStation,
+                        el.dataset.analyzeLot,
                     ));
                 });
             } catch (e) {

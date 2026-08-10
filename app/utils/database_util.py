@@ -466,6 +466,105 @@ def normalize_lot_id(lot_id) -> str:
     return text
 
 
+def wafer_suffix(wafer_id) -> str:
+    """取最后一个 '-' 之后的文本；无 '-' 则原样返回。"""
+    text = str(wafer_id).strip() if wafer_id is not None else ''
+    if not text:
+        return ''
+    if '-' in text:
+        return text.rsplit('-', 1)[-1].strip()
+    return text
+
+
+def is_fragmented_merged_lot(lot_id, wafer_id) -> bool:
+    """
+    实物已合批、info 仍分片插入：
+      LOT_ID != WAFER_ID，且 LOT_ID 含 '-'，且 '-' 后为数字且位数 > 2。
+    例：LOT_ID=C123456-033, WAFER_ID=C123456-03。
+    """
+    lot = str(lot_id).strip() if lot_id is not None else ''
+    wafer = str(wafer_id).strip() if wafer_id is not None else ''
+    if not lot or not wafer or lot == wafer:
+        return False
+    if '-' not in lot:
+        return False
+    suffix = lot.rsplit('-', 1)[-1].strip()
+    return bool(suffix) and suffix.isdigit() and len(suffix) > 2
+
+
+def format_wafer_id_display(wafer_id) -> str:
+    """
+    Hold Record 展示用 Wafer：
+      - 已是 #03 / #03 #04 #05 展示串 → 原样
+      - 含 '-' → '#' + 后缀（C123456-03 → #03）
+      - 否则原样
+    """
+    text = str(wafer_id).strip() if wafer_id is not None else ''
+    if not text:
+        return ''
+    if text.startswith('#'):
+        return text
+    if '-' in text:
+        suffix = text.rsplit('-', 1)[-1].strip()
+        return f'#{suffix}' if suffix else text
+    return text
+
+
+def build_merged_wafer_display(wafer_ids, max_len: int = 100) -> str:
+    """
+    多片 WAFER_ID → 展示串，如 #03 #04 #05。
+    后缀去重；能转成数字的按数值排序，否则按文本。
+    """
+    seen = set()
+    suffixes = []
+    for raw in wafer_ids or []:
+        suffix = wafer_suffix(raw)
+        if not suffix or suffix in seen:
+            continue
+        seen.add(suffix)
+        suffixes.append(suffix)
+
+    def _sort_key(s: str):
+        if s.isdigit():
+            return (0, int(s))
+        return (1, s)
+
+    suffixes.sort(key=_sort_key)
+    joined = ' '.join(f'#{s}' for s in suffixes)
+    if max_len is not None and len(joined) > max_len:
+        return joined[:max_len]
+    return joined
+
+
+def expand_display_wafer_ids(wafer_id, lot_id) -> list:
+    """
+    将展示串 / 完整片号还原为可查 MES 的真实 wafer id 列表。
+      - #03 #04 #05 + lot=C123456 → [C123456-03, C123456-04, C123456-05]
+      - #03 + lot → [C123456-03]
+      - 普通 C123456-03 → [C123456-03]
+    """
+    wafer = str(wafer_id).strip() if wafer_id is not None else ''
+    lot = normalize_lot_id(lot_id)
+    if not wafer:
+        return []
+
+    if wafer.startswith('#'):
+        if not lot:
+            return []
+        parts = []
+        for token in wafer.split():
+            token = token.strip()
+            if not token:
+                continue
+            suffix = token[1:] if token.startswith('#') else token
+            if not suffix:
+                continue
+            parts.append(f'{lot}-{suffix}')
+        return parts
+
+    return [wafer]
+
+
 def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
     """
     查询 FVI 缺陷明细（MES DB link）。

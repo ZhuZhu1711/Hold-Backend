@@ -16,6 +16,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import db
 from app.config import Config
 from app.utils.database_util import (
+    expand_display_wafer_ids,
+    format_wafer_id_display,
     is_merged_wafer_id,
     normalize_lot_id,
     query_fvi_defect_details,
@@ -64,8 +66,8 @@ def _row_to_dict(row):
             data[out_key] = value.strftime('%Y-%m-%d')
         else:
             data[out_key] = value
-    if 'LOT_ID' in data:
-        data['LOT_ID'] = normalize_lot_id(data['LOT_ID'])
+    if 'WAFER_ID' in data:
+        data['WAFER_ID'] = format_wafer_id_display(data['WAFER_ID'])
     return data
 
 
@@ -554,15 +556,29 @@ def _station_to_bysite_step_list(station=None, record_type=None, step_group=None
     return ['FA']
 
 
-def get_hold_analysis(wafer_id, record_type=None, station=None):
+def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     """
     Hold Record 数据分析：bysite + raw_data（qty 降序）。
-    合批 wafer 额外附带各源 wafer 的 raw_data。
+    合批 wafer 额外附带各源 wafer raw_data。
+
+    wafer_id 可为完整片号，或展示串（#03 / #03 #04 #05）；
+    展示串需配合 lot_id 还原真实 MES wafer id。
     """
     if wafer_id is None or not str(wafer_id).strip():
         return False, '请指定 wafer_id', None
 
     wafer_id = str(wafer_id).strip()
+    lot_id = normalize_lot_id(lot_id) if lot_id is not None else ''
+    display_wafers = expand_display_wafer_ids(wafer_id, lot_id)
+
+    # 展示串无法还原时直接报错（缺 lot_id）
+    if wafer_id.startswith('#') and not display_wafers:
+        return False, '展示串 Wafer 需同时指定 lot_id', None
+
+    resolved_ids = display_wafers or [wafer_id]
+    primary_wafer = resolved_ids[0]
+    fragmented_multi = len(resolved_ids) > 1
+
     step, operation_id = _resolve_analysis_params(record_type, station)
     step_list = _station_to_bysite_step_list(
         station=station,
@@ -570,11 +586,11 @@ def get_hold_analysis(wafer_id, record_type=None, station=None):
         step_group=step,
     )
 
-    # 1) bysite
+    # 1) bysite（主片；多片时仍以第一片为主展示，其余进 source）
     bysite = None
     bysite_msg = ''
     try:
-        bysite_resp = testlog_ctrl.get_testlog_bysite_str(wafer_id, step_list)
+        bysite_resp = testlog_ctrl.get_testlog_bysite_str(primary_wafer, step_list)
         if isinstance(bysite_resp, Exception):
             bysite_msg = f'bysite 查询异常: {bysite_resp}'
             bysite = None
@@ -588,22 +604,31 @@ def get_hold_analysis(wafer_id, record_type=None, station=None):
         bysite_msg = f'bysite 查询失败: {e}'
         bysite = None
 
-    # 2) raw_data（当前 wafer）
+    # 2) raw_data（主片）
     raw_data = {}
     raw_msg = ''
     if operation_id:
-        ok, raw_msg, raw_data = get_latest_defect_bincodes(wafer_id, operation_id)
+        ok, raw_msg, raw_data = get_latest_defect_bincodes(primary_wafer, operation_id)
         if not ok:
             raw_data = {}
     else:
         raw_msg = '无法确定 operation_id，跳过 raw_data'
 
-    # 3) 合批源 wafer raw_data
-    is_merged = is_merged_wafer_id(wafer_id)
+    # 3) 合批 / 分片多片源 wafer raw_data
     source_lot_ids = []
     source_raw_data = {}
-    if is_merged:
-        sources = query_split_merge_history(wafer_id)
+    is_merged = False
+
+    if fragmented_multi:
+        is_merged = True
+        source_lot_ids = list(resolved_ids[1:])
+        if operation_id:
+            for src in source_lot_ids:
+                ok, _, src_raw = get_latest_defect_bincodes(src, operation_id)
+                source_raw_data[src] = src_raw if ok and src_raw else {}
+    elif is_merged_wafer_id(primary_wafer):
+        is_merged = True
+        sources = query_split_merge_history(primary_wafer)
         if sources is None:
             sources = []
         source_lot_ids = sources
@@ -613,7 +638,11 @@ def get_hold_analysis(wafer_id, record_type=None, station=None):
                 source_raw_data[src] = src_raw if ok and src_raw else {}
 
     return True, '获取成功', {
-        'wafer_id': wafer_id,
+        'wafer_id': primary_wafer,
+        'wafer_id_display': format_wafer_id_display(wafer_id) if wafer_id.startswith('#')
+        else format_wafer_id_display(primary_wafer),
+        'lot_id': lot_id or None,
+        'resolved_wafer_ids': resolved_ids,
         'record_type': record_type,
         'station': (station or '').strip() or None,
         'step': step,

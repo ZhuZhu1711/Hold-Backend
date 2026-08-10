@@ -20,9 +20,10 @@ from typing import List, Optional, Tuple
 
 from app.config import Config
 from app.utils.database_util import (
+    build_merged_wafer_display,
     insert_hold_record_and_link,
+    is_fragmented_merged_lot,
     mark_hold_infos_dirty,
-    normalize_lot_id,
     query_online_hold_info,
 )
 
@@ -230,7 +231,9 @@ class HoldInfo:
 @dataclass
 class RoughHoldRecord:
     """
-    按 (WAFER_ID, RECORD_TYPE) 分组、并对 (STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
+    普通：按 (WAFER_ID, RECORD_TYPE) 分组；
+    分片合批（LOT_ID!=WAFER_ID 且 LOT 后缀数字>2位）：按 (LOT_ID, RECORD_TYPE) 分组。
+    并对 (WAFER_ID, STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
     items 为去重后用于拼装 FT_HOLD_RECORD 的条目；
     all_source_ids 含去重前全部源 ID，写入成功后一并回写 HOLD_RECORD_ID。
     """
@@ -238,6 +241,8 @@ class RoughHoldRecord:
     record_type: int
     items: List[HoldInfo] = field(default_factory=list)
     all_source_ids: List[int] = field(default_factory=list)
+    # True：本组为分片合批，WAFER_ID 写入 #03 #04 #05
+    fragmented_merged: bool = False
 
     @property
     def source_ids(self) -> List[int]:
@@ -248,8 +253,9 @@ class RoughHoldRecord:
     def summary(self) -> str:
         codes = sorted({i.hold_code for i in self.items})
         stations = sorted({i.station for i in self.items})
+        mode = 'fragmented_lot' if self.fragmented_merged else 'wafer'
         return (
-            f"wafer={self.wafer_id}, record_type={self.record_type}, "
+            f"mode={mode}, wafer={self.wafer_id}, record_type={self.record_type}, "
             f"items={len(self.items)}, source_ids={len(self.source_ids)}, "
             f"codes={codes}, stations={stations}"
         )
@@ -262,6 +268,7 @@ class RoughHoldRecord:
         将去重后的 items 归纳为一条 FT_HOLD_RECORD 行数据。
         基础字段取时间最早一条；HOLD_CODE / HOLD_REASON 按时间序去重后用 @ 拼接。
         RECORD_TYPE 取本 rough record 按处置单划分判定的值。
+        分片合批组：WAFER_ID 存多片展示串（如 #03 #04 #05）。
         """
         if not self.items:
             return None
@@ -281,12 +288,18 @@ class RoughHoldRecord:
         )
         route_id = next((i.route_id for i in ordered if i.route_id), None)
         grade_num = _merge_grade_num(ordered)
+        if self.fragmented_merged:
+            wafer_out = build_merged_wafer_display(
+                (i.wafer_id for i in ordered), max_len=100
+            ) or self.wafer_id
+        else:
+            wafer_out = self.wafer_id
         return {
             'PRODUCT_ID': first.product_id,
             'STATION': first.station,
             'EQUIP_ID': first.equip_id,
-            'LOT_ID': normalize_lot_id(first.lot_id),
-            'WAFER_ID': self.wafer_id,
+            'LOT_ID': first.lot_id,
+            'WAFER_ID': wafer_out,
             'HOLD_CODE': hold_code,
             'HOLD_REASON': hold_reason,
             'SOURCE': first.source if first.source is not None else 0,
@@ -340,8 +353,11 @@ def build_rough_hold_records(
     window: timedelta = timedelta(hours=1),
 ) -> Tuple[List[RoughHoldRecord], List[int]]:
     """
-    查询结果 → 按处置单划分判定 RECORD_TYPE → 按 (wafer, record_type) 分组
-    → 去重 → 粗糙 hold record 列表。
+    查询结果 → 按处置单划分判定 RECORD_TYPE → 分组 → 去重 → 粗糙 hold record。
+
+    分组键：
+      - 分片合批（LOT!=WAFER 且 LOT 后缀数字>2位）：('lot', exact_lot_id, record_type)
+      - 其它：('wafer', wafer_id, record_type)
 
     返回 (records, skipped_ids)：
       records     可写入的 RoughHoldRecord
@@ -369,25 +385,39 @@ def build_rough_hold_records(
                 skipped_ids.append(info.id)
             continue
 
-        by_key[(info.wafer_id, rtype)].append(info)
+        if is_fragmented_merged_lot(info.lot_id, info.wafer_id):
+            group_key = ('lot', info.lot_id, rtype)
+        else:
+            group_key = ('wafer', info.wafer_id, rtype)
+        by_key[group_key].append(info)
 
     records: List[RoughHoldRecord] = []
-    for wafer_id, rtype in sorted(by_key.keys(), key=lambda k: (k[0], k[1])):
-        raw_items = by_key[(wafer_id, rtype)]
+    for group_key in sorted(by_key.keys(), key=lambda k: (k[0], k[1], k[2])):
+        mode, key_id, rtype = group_key
+        raw_items = by_key[group_key]
         all_source_ids = [i.id for i in raw_items if i.id is not None]
         deduped = dedupe_hold_infos(raw_items, window=window)
+        fragmented = mode == 'lot'
         if len(deduped) < len(raw_items):
             logger.info(
-                f"wafer={wafer_id} record_type={rtype}: "
+                f"mode={mode} key={key_id} record_type={rtype}: "
                 f"{len(raw_items)} → {len(deduped)} "
                 f"（去掉 {len(raw_items) - len(deduped)} 条重复）"
             )
+        if fragmented:
+            # 占位：真正写入值由 to_record_dict 用多片后缀生成
+            wafer_label = build_merged_wafer_display(
+                (i.wafer_id for i in deduped), max_len=100
+            ) or key_id
+        else:
+            wafer_label = key_id
         records.append(
             RoughHoldRecord(
-                wafer_id=wafer_id,
+                wafer_id=wafer_label,
                 record_type=rtype,
                 items=deduped,
                 all_source_ids=all_source_ids,
+                fragmented_merged=fragmented,
             )
         )
     return records, skipped_ids
@@ -396,7 +426,7 @@ def build_rough_hold_records(
 class HoldMergeScheduler(threading.Thread):
     """
     定时将 FT_HOLD_INFO 中满足处置单划分的在线 hold，
-    按 (WAFER_ID, RECORD_TYPE) 合并写入 FT_HOLD_RECORD。
+    按 (WAFER_ID, RECORD_TYPE) 或分片合批的 (LOT_ID, RECORD_TYPE) 合并写入 FT_HOLD_RECORD。
     """
 
     def __init__(self):
