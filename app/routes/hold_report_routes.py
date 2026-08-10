@@ -128,19 +128,21 @@ def api_split_merge_history():
 def api_hold_analysis():
     """
     Hold Record 数据分析（bysite + raw_data；合批附源 wafer raw_data）。
-    Query: wafer_id (必填), record_type, station
+    Query: wafer_id (必填), lot_id（展示串 #03 时必填）, record_type, station
     """
     wafer_id = request.args.get('wafer_id', '').strip()
+    lot_id = request.args.get('lot_id', '').strip()
     record_type = request.args.get('record_type', '').strip()
     station = request.args.get('station', '').strip()
     success, msg, data = hold_report_ctrl.get_hold_analysis(
         wafer_id=wafer_id,
         record_type=record_type if record_type != '' else None,
         station=station or None,
+        lot_id=lot_id or None,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
-    status = 400 if ('请指定' in msg or '无效' in msg) else 500
+    status = 400 if ('请指定' in msg or '无效' in msg or '需同时' in msg) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
