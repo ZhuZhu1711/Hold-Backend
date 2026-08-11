@@ -579,7 +579,7 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     Hold Record 数据分析：bysite + raw_data（qty 降序）。
     合批 wafer 额外附带各源 wafer raw_data。
 
-    wafer_id 可为完整片号，或展示串（#03 / #03 #04 #05）；
+    wafer_id 可为完整片号，或展示串（#03 / #01#02 / #03 #04）；
     展示串需配合 lot_id 还原真实 MES wafer id。
     """
     if wafer_id is None or not str(wafer_id).strip():

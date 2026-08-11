@@ -2,6 +2,7 @@ import oracledb
 from datetime import date
 import logging
 import os
+import re
 from logging.handlers import RotatingFileHandler
 
 USER = "FT_OWEN"
@@ -495,7 +496,7 @@ def is_fragmented_merged_lot(lot_id, wafer_id) -> bool:
 def format_wafer_id_display(wafer_id) -> str:
     """
     Hold Record 展示用 Wafer：
-      - 已是 #03 / #03 #04 #05 展示串 → 原样
+      - 已是 #03 / #01#02 / #03 #04 展示串 → 原样
       - 含 '-' → '#' + 后缀（C123456-03 → #03）
       - 否则原样
     """
@@ -512,7 +513,7 @@ def format_wafer_id_display(wafer_id) -> str:
 
 def build_merged_wafer_display(wafer_ids, max_len: int = 100) -> str:
     """
-    多片 WAFER_ID → 展示串，如 #03 #04 #05。
+    多片 WAFER_ID → 展示串，如 #01#02#03。
     后缀去重；能转成数字的按数值排序，否则按文本。
     """
     seen = set()
@@ -530,7 +531,7 @@ def build_merged_wafer_display(wafer_ids, max_len: int = 100) -> str:
         return (1, s)
 
     suffixes.sort(key=_sort_key)
-    joined = ' '.join(f'#{s}' for s in suffixes)
+    joined = ''.join(f'#{s}' for s in suffixes)
     if max_len is not None and len(joined) > max_len:
         return joined[:max_len]
     return joined
@@ -539,7 +540,8 @@ def build_merged_wafer_display(wafer_ids, max_len: int = 100) -> str:
 def expand_display_wafer_ids(wafer_id, lot_id) -> list:
     """
     将展示串 / 完整片号还原为可查 MES 的真实 wafer id 列表。
-      - #03 #04 #05 + lot=C123456 → [C123456-03, C123456-04, C123456-05]
+      - #01#02#03 + lot=C123456 → [C123456-01, C123456-02, C123456-03]
+      - #03 #04 #05 + lot=C123456 → 同上（兼容旧空格分隔）
       - #03 + lot → [C123456-03]
       - 普通 C123456-03 → [C123456-03]
     """
@@ -552,14 +554,10 @@ def expand_display_wafer_ids(wafer_id, lot_id) -> list:
         if not lot:
             return []
         parts = []
-        for token in wafer.split():
-            token = token.strip()
-            if not token:
-                continue
-            suffix = token[1:] if token.startswith('#') else token
-            if not suffix:
-                continue
-            parts.append(f'{lot}-{suffix}')
+        # 兼容 #01#02 与 #01 #02
+        for suffix in re.findall(r'#([^#\s]+)', wafer):
+            if suffix:
+                parts.append(f'{lot}-{suffix}')
         return parts
 
     return [wafer]

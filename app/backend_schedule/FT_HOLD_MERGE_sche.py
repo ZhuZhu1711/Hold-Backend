@@ -24,6 +24,7 @@ from app.utils.database_util import (
     insert_hold_record_and_link,
     is_fragmented_merged_lot,
     mark_hold_infos_dirty,
+    normalize_lot_id,
     query_online_hold_info,
 )
 
@@ -232,7 +233,8 @@ class HoldInfo:
 class RoughHoldRecord:
     """
     普通：按 (WAFER_ID, RECORD_TYPE) 分组；
-    分片合批（LOT_ID!=WAFER_ID 且 LOT 后缀数字>2位）：按 (LOT_ID, RECORD_TYPE) 分组。
+    分片合批（LOT_ID!=WAFER_ID 且 LOT 后缀数字>2位）：按 (LOT_ID, RECORD_TYPE) 分组；
+    WLT：同 lot（wafer/lot 中 '-' 前文本相同）合并，按 (lot_prefix, RECORD_TYPE) 分组。
     并对 (WAFER_ID, STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
     items 为去重后用于拼装 FT_HOLD_RECORD 的条目；
     all_source_ids 含去重前全部源 ID，写入成功后一并回写 HOLD_RECORD_ID。
@@ -241,8 +243,10 @@ class RoughHoldRecord:
     record_type: int
     items: List[HoldInfo] = field(default_factory=list)
     all_source_ids: List[int] = field(default_factory=list)
-    # True：本组为分片合批，WAFER_ID 写入 #03 #04 #05
+    # True：分片合批 / WLT 同 lot 合并，WAFER_ID 写入 #01#02 展示串
     fragmented_merged: bool = False
+    # WLT：写入 record 时 LOT_ID 用 '-' 前截取结果；其它模式为 None
+    lot_id_override: Optional[str] = None
 
     @property
     def source_ids(self) -> List[int]:
@@ -253,9 +257,18 @@ class RoughHoldRecord:
     def summary(self) -> str:
         codes = sorted({i.hold_code for i in self.items})
         stations = sorted({i.station for i in self.items})
-        mode = 'fragmented_lot' if self.fragmented_merged else 'wafer'
+        if self.lot_id_override is not None:
+            mode = 'wlt_lot'
+        elif self.fragmented_merged:
+            mode = 'fragmented_lot'
+        else:
+            mode = 'wafer'
+        lot_part = (
+            f", lot={self.lot_id_override}" if self.lot_id_override else ''
+        )
         return (
-            f"mode={mode}, wafer={self.wafer_id}, record_type={self.record_type}, "
+            f"mode={mode}, wafer={self.wafer_id}{lot_part}, "
+            f"record_type={self.record_type}, "
             f"items={len(self.items)}, source_ids={len(self.source_ids)}, "
             f"codes={codes}, stations={stations}"
         )
@@ -268,7 +281,8 @@ class RoughHoldRecord:
         将去重后的 items 归纳为一条 FT_HOLD_RECORD 行数据。
         基础字段取时间最早一条；HOLD_CODE / HOLD_REASON 按时间序去重后用 @ 拼接。
         RECORD_TYPE 取本 rough record 按处置单划分判定的值。
-        分片合批组：WAFER_ID 存多片展示串（如 #03 #04 #05）。
+        分片合批 / WLT 同 lot：WAFER_ID 存多片展示串（如 #01#02）。
+        WLT：LOT_ID 取 lot_id_override（'-' 前文本）。
         """
         if not self.items:
             return None
@@ -294,11 +308,16 @@ class RoughHoldRecord:
             ) or self.wafer_id
         else:
             wafer_out = self.wafer_id
+        lot_out = (
+            self.lot_id_override
+            if self.lot_id_override is not None
+            else first.lot_id
+        )
         return {
             'PRODUCT_ID': first.product_id,
             'STATION': first.station,
             'EQUIP_ID': first.equip_id,
-            'LOT_ID': first.lot_id,
+            'LOT_ID': lot_out,
             'WAFER_ID': wafer_out,
             'HOLD_CODE': hold_code,
             'HOLD_REASON': hold_reason,
@@ -356,6 +375,7 @@ def build_rough_hold_records(
     查询结果 → 按处置单划分判定 RECORD_TYPE → 分组 → 去重 → 粗糙 hold record。
 
     分组键：
+      - WLT：('wlt_lot', lot_prefix, record_type)，lot_prefix 为 wafer/lot 中 '-' 前文本
       - 分片合批（LOT!=WAFER 且 LOT 后缀数字>2位）：('lot', exact_lot_id, record_type)
       - 其它：('wafer', wafer_id, record_type)
 
@@ -385,7 +405,22 @@ def build_rough_hold_records(
                 skipped_ids.append(info.id)
             continue
 
-        if is_fragmented_merged_lot(info.lot_id, info.wafer_id):
+        if rtype == RECORD_TYPE_WLT:
+            # 同 lot（'-' 前相同）的 wafer 合并为一条；优先取 wafer 前缀
+            lot_prefix = (
+                normalize_lot_id(info.wafer_id)
+                or normalize_lot_id(info.lot_id)
+            )
+            if not lot_prefix:
+                logger.warning(
+                    f"跳过无法解析 lot 前缀的 WLT hold_info id={info.id} "
+                    f"(wafer={info.wafer_id}, lot={info.lot_id})"
+                )
+                if info.id is not None:
+                    skipped_ids.append(info.id)
+                continue
+            group_key = ('wlt_lot', lot_prefix, rtype)
+        elif is_fragmented_merged_lot(info.lot_id, info.wafer_id):
             group_key = ('lot', info.lot_id, rtype)
         else:
             group_key = ('wafer', info.wafer_id, rtype)
@@ -397,15 +432,15 @@ def build_rough_hold_records(
         raw_items = by_key[group_key]
         all_source_ids = [i.id for i in raw_items if i.id is not None]
         deduped = dedupe_hold_infos(raw_items, window=window)
-        fragmented = mode == 'lot'
+        multi_wafer = mode in ('lot', 'wlt_lot')
         if len(deduped) < len(raw_items):
             logger.info(
                 f"mode={mode} key={key_id} record_type={rtype}: "
                 f"{len(raw_items)} → {len(deduped)} "
                 f"（去掉 {len(raw_items) - len(deduped)} 条重复）"
             )
-        if fragmented:
-            # 占位：真正写入值由 to_record_dict 用多片后缀生成
+        if multi_wafer:
+            # 占位：真正写入值由 to_record_dict 用多片后缀生成（#01#02）
             wafer_label = build_merged_wafer_display(
                 (i.wafer_id for i in deduped), max_len=100
             ) or key_id
@@ -417,7 +452,8 @@ def build_rough_hold_records(
                 record_type=rtype,
                 items=deduped,
                 all_source_ids=all_source_ids,
-                fragmented_merged=fragmented,
+                fragmented_merged=multi_wafer,
+                lot_id_override=key_id if mode == 'wlt_lot' else None,
             )
         )
     return records, skipped_ids
@@ -425,8 +461,10 @@ def build_rough_hold_records(
 
 class HoldMergeScheduler(threading.Thread):
     """
-    定时将 FT_HOLD_INFO 中满足处置单划分的在线 hold，
-    按 (WAFER_ID, RECORD_TYPE) 或分片合批的 (LOT_ID, RECORD_TYPE) 合并写入 FT_HOLD_RECORD。
+    定时将 FT_HOLD_INFO 中满足处置单划分的在线 hold 合并写入 FT_HOLD_RECORD：
+      - 普通：按 (WAFER_ID, RECORD_TYPE)
+      - 分片合批：按 (LOT_ID, RECORD_TYPE)
+      - WLT：按 (lot_prefix, RECORD_TYPE)，LOT_ID 截取 '-' 前，WAFER_ID 为 #01#02
     """
 
     def __init__(self):
