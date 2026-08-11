@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工程师处置</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            max-width: 920px;
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .summary {
+            background: #f8f9fa; border-radius: 6px; padding: 12px 14px;
+            font-size: 13px; line-height: 1.6; margin-bottom: 18px;
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 16px;
+        }
+        .summary .k { color: #888; font-size: 12px; }
+        .summary .v { color: #222; word-break: break-word; }
+        .section-title {
+            font-size: 14px; font-weight: 600; margin: 18px 0 10px; color: #333;
+            border-left: 3px solid #007bff; padding-left: 8px;
+        }
+        .action-list { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-bottom: 8px; }
+        .action-list label {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 14px; cursor: pointer; user-select: none;
+        }
+        .action-list input { accent-color: #007bff; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 10px; }
+        th, td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; }
+        th { background: #f8f9fa; }
+        .empty { padding: 20px; text-align: center; color: #888; }
+        .panel {
+            border: 1px solid #e9ecef; border-radius: 6px; padding: 14px;
+            margin-top: 8px; background: #fafbfc;
+        }
+        .panel.hidden { display: none; }
+        .form-row { margin-bottom: 12px; }
+        .form-row label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .form-row select, .form-row textarea, .form-row input[type=text], .form-row input[type=number] {
+            width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px; font-family: inherit; background: #fff;
+        }
+        .form-row textarea { min-height: 64px; resize: vertical; }
+        .grade-checks {
+            display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px;
+        }
+        .grade-checks label {
+            display: inline-flex; align-items: center; gap: 6px;
+            cursor: pointer; user-select: none;
+            background: #fff; border: 1px solid #e0e0e0; border-radius: 4px;
+            padding: 6px 10px;
+        }
+        .mode-row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; font-size: 13px; }
+        .mode-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+        .dg-rows { display: flex; flex-direction: column; gap: 8px; }
+        .dg-row {
+            display: grid; grid-template-columns: 1fr auto 1fr auto;
+            gap: 8px; align-items: center;
+        }
+        .dg-row .arrow { color: #888; font-size: 13px; }
+        .dg-row input {
+            padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px; width: 100%;
+        }
+        .dg-row input:disabled, .dg-row input[readonly] {
+            background: #e9ecef; color: #555; cursor: not-allowed;
+        }
+        .note-select option { max-width: 100%; }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+        .hint { font-size: 12px; color: #888; margin-top: 6px; }
+        .err { color: #dc3545; font-size: 13px; margin-top: 8px; }
+        .page-actions {
+            display: flex; justify-content: flex-end; gap: 10px;
+            margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;
+        }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            background: #ff9800; color: #fff; font-size: 12px;
+        }
+        .badge-muted { background: #6c757d; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>产品工程师</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/eng/">工作台</a></li>
+            <li><a href="/eng/defects">缺陷 / BSL</a></li>
+            <li><a href="/eng/notes">工程备注</a></li>
+            <li class="active"><a href="/eng/holds">Hold Record</a></li>
+            <li><a href="/eng/circulations">Hold 流转</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>工程师处置</h1>
+            <p class="sub">选择处置方式后确认。降级/重测按等级操作；放行与可靠性分析对全部等级统一生效。</p>
+            <div id="loadErr" class="err" style="display:none;"></div>
+            <div id="content" class="empty">加载中...</div>
+        </div>
+    </main>
+
+    <script>
+        const RECORD_ID = {{ record_id|int }};
+        const RECORD_TYPE_WLT = 2;
+        const DISPOSE_RELEASE = 1;
+        const DISPOSE_DOWNGRADE = 2;
+        const DISPOSE_RETEST = 3;
+        const DISPOSE_ANALYZE = 5;
+
+        let record = null;
+        let grades = [];
+        let engNotes = [];
+
+        function esc(v) {
+            return String(v ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;');
+        }
+
+        function selectedDispose() {
+            const el = document.querySelector('input[name=dispose]:checked');
+            return el ? Number(el.value) : DISPOSE_RELEASE;
+        }
+
+        function syncPanels() {
+            const d = selectedDispose();
+            document.getElementById('panelEngNote').classList.toggle(
+                'hidden', !(d === DISPOSE_RELEASE || d === DISPOSE_DOWNGRADE)
+            );
+            document.getElementById('panelRemark').classList.toggle('hidden', d !== DISPOSE_ANALYZE);
+            document.getElementById('panelDowngrade').classList.toggle('hidden', d !== DISPOSE_DOWNGRADE);
+            document.getElementById('panelRetest').classList.toggle('hidden', d !== DISPOSE_RETEST);
+            if (d === DISPOSE_RETEST) syncRetestMode();
+        }
+
+        function isWlt() {
+            return Number(record && record.RECORD_TYPE) === RECORD_TYPE_WLT;
+        }
+
+        function retestMode() {
+            if (!isWlt()) return 'grade';
+            const el = document.querySelector('input[name=retest_mode]:checked');
+            return el ? el.value : 'grade';
+        }
+
+        function syncRetestMode() {
+            const mode = retestMode();
+            const gradeBox = document.getElementById('retestGradeBox');
+            const codeBox = document.getElementById('retestCodeBox');
+            if (!gradeBox || !codeBox) return;
+            gradeBox.classList.toggle('hidden', mode === 'code');
+            codeBox.classList.toggle('hidden', mode !== 'code');
+        }
+
+        function engNoteOptionsHtml() {
+            const opts = ['<option value="">无工程备注</option>'];
+            engNotes.forEach(n => {
+                const label = (n.type ? `[${n.type}] ` : '') + (n.note || '');
+                opts.push(`<option value="${esc(n.note || '')}">${esc(label)}</option>`);
+            });
+            return opts.join('');
+        }
+
+        function selectedEngNote() {
+            const el = document.getElementById('eng_note');
+            if (!el) return null;
+            const v = (el.value || '').trim();
+            return v || null;
+        }
+
+        function addDowngradeRow(fromGrade, toGrade) {
+            const wrap = document.getElementById('dgRows');
+            const row = document.createElement('div');
+            row.className = 'dg-row';
+            const src = fromGrade || '';
+            const dst = (toGrade === undefined || toGrade === null) ? src : toGrade;
+            const qtyHint = (() => {
+                const g = grades.find(x => String(x.grade) === String(src));
+                return g && g.qty !== '' ? ` · ${g.qty}` : '';
+            })();
+            row.innerHTML = `
+                <input class="dg-from" type="text" readonly
+                    title="源等级（锁定）${esc(qtyHint)}"
+                    value="${esc(src)}" />
+                <span class="arrow">→</span>
+                <input class="dg-to" type="text" placeholder="目标等级（默认同源，可改）"
+                    value="${esc(dst)}" list="gradeDatalist" />
+                <span></span>
+            `;
+            wrap.appendChild(row);
+        }
+
+        function collectDowngrades() {
+            const rows = [];
+            document.querySelectorAll('#dgRows .dg-row').forEach(row => {
+                const from = (row.querySelector('.dg-from').value || '').trim();
+                const to = (row.querySelector('.dg-to').value || '').trim();
+                if (!from || !to) return;
+                // 源→源表示不降级该等级，不提交
+                if (from === to) return;
+                rows.push({ from, to });
+            });
+            return rows;
+        }
+
+        function collectRetestGrades() {
+            return Array.from(document.querySelectorAll('input[name=retest_grade]:checked'))
+                .map(el => el.value);
+        }
+
+        function renderPage() {
+            const can = !!record.CAN_DISPOSE;
+            const statusBadge = record.IS_CLOSED
+                ? '<span class="badge badge-muted">已关闭</span>'
+                : (can ? '<span class="badge">待我处置</span>' : '<span class="badge badge-muted">不可处置</span>');
+
+            const datalist = `<datalist id="gradeDatalist">${
+                grades.map(g => `<option value="${esc(g.grade)}"></option>`).join('')
+            }</datalist>`;
+
+            const retestChecks = grades.length
+                ? `<div class="grade-checks">${grades.map(g => `
+                    <label>
+                        <input type="checkbox" name="retest_grade" value="${esc(g.grade)}" />
+                        ${esc(g.grade)}${g.qty !== '' ? ' · ' + esc(g.qty) : ''}
+                    </label>`).join('')}</div>`
+                : '<div class="hint">无已有等级，可仅在 WLT 下使用 code 模式</div>';
+
+            const wltMode = isWlt()
+                ? `<div class="mode-row">
+                    <label><input type="radio" name="retest_mode" value="grade" checked /> 按等级</label>
+                    <label><input type="radio" name="retest_mode" value="code" /> 按 code（数字）</label>
+                   </div>`
+                : '';
+
+            document.getElementById('content').innerHTML = `
+                <div class="summary">
+                    <div><div class="k">Record</div><div class="v">#${esc(record.ID)} ${statusBadge}</div></div>
+                    <div><div class="k">处置单类型</div><div class="v">${esc(record.RECORD_TYPE_NAME || '-')}</div></div>
+                    <div><div class="k">型号</div><div class="v">${esc(record.PRODUCT_ID || '-')}</div></div>
+                    <div><div class="k">Lot / Wafer</div><div class="v">${esc(record.LOT_ID || '-')} / ${esc(record.WAFER_ID || '-')}</div></div>
+                    <div><div class="k">站点/设备</div><div class="v">${esc(record.STATION || '-')} / ${esc(record.EQUIP_ID || '-')}</div></div>
+                    <div><div class="k">等级/数量</div><div class="v">${esc(record.GRADE_NUM_DISPLAY || record.GRADE_NUM || '-')}</div></div>
+                </div>
+
+                ${datalist}
+
+                <div class="section-title">处置方式</div>
+                <div class="action-list">
+                    <label><input type="radio" name="dispose" value="${DISPOSE_RELEASE}" checked ${can ? '' : 'disabled'} /> 放行</label>
+                    <label><input type="radio" name="dispose" value="${DISPOSE_DOWNGRADE}" ${can ? '' : 'disabled'} /> 降级</label>
+                    <label><input type="radio" name="dispose" value="${DISPOSE_RETEST}" ${can ? '' : 'disabled'} /> 重测</label>
+                    <label><input type="radio" name="dispose" value="${DISPOSE_ANALYZE}" ${can ? '' : 'disabled'} /> 可靠性分析</label>
+                </div>
+
+                <div id="panelEngNote" class="panel">
+                    <div class="form-row">
+                        <label>工程备注（可选）</label>
+                        <select id="eng_note" class="note-select" ${can ? '' : 'disabled'}>
+                            ${engNoteOptionsHtml()}
+                        </select>
+                        <p class="hint">来自该型号 FT_ENG_NOTES；可不选。</p>
+                    </div>
+                </div>
+
+                <div id="panelRemark" class="panel hidden">
+                    <div class="form-row">
+                        <label>备注（可选）</label>
+                        <textarea id="dispose_detail" maxlength="1024" placeholder="可选说明" ${can ? '' : 'disabled'}></textarea>
+                    </div>
+                </div>
+
+                <div id="panelDowngrade" class="panel hidden">
+                    <p class="hint" style="margin-bottom:10px;">默认源→源表示不降该等级；改目标等级才会降级（整级全量）。全部未改不可提交。</p>
+                    <div class="dg-rows" id="dgRows"></div>
+                    ${grades.length ? '' : '<div class="hint">无等级数据，无法降级</div>'}
+                </div>
+
+                <div id="panelRetest" class="panel hidden">
+                    ${wltMode}
+                    <div id="retestGradeBox">
+                        <div class="form-row">
+                            <label>选择重测等级（可多选）</label>
+                            ${retestChecks}
+                        </div>
+                    </div>
+                    <div id="retestCodeBox" class="panel hidden" style="margin-top:0;border:none;padding:0;background:transparent;">
+                        <div class="form-row">
+                            <label>指定 code（数字）</label>
+                            <input id="retest_code" type="text" inputmode="numeric" placeholder="例如 123" ${can ? '' : 'disabled'} />
+                        </div>
+                    </div>
+                </div>
+
+                <div id="submitErr" class="err"></div>
+                <div class="page-actions">
+                    <button type="button" class="btn btn-ghost" id="cancelBtn">取消</button>
+                    <button type="button" class="btn btn-success" id="confirmBtn" ${can ? '' : 'disabled'}>确认</button>
+                </div>
+            `;
+
+            document.querySelectorAll('input[name=dispose]').forEach(el => {
+                el.addEventListener('change', syncPanels);
+            });
+            document.querySelectorAll('input[name=retest_mode]').forEach(el => {
+                el.addEventListener('change', syncRetestMode);
+            });
+            document.getElementById('cancelBtn').addEventListener('click', () => {
+                window.location.href = '/eng/holds';
+            });
+            document.getElementById('confirmBtn').addEventListener('click', submitDispose);
+
+            grades.forEach(g => addDowngradeRow(g.grade, g.grade));
+            syncPanels();
+        }
+
+        async function submitDispose() {
+            const errEl = document.getElementById('submitErr');
+            errEl.textContent = '';
+            if (!record || !record.CAN_DISPOSE) {
+                errEl.textContent = '当前不可处置';
+                return;
+            }
+            const dispose = selectedDispose();
+            const body = { hold_record_id: RECORD_ID, dispose };
+
+            if (dispose === DISPOSE_RELEASE) {
+                body.dispose_detail = selectedEngNote();
+            } else if (dispose === DISPOSE_ANALYZE) {
+                const detail = (document.getElementById('dispose_detail').value || '').trim();
+                body.dispose_detail = detail || null;
+            } else if (dispose === DISPOSE_DOWNGRADE) {
+                const downgrades = collectDowngrades();
+                if (!downgrades.length) {
+                    errEl.textContent = '降级须至少变更一个等级（不能全部保持源→源）';
+                    return;
+                }
+                body.downgrades = downgrades;
+                body.dispose_detail = selectedEngNote();
+            } else if (dispose === DISPOSE_RETEST) {
+                if (retestMode() === 'code') {
+                    const code = (document.getElementById('retest_code').value || '').trim();
+                    if (!/^\d+$/.test(code)) {
+                        errEl.textContent = '重测 code 须为数字';
+                        return;
+                    }
+                    body.retest_code = code;
+                } else {
+                    const gs = collectRetestGrades();
+                    if (!gs.length) {
+                        errEl.textContent = '请至少选择一个重测等级';
+                        return;
+                    }
+                    body.retest_grades = gs;
+                }
+            }
+
+            const btn = document.getElementById('confirmBtn');
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/eng/api/dispose', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    errEl.textContent = json.msg || '处置失败';
+                    return;
+                }
+                const d = json.data || {};
+                alert(`处置成功：${d.dispose_label || dispose}`);
+                window.location.href = '/eng/holds';
+            } catch (e) {
+                errEl.textContent = '请求失败: ' + e;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function loadEngNotes(productId) {
+            if (!productId) {
+                engNotes = [];
+                return;
+            }
+            try {
+                const resp = await fetch('/eng/api/notes?product_id=' + encodeURIComponent(productId));
+                const json = await resp.json();
+                engNotes = (json.code === 200 && Array.isArray(json.data)) ? json.data : [];
+            } catch (e) {
+                engNotes = [];
+            }
+        }
+
+        async function loadRecord() {
+            try {
+                const resp = await fetch('/eng/api/records/' + RECORD_ID);
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('content').innerHTML = '';
+                    const err = document.getElementById('loadErr');
+                    err.style.display = 'block';
+                    err.textContent = json.msg || '加载失败';
+                    return;
+                }
+                record = json.data || {};
+                grades = Array.isArray(record.GRADES) ? record.GRADES : [];
+                await loadEngNotes(record.PRODUCT_ID);
+                renderPage();
+            } catch (e) {
+                document.getElementById('content').innerHTML = '';
+                const err = document.getElementById('loadErr');
+                err.style.display = 'block';
+                err.textContent = '请求失败: ' + e;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadRecord);
+    </script>
+</body>
+</html>
