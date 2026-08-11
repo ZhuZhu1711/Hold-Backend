@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, jsonify, session
 
-from app.controllers import hold_report_ctrl
+from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl
 from app.utils.auth_decorators import root_required, login_required, current_role_name
 
 hold_report_bp = Blueprint('hold_report', __name__, url_prefix='/admin/hold')
@@ -27,6 +27,17 @@ def hold_history_page():
     """Hold 历史数量柱状图（root）"""
     return render_template(
         'hold/history.html',
+        user_name=session.get('user_name'),
+        role_name=current_role_name(),
+    )
+
+
+@hold_report_bp.route('/merge_failed')
+@root_required
+def merge_failed_page():
+    """Merge 失败 hold_info 处理页（root）"""
+    return render_template(
+        'hold/merge_failed.html',
         user_name=session.get('user_name'),
         role_name=current_role_name(),
     )
@@ -190,3 +201,84 @@ def api_hold_products():
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
     return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
+
+
+def _merge_fail_operator():
+    if session.get('user_id') is not None:
+        return f"{session.get('user_id')}:{session.get('user_name')}"
+    return session.get('user_name') or ''
+
+
+@hold_report_bp.route('/api/merge_failed', methods=['GET'])
+@root_required
+def api_merge_failed_list():
+    """
+    HOLD_RECORD_ID=-1 的 hold_info 列表。
+    Query: product_id, lot_id, wafer_id, station, hold_code, keyword, page, page_size
+    """
+    success, msg, data = hold_merge_fail_ctrl.list_dirty_hold_infos(
+        product_id=request.args.get('product_id', '').strip(),
+        lot_id=request.args.get('lot_id', '').strip(),
+        wafer_id=request.args.get('wafer_id', '').strip(),
+        station=request.args.get('station', '').strip(),
+        hold_code=request.args.get('hold_code', '').strip(),
+        keyword=request.args.get('keyword', '').strip(),
+        page=request.args.get('page', 1),
+        page_size=request.args.get('page_size', 20),
+    )
+    if success:
+        return jsonify({
+            'code': 200,
+            'msg': msg,
+            'data': data.get('items') or [],
+            'total': data.get('total', 0),
+            'page': data.get('page', 1),
+            'page_size': data.get('page_size', 20),
+            'pages': data.get('pages', 1),
+        })
+    return jsonify({'code': 500, 'msg': msg, 'data': [], 'total': 0}), 500
+
+
+@hold_report_bp.route('/api/merge_failed/reset', methods=['POST'])
+@root_required
+def api_merge_failed_reset():
+    """将选中脏 hold_info 重置为 HOLD_RECORD_ID=0，等待下次 merge。"""
+    body = request.get_json(silent=True) or {}
+    success, msg, data = hold_merge_fail_ctrl.reset_dirty_infos(
+        body.get('ids'),
+        operator=_merge_fail_operator(),
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if data is not None or '请选择' in msg or '未更新' in msg else 500
+    return jsonify({'code': status, 'msg': msg, 'data': data}), status
+
+
+@hold_report_bp.route('/api/merge_failed/draft', methods=['POST'])
+@root_required
+def api_merge_failed_draft():
+    """按选中脏 hold_info 生成手动提 record 草稿。"""
+    body = request.get_json(silent=True) or {}
+    success, msg, data = hold_merge_fail_ctrl.build_manual_draft(body.get('ids'))
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if any(k in msg for k in ('请选择', '非脏', '草稿')) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': data}), status
+
+
+@hold_report_bp.route('/api/merge_failed/create', methods=['POST'])
+@root_required
+def api_merge_failed_create():
+    """Root 确认草稿字段后，从脏 hold_info 手动创建 hold_record。"""
+    body = request.get_json(silent=True) or {}
+    success, msg, data = hold_merge_fail_ctrl.create_record_from_dirty(
+        body.get('ids'),
+        body.get('record'),
+        operator=_merge_fail_operator(),
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if any(
+        k in msg for k in ('请选择', '缺少', '须为', '非脏', '失败')
+    ) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': data}), status
