@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Merge 失败 Hold Info</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; align-items: center; }
+        .filters input, .filters select, .form-grid input, .form-grid select, .form-grid textarea {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 140px;
+        }
+        .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+        .btn-warn { background: #fd7e14; }
+        .btn-warn:hover { background: #e8590c; }
+        .btn-ok { background: #28a745; }
+        .btn-ok:hover { background: #218838; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
+        .toast {
+            display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 4px;
+            font-size: 13px;
+        }
+        .toast.show { display: block; }
+        .toast.ok { background: #d4edda; color: #155724; }
+        .toast.err { background: #f8d7da; color: #721c24; }
+        .pager {
+            display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            margin-top: 12px; font-size: 13px; color: #555;
+        }
+        .pager .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+        .pager select { padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+        th { background: #f8f9fa; position: sticky; top: 0; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .reason {
+            max-width: 280px; line-height: 1.45; color: #444;
+            white-space: normal; word-break: break-word;
+        }
+        .fail-reason {
+            max-width: 260px; line-height: 1.45; color: #b02a37;
+            white-space: normal; word-break: break-word;
+        }
+        .fail-reason.muted { color: #888; }
+        .modal-mask {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+            z-index: 100; align-items: center; justify-content: center;
+        }
+        .modal-mask.show { display: flex; }
+        .modal {
+            background: #fff; border-radius: 8px; padding: 20px;
+            width: 720px; max-width: 94vw; max-height: 88vh; overflow: auto;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }
+        .modal h3 { margin-bottom: 6px; font-size: 16px; }
+        .modal .modal-sub { color: #666; font-size: 12px; margin-bottom: 14px; }
+        .form-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
+        }
+        .form-grid .full { grid-column: 1 / -1; }
+        .form-grid label {
+            display: block; font-size: 12px; color: #555; margin-bottom: 4px;
+        }
+        .form-grid textarea { width: 100%; min-height: 64px; resize: vertical; }
+        .form-grid input, .form-grid select { width: 100%; min-width: 0; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>后台管理系统</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/dashboard">仪表盘</a></li>
+            <li><a href="/admin/hold/holding">Holding Record</a></li>
+            <li><a href="/admin/hold/history">Hold 历史</a></li>
+            <li><a href="/admin/hold/circulations">Hold 流转</a></li>
+            <li class="active"><a href="/admin/hold/merge_failed">Merge 失败</a></li>
+            <li><a href="/admin/users">用户管理</a></li>
+            <li><a href="/admin/products">产品管理</a></li>
+            <li><a href="/admin/defects">缺陷管理</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>Merge 失败 Hold Info</h1>
+            <p class="sub">
+                列出 HOLD_RECORD_ID=-1 的源 hold_info。可重置后等定时 merge 重试，或手动提交一条 hold_record。
+            </p>
+
+            <div id="toast" class="toast"></div>
+
+            <div class="filters">
+                <input id="product_id" placeholder="型号 PRODUCT_ID" />
+                <input id="lot_id" placeholder="LOT_ID" />
+                <input id="wafer_id" placeholder="WAFER_ID" />
+                <input id="station" placeholder="STATION" />
+                <input id="hold_code" placeholder="HOLD_CODE" />
+                <input id="keyword" placeholder="关键词 / 失败原因" />
+                <button class="btn" onclick="loadData(1)">查询</button>
+            </div>
+
+            <div class="toolbar">
+                <button class="btn btn-warn" id="btnReset" onclick="resetSelected()" disabled>重置重试</button>
+                <button class="btn btn-ok" id="btnCreate" onclick="openCreateModal()" disabled>手动提 Record</button>
+            </div>
+
+            <div class="meta" id="meta">加载中...</div>
+            <div style="overflow:auto; max-height:68vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="checkAll" onclick="toggleAll(this.checked)" /></th>
+                            <th>ID</th>
+                            <th>Hold 时间</th>
+                            <th>型号</th>
+                            <th>Lot</th>
+                            <th>Wafer</th>
+                            <th>站点</th>
+                            <th>Code</th>
+                            <th>原因</th>
+                            <th>失败原因</th>
+                            <th>HOLDING</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody">
+                        <tr><td colspan="11" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pager" id="pager"></div>
+        </div>
+    </main>
+
+    <div class="modal-mask" id="createModal">
+        <div class="modal">
+            <h3>手动提 Hold Record</h3>
+            <div class="modal-sub" id="createModalSub">-</div>
+            <div class="form-grid">
+                <div>
+                    <label>PRODUCT_ID *</label>
+                    <input id="f_product_id" />
+                </div>
+                <div>
+                    <label>RECORD_TYPE *</label>
+                    <select id="f_record_type">
+                        <option value="0">0 FT异常反馈单</option>
+                        <option value="1">1 FVI异常反馈单</option>
+                        <option value="2">2 WLT异常反馈单</option>
+                    </select>
+                </div>
+                <div>
+                    <label>STATION *</label>
+                    <input id="f_station" />
+                </div>
+                <div>
+                    <label>EQUIP_ID *</label>
+                    <input id="f_equip_id" />
+                </div>
+                <div>
+                    <label>LOT_ID *</label>
+                    <input id="f_lot_id" />
+                </div>
+                <div>
+                    <label>WAFER_ID *</label>
+                    <input id="f_wafer_id" />
+                </div>
+                <div>
+                    <label>HOLD_CODE</label>
+                    <input id="f_hold_code" />
+                </div>
+                <div>
+                    <label>SOURCE</label>
+                    <select id="f_source">
+                        <option value="0">0 MES/SYS</option>
+                        <option value="1">1 JDY</option>
+                    </select>
+                </div>
+                <div>
+                    <label>SECOND_CODE</label>
+                    <input id="f_second_code" />
+                </div>
+                <div>
+                    <label>ROUTE_ID</label>
+                    <input id="f_route_id" />
+                </div>
+                <div>
+                    <label>GRADE_NUM</label>
+                    <input id="f_grade_num" />
+                </div>
+                <div>
+                    <label>STATUS</label>
+                    <input id="f_status" value="0" />
+                </div>
+                <div>
+                    <label>HOLD_DTTM</label>
+                    <input id="f_hold_dttm" placeholder="YYYY-MM-DD HH:MM:SS" />
+                </div>
+                <div class="full">
+                    <label>HOLD_REASON</label>
+                    <textarea id="f_hold_reason"></textarea>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" onclick="closeCreateModal()">取消</button>
+                <button class="btn btn-ok" id="btnSubmitCreate" onclick="submitCreate()">提交</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let page = 1;
+        let pageSize = 20;
+        let pages = 1;
+        let total = 0;
+        let selectedIds = new Set();
+        let createIds = [];
+
+        function esc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function showToast(msg, ok) {
+            const el = document.getElementById('toast');
+            el.className = 'toast show ' + (ok ? 'ok' : 'err');
+            el.textContent = msg;
+            clearTimeout(showToast._t);
+            showToast._t = setTimeout(() => { el.className = 'toast'; }, 4500);
+        }
+
+        function selectedList() {
+            return Array.from(selectedIds);
+        }
+
+        function syncToolbar() {
+            const n = selectedIds.size;
+            document.getElementById('btnReset').disabled = n === 0;
+            document.getElementById('btnCreate').disabled = n === 0;
+        }
+
+        function toggleAll(checked) {
+            document.querySelectorAll('.row-check').forEach(cb => {
+                cb.checked = checked;
+                const id = Number(cb.dataset.id);
+                if (checked) selectedIds.add(id);
+                else selectedIds.delete(id);
+            });
+            syncToolbar();
+        }
+
+        function onRowCheck(cb) {
+            const id = Number(cb.dataset.id);
+            if (cb.checked) selectedIds.add(id);
+            else selectedIds.delete(id);
+            const all = document.querySelectorAll('.row-check');
+            const checked = document.querySelectorAll('.row-check:checked');
+            document.getElementById('checkAll').checked = all.length > 0 && all.length === checked.length;
+            syncToolbar();
+        }
+
+        async function loadData(gotoPage) {
+            if (gotoPage) page = gotoPage;
+            const params = new URLSearchParams({
+                product_id: document.getElementById('product_id').value.trim(),
+                lot_id: document.getElementById('lot_id').value.trim(),
+                wafer_id: document.getElementById('wafer_id').value.trim(),
+                station: document.getElementById('station').value.trim(),
+                hold_code: document.getElementById('hold_code').value.trim(),
+                keyword: document.getElementById('keyword').value.trim(),
+                page: String(page),
+                page_size: String(pageSize),
+            });
+            document.getElementById('meta').textContent = '加载中...';
+            try {
+                const resp = await fetch('/admin/hold/api/merge_failed?' + params.toString());
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('tbody').innerHTML =
+                        `<tr><td colspan="11" class="empty">${esc(json.msg || '加载失败')}</td></tr>`;
+                    document.getElementById('meta').textContent = json.msg || '加载失败';
+                    return;
+                }
+                const items = json.data || [];
+                total = json.total || 0;
+                page = json.page || page;
+                pageSize = json.page_size || pageSize;
+                pages = json.pages || 1;
+                selectedIds.clear();
+                document.getElementById('checkAll').checked = false;
+                syncToolbar();
+
+                if (!items.length) {
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="11" class="empty">暂无 merge 失败记录</td></tr>';
+                } else {
+                    document.getElementById('tbody').innerHTML = items.map(row => {
+                        const fail = row.FAIL_REASON || '历史数据无失败原因';
+                        const muted = !row.REMARK ? ' muted' : '';
+                        return `<tr>
+                            <td><input type="checkbox" class="row-check" data-id="${esc(row.ID)}" onchange="onRowCheck(this)" /></td>
+                            <td>${esc(row.ID)}</td>
+                            <td>${esc(row.HOLD_DTTM)}</td>
+                            <td>${esc(row.PRODUCT_ID)}</td>
+                            <td>${esc(row.LOT_ID)}</td>
+                            <td>${esc(row.WAFER_ID)}</td>
+                            <td>${esc(row.STATION)}</td>
+                            <td>${esc(row.HOLD_CODE)}</td>
+                            <td class="reason">${esc(row.HOLD_REASON)}</td>
+                            <td class="fail-reason${muted}">${esc(fail)}</td>
+                            <td>${esc(row.HOLDING)}</td>
+                        </tr>`;
+                    }).join('');
+                }
+                document.getElementById('meta').textContent =
+                    `共 ${total} 条，第 ${page}/${pages} 页`;
+                renderPager();
+            } catch (e) {
+                document.getElementById('meta').textContent = '请求失败: ' + e;
+                document.getElementById('tbody').innerHTML =
+                    `<tr><td colspan="11" class="empty">请求失败</td></tr>`;
+            }
+        }
+
+        function renderPager() {
+            const el = document.getElementById('pager');
+            el.innerHTML = `
+                <button class="btn btn-ghost" ${page <= 1 ? 'disabled' : ''} onclick="loadData(${page - 1})">上一页</button>
+                <button class="btn btn-ghost" ${page >= pages ? 'disabled' : ''} onclick="loadData(${page + 1})">下一页</button>
+                <span>每页</span>
+                <select onchange="pageSize=Number(this.value);loadData(1)">
+                    ${[20, 50, 100].map(n => `<option value="${n}" ${n === pageSize ? 'selected' : ''}>${n}</option>`).join('')}
+                </select>
+            `;
+        }
+
+        async function resetSelected() {
+            const ids = selectedList();
+            if (!ids.length) return;
+            if (!confirm(`确认将 ${ids.length} 条重置为待处理（HOLD_RECORD_ID=0）？`)) return;
+            try {
+                const resp = await fetch('/admin/hold/api/merge_failed/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids }),
+                });
+                const json = await resp.json();
+                showToast(json.msg || (json.code === 200 ? '已重置' : '重置失败'), json.code === 200);
+                if (json.code === 200) loadData(page);
+            } catch (e) {
+                showToast('重置请求失败: ' + e, false);
+            }
+        }
+
+        function fillDraftForm(draft) {
+            document.getElementById('f_product_id').value = draft.PRODUCT_ID || '';
+            document.getElementById('f_record_type').value = String(draft.RECORD_TYPE ?? 0);
+            document.getElementById('f_station').value = draft.STATION || '';
+            document.getElementById('f_equip_id').value = draft.EQUIP_ID || '';
+            document.getElementById('f_lot_id').value = draft.LOT_ID || '';
+            document.getElementById('f_wafer_id').value = draft.WAFER_ID || '';
+            document.getElementById('f_hold_code').value = draft.HOLD_CODE || '';
+            document.getElementById('f_source').value = String(draft.SOURCE ?? 0);
+            document.getElementById('f_second_code').value = draft.SECOND_CODE || '';
+            document.getElementById('f_route_id').value = draft.ROUTE_ID || '';
+            document.getElementById('f_grade_num').value = draft.GRADE_NUM || '';
+            document.getElementById('f_status').value = String(draft.STATUS ?? 0);
+            document.getElementById('f_hold_dttm').value = draft.HOLD_DTTM || '';
+            document.getElementById('f_hold_reason').value = draft.HOLD_REASON || '';
+        }
+
+        async function openCreateModal() {
+            const ids = selectedList();
+            if (!ids.length) return;
+            try {
+                const resp = await fetch('/admin/hold/api/merge_failed/draft', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids }),
+                });
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    showToast(json.msg || '生成草稿失败', false);
+                    return;
+                }
+                createIds = ids.slice();
+                fillDraftForm((json.data && json.data.draft) || {});
+                document.getElementById('createModalSub').textContent =
+                    `将关联 ${ids.length} 条脏 hold_info：${ids.join(', ')}`;
+                document.getElementById('createModal').classList.add('show');
+            } catch (e) {
+                showToast('草稿请求失败: ' + e, false);
+            }
+        }
+
+        function closeCreateModal() {
+            document.getElementById('createModal').classList.remove('show');
+            createIds = [];
+        }
+
+        function readFormRecord() {
+            return {
+                PRODUCT_ID: document.getElementById('f_product_id').value.trim(),
+                RECORD_TYPE: Number(document.getElementById('f_record_type').value),
+                STATION: document.getElementById('f_station').value.trim(),
+                EQUIP_ID: document.getElementById('f_equip_id').value.trim(),
+                LOT_ID: document.getElementById('f_lot_id').value.trim(),
+                WAFER_ID: document.getElementById('f_wafer_id').value.trim(),
+                HOLD_CODE: document.getElementById('f_hold_code').value.trim(),
+                SOURCE: Number(document.getElementById('f_source').value),
+                SECOND_CODE: document.getElementById('f_second_code').value.trim(),
+                ROUTE_ID: document.getElementById('f_route_id').value.trim(),
+                GRADE_NUM: document.getElementById('f_grade_num').value.trim(),
+                STATUS: Number(document.getElementById('f_status').value || 0),
+                HOLD_DTTM: document.getElementById('f_hold_dttm').value.trim(),
+                HOLD_REASON: document.getElementById('f_hold_reason').value.trim(),
+            };
+        }
+
+        async function submitCreate() {
+            if (!createIds.length) return;
+            const record = readFormRecord();
+            const btn = document.getElementById('btnSubmitCreate');
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/admin/hold/api/merge_failed/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: createIds, record }),
+                });
+                const json = await resp.json();
+                showToast(json.msg || (json.code === 200 ? '创建成功' : '创建失败'), json.code === 200);
+                if (json.code === 200) {
+                    closeCreateModal();
+                    loadData(page);
+                }
+            } catch (e) {
+                showToast('提交失败: ' + e, false);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.getElementById('createModal').addEventListener('click', (e) => {
+            if (e.target.id === 'createModal') closeCreateModal();
+        });
+
+        loadData(1);
+    </script>
+</body>
+</html>

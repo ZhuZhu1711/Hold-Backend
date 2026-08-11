@@ -212,7 +212,7 @@ def mark_hold_infos_dirty(
     reason: str = '',
 ):
     """
-    将源 hold_info 标记为脏数据：HOLD_RECORD_ID = -1。
+    将源 hold_info 标记为脏数据：HOLD_RECORD_ID = -1，并写入 REMARK（失败原因）。
     仅更新当前仍为待处理(NULL/0)的行；成功返回更新行数，失败返回 -1。
     """
     info_tbl = (info_table or '').upper()
@@ -224,11 +224,16 @@ def mark_hold_infos_dirty(
     if not ids:
         return 0
 
+    remark = (str(reason).strip() if reason else '') or 'merge failed'
+    if len(remark) > 512:
+        remark = remark[:512]
+
     id_binds = {f'id{i}': v for i, v in enumerate(ids)}
     id_ph = ', '.join(f':id{i}' for i in range(len(ids)))
     sql = f"""
         UPDATE {info_tbl}
-        SET HOLD_RECORD_ID = :dirty_id
+        SET HOLD_RECORD_ID = :dirty_id,
+            REMARK = :remark
         WHERE ID IN ({id_ph})
           AND NVL(HOLD_RECORD_ID, 0) = 0
     """
@@ -238,14 +243,17 @@ def mark_hold_infos_dirty(
         with connection.cursor() as cursor:
             cursor.execute(
                 sql,
-                {'dirty_id': HOLD_RECORD_ID_DIRTY, **id_binds},
+                {
+                    'dirty_id': HOLD_RECORD_ID_DIRTY,
+                    'remark': remark,
+                    **id_binds,
+                },
             )
             n = cursor.rowcount or 0
             connection.commit()
             logger.warning(
                 f"标记脏数据 {info_tbl} HOLD_RECORD_ID={HOLD_RECORD_ID_DIRTY} "
-                f"更新 {n}/{len(ids)} 行"
-                + (f"，原因: {reason}" if reason else "")
+                f"更新 {n}/{len(ids)} 行，原因: {remark}"
             )
             return n
     except Exception as e:
@@ -440,6 +448,424 @@ def insert_hold_record_and_link(
             exc_info=True,
         )
         return _fail(str(e))
+    finally:
+        connection.close()
+
+
+def query_dirty_hold_infos(
+    info_table: str = 'FT_HOLD_INFO_TEST',
+    product_id: str = '',
+    lot_id: str = '',
+    wafer_id: str = '',
+    station: str = '',
+    hold_code: str = '',
+    keyword: str = '',
+    page: int = 1,
+    page_size: int = 20,
+):
+    """
+    查询 HOLD_RECORD_ID=-1 的 hold_info（分页）。
+    成功返回 (items, total)；失败返回 (None, -1)。
+    """
+    info_tbl = (info_table or '').upper()
+    if info_tbl not in _ALLOWED_HOLD_INFO_TABLES:
+        logger.error(f"非法 hold_info 表名: {info_table}")
+        return None, -1
+
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = max(1, min(int(page_size or 20), 200))
+    except (TypeError, ValueError):
+        page_size = 20
+    offset = (page - 1) * page_size
+
+    where = ["HOLD_RECORD_ID = :dirty_id"]
+    params = {
+        'dirty_id': HOLD_RECORD_ID_DIRTY,
+        'offset': offset,
+        'page_size': page_size,
+    }
+
+    def _like(field: str, value: str, bind: str):
+        text = (value or '').strip()
+        if not text:
+            return
+        where.append(f"UPPER({field}) LIKE UPPER(:{bind})")
+        params[bind] = f'%{text}%'
+
+    _like('PRODUCT_ID', product_id, 'product_id')
+    _like('LOT_ID', lot_id, 'lot_id')
+    _like('WAFER_ID', wafer_id, 'wafer_id')
+    _like('STATION', station, 'station')
+    _like('HOLD_CODE', hold_code, 'hold_code')
+
+    kw = (keyword or '').strip()
+    if kw:
+        where.append(
+            "("
+            "UPPER(PRODUCT_ID) LIKE UPPER(:keyword) OR "
+            "UPPER(LOT_ID) LIKE UPPER(:keyword) OR "
+            "UPPER(WAFER_ID) LIKE UPPER(:keyword) OR "
+            "UPPER(HOLD_REASON) LIKE UPPER(:keyword) OR "
+            "UPPER(NVL(REMARK, '')) LIKE UPPER(:keyword)"
+            ")"
+        )
+        params['keyword'] = f'%{kw}%'
+
+    where_sql = ' AND '.join(where)
+    count_sql = f"SELECT COUNT(*) AS CNT FROM {info_tbl} WHERE {where_sql}"
+    data_sql = f"""
+        SELECT
+            ID, HOLD_DTTM, STATION, EQUIP_ID, PRODUCT_ID, LOT_ID, WAFER_ID,
+            HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID, GRADE_NUM,
+            HOLD_RECORD_ID, HOLDING, REMARK
+        FROM {info_tbl}
+        WHERE {where_sql}
+        ORDER BY HOLD_DTTM DESC, ID DESC
+        OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(count_sql, {
+                k: v for k, v in params.items() if k not in ('offset', 'page_size')
+            })
+            total = int(cursor.fetchone()[0] or 0)
+
+            cursor.execute(data_sql, params)
+            cols = [d[0].upper() for d in cursor.description]
+            items = [dict(zip(cols, row)) for row in cursor.fetchall()]
+            return items, total
+    except Exception as e:
+        logger.error(f"查询脏 hold_info 失败: {e}", exc_info=True)
+        return None, -1
+    finally:
+        connection.close()
+
+
+def query_hold_infos_by_ids(
+    source_info_ids,
+    info_table: str = 'FT_HOLD_INFO_TEST',
+    require_dirty: bool = False,
+):
+    """
+    按 ID 列表查询 hold_info。
+    require_dirty=True 时仅返回 HOLD_RECORD_ID=-1 的行。
+    成功返回 list[dict]；失败返回 None。
+    """
+    info_tbl = (info_table or '').upper()
+    if info_tbl not in _ALLOWED_HOLD_INFO_TABLES:
+        logger.error(f"非法 hold_info 表名: {info_table}")
+        return None
+
+    ids = sorted({int(i) for i in (source_info_ids or []) if i is not None})
+    if not ids:
+        return []
+
+    id_binds = {f'id{i}': v for i, v in enumerate(ids)}
+    id_ph = ', '.join(f':id{i}' for i in range(len(ids)))
+    dirty_filter = (
+        f" AND HOLD_RECORD_ID = {HOLD_RECORD_ID_DIRTY}" if require_dirty else ''
+    )
+    sql = f"""
+        SELECT
+            ID, HOLD_DTTM, STATION, EQUIP_ID, PRODUCT_ID, LOT_ID, WAFER_ID,
+            HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID, GRADE_NUM,
+            HOLD_RECORD_ID, HOLDING, REMARK
+        FROM {info_tbl}
+        WHERE ID IN ({id_ph})
+        {dirty_filter}
+        ORDER BY HOLD_DTTM, ID
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, id_binds)
+            cols = [d[0].upper() for d in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"按 ID 查询 hold_info 失败: {e}", exc_info=True)
+        return None
+    finally:
+        connection.close()
+
+
+def reset_dirty_hold_infos(
+    source_info_ids,
+    info_table: str = 'FT_HOLD_INFO_TEST',
+    operator: str = '',
+):
+    """
+    将脏 hold_info 重置为待处理：HOLD_RECORD_ID=0，REMARK=NULL。
+    仅更新当前仍为 -1 的行；成功返回更新行数，失败返回 -1。
+    """
+    info_tbl = (info_table or '').upper()
+    if info_tbl not in _ALLOWED_HOLD_INFO_TABLES:
+        logger.error(f"非法 hold_info 表名: {info_table}")
+        return -1
+
+    ids = [int(i) for i in (source_info_ids or []) if i is not None]
+    if not ids:
+        return 0
+
+    id_binds = {f'id{i}': v for i, v in enumerate(ids)}
+    id_ph = ', '.join(f':id{i}' for i in range(len(ids)))
+    sql = f"""
+        UPDATE {info_tbl}
+        SET HOLD_RECORD_ID = :pending_id,
+            REMARK = NULL
+        WHERE ID IN ({id_ph})
+          AND HOLD_RECORD_ID = :dirty_id
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                {
+                    'pending_id': HOLD_RECORD_ID_PENDING,
+                    'dirty_id': HOLD_RECORD_ID_DIRTY,
+                    **id_binds,
+                },
+            )
+            n = cursor.rowcount or 0
+            connection.commit()
+            op = f"，操作者={operator}" if operator else ''
+            logger.info(
+                f"重置脏 hold_info {info_tbl} → HOLD_RECORD_ID=0 "
+                f"更新 {n}/{len(ids)} 行{op}，ids={ids}"
+            )
+            return n
+    except Exception as e:
+        connection.rollback()
+        logger.error(f"重置脏 hold_info 失败: {e}", exc_info=True)
+        return -1
+    finally:
+        connection.close()
+
+
+def insert_hold_record_and_link_from_dirty(
+    record: dict,
+    source_info_ids,
+    info_table: str = 'FT_HOLD_INFO_TEST',
+    record_table: str = 'FT_HOLD_RECORD',
+    operator: str = '',
+):
+    """
+    从已标记脏数据（HOLD_RECORD_ID=-1）的 hold_info 手动创建 hold_record。
+    逻辑同 insert_hold_record_and_link，但回写条件为 HOLD_RECORD_ID=-1，
+    成功后清 REMARK；失败不改状态（仍为 -1），仅更新 REMARK 为新失败原因。
+    成功返回新 hold_record ID；失败返回 None。
+    """
+    info_tbl = (info_table or '').upper()
+    record_tbl = (record_table or '').upper()
+    if info_tbl not in _ALLOWED_HOLD_INFO_TABLES:
+        logger.error(f"非法 hold_info 表名: {info_table}")
+        return None
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return None
+
+    ids = [int(i) for i in (source_info_ids or []) if i is not None]
+    if not ids:
+        logger.error("insert_hold_record_and_link_from_dirty: 无源 hold_info ID")
+        return None
+
+    def _note_fail(reason: str):
+        remark = (str(reason).strip() if reason else '') or 'manual create failed'
+        if len(remark) > 512:
+            remark = remark[:512]
+        id_binds_f = {f'id{i}': v for i, v in enumerate(ids)}
+        id_ph_f = ', '.join(f':id{i}' for i in range(len(ids)))
+        sql_f = f"""
+            UPDATE {info_tbl}
+            SET REMARK = :remark
+            WHERE ID IN ({id_ph_f})
+              AND HOLD_RECORD_ID = :dirty_id
+        """
+        conn_f = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+        try:
+            with conn_f.cursor() as cur:
+                cur.execute(
+                    sql_f,
+                    {
+                        'remark': remark,
+                        'dirty_id': HOLD_RECORD_ID_DIRTY,
+                        **id_binds_f,
+                    },
+                )
+                conn_f.commit()
+            logger.warning(
+                f"手动提 record 失败，已回写 REMARK，原因: {remark}，ids={ids}"
+            )
+        except Exception as e:
+            conn_f.rollback()
+            logger.error(f"回写手动创建失败原因失败: {e}", exc_info=True)
+        finally:
+            conn_f.close()
+        return None
+
+    required = (
+        'PRODUCT_ID', 'STATION', 'EQUIP_ID', 'LOT_ID', 'WAFER_ID',
+        'SOURCE', 'RECORD_TYPE', 'STATUS',
+    )
+    missing = [k for k in required if record.get(k) is None]
+    if missing:
+        logger.error(
+            f"insert_hold_record_and_link_from_dirty: 缺少必填字段 {missing}"
+        )
+        return _note_fail(f"缺少必填字段 {missing}")
+
+    dispose_source = 'JDY' if int(record['SOURCE']) == 1 else 'SYS'
+
+    insert_record_sql = f"""
+        INSERT INTO {record_tbl} (
+            ID,
+            PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
+            HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID,
+            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM
+        ) VALUES (
+            :new_id,
+            :product_id, :station, :equip_id, :lot_id, :wafer_id,
+            :hold_code, :hold_reason, :source, :second_code, :route_id,
+            :grade_num, :record_type, :status, :hold_dttm
+        )
+    """
+    lookup_owner_sql = """
+        SELECT PRO_ENG_ID
+        FROM PRODUCT_INFO
+        WHERE PRODUCT_ID = :product_id
+          AND ROWNUM = 1
+    """
+    insert_circ_sql = """
+        INSERT INTO CIRCULATION_HISTORY (
+            ID,
+            HOLD_RECORD_ID,
+            DISPOSED_OWNER_ID,
+            DISPOSE,
+            NEXT_OWNER_ID,
+            DISPOSE_SOURCE,
+            DISPOSE_DTTM,
+            DISPOSE_TYPE,
+            DISPOSE_DETAIL
+        ) VALUES (
+            :circ_id,
+            :hold_record_id,
+            1,
+            0,
+            :next_owner_id,
+            :dispose_source,
+            SYSDATE,
+            0,
+            :dispose_detail
+        )
+    """
+    update_last_circ_sql = f"""
+        UPDATE {record_tbl}
+        SET LAST_CIRCULATION_ID = :circ_id
+        WHERE ID = :record_id
+    """
+
+    id_binds = {f'id{i}': v for i, v in enumerate(ids)}
+    id_ph = ', '.join(f':id{i}' for i in range(len(ids)))
+    update_info_sql = f"""
+        UPDATE {info_tbl}
+        SET HOLD_RECORD_ID = :record_id,
+            REMARK = NULL
+        WHERE ID IN ({id_ph})
+          AND HOLD_RECORD_ID = :dirty_id
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            new_id = _next_positive_seq(cursor, 'FT_HOLD_RECORD_SEQ')
+            cursor.execute(
+                insert_record_sql,
+                {
+                    'new_id': new_id,
+                    'product_id': record['PRODUCT_ID'],
+                    'station': record['STATION'],
+                    'equip_id': record['EQUIP_ID'],
+                    'lot_id': record['LOT_ID'],
+                    'wafer_id': record['WAFER_ID'],
+                    'hold_code': record.get('HOLD_CODE'),
+                    'hold_reason': record.get('HOLD_REASON'),
+                    'source': record['SOURCE'],
+                    'second_code': record.get('SECOND_CODE'),
+                    'route_id': record.get('ROUTE_ID'),
+                    'grade_num': record.get('GRADE_NUM'),
+                    'record_type': record['RECORD_TYPE'],
+                    'status': record['STATUS'],
+                    'hold_dttm': record.get('HOLD_DTTM'),
+                },
+            )
+
+            cursor.execute(lookup_owner_sql, {'product_id': record['PRODUCT_ID']})
+            owner_row = cursor.fetchone()
+            next_owner_id = 1
+            if owner_row and owner_row[0] is not None:
+                next_owner_id = int(owner_row[0])
+
+            circ_id = _next_positive_seq(cursor, 'SEQ_CIRCULATION')
+            cursor.execute(
+                insert_circ_sql,
+                {
+                    'circ_id': circ_id,
+                    'hold_record_id': new_id,
+                    'next_owner_id': next_owner_id,
+                    'dispose_source': dispose_source,
+                    'dispose_detail': None,
+                },
+            )
+            cursor.execute(
+                update_last_circ_sql,
+                {'circ_id': circ_id, 'record_id': new_id},
+            )
+
+            cursor.execute(
+                update_info_sql,
+                {
+                    'record_id': new_id,
+                    'dirty_id': HOLD_RECORD_ID_DIRTY,
+                    **id_binds,
+                },
+            )
+            linked = cursor.rowcount or 0
+            if linked <= 0:
+                connection.rollback()
+                logger.error(
+                    f"手动提 record id={new_id} 插入成功但回写脏 hold_info "
+                    f"影响 0 行，已回滚；ids={ids}"
+                )
+                return _note_fail("回写脏 hold_info HOLD_RECORD_ID 影响 0 行")
+            if linked < len(ids):
+                connection.rollback()
+                logger.error(
+                    f"手动提 record：期望回写 {len(ids)} 行，实际 {linked}，已回滚"
+                )
+                return _note_fail(
+                    f"部分源行已非脏数据，回写 {linked}/{len(ids)}，已回滚"
+                )
+
+            connection.commit()
+            op = f", operator={operator}" if operator else ''
+            logger.info(
+                f"手动提 {record_tbl} id={new_id} 成功{op}, "
+                f"wafer={record['WAFER_ID']}, circulation_id={circ_id}, "
+                f"回写脏 {info_tbl} {linked}/{len(ids)} 行, ids={ids}"
+            )
+            return new_id
+    except Exception as e:
+        connection.rollback()
+        logger.error(f"手动提 hold_record 失败: {e}", exc_info=True)
+        return _note_fail(str(e))
     finally:
         connection.close()
 
