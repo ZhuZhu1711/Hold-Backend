@@ -125,8 +125,8 @@
             <div class="filters">
                 <input id="hold_record_id" placeholder="Record ID" style="min-width:110px;" />
                 <input id="product_id" placeholder="型号 PRODUCT_ID" />
-                <input id="wafer_id" placeholder="Wafer" />
                 <input id="lot_id" placeholder="Lot" />
+                <input id="wafer_id" placeholder="Wafer" />
                 <select id="dispose">
                     <option value="">全部行为</option>
                     <option value="0">0 创建</option>
@@ -152,18 +152,19 @@
                             <th>流转ID</th>
                             <th>Record</th>
                             <th>型号</th>
-                            <th>Wafer</th>
                             <th>Lot</th>
+                            <th>Wafer</th>
                             <th>站点</th>
                             <th>行为</th>
                             <th>经办人</th>
                             <th>当前owner</th>
                             <th>处置时间</th>
-                            <th>备注</th>
+                            <th>处置详情</th>
+                            <th>工程备注</th>
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="11" class="empty">加载中...</td></tr>
+                        <tr><td colspan="12" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -260,7 +261,7 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="11" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="12" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     document.getElementById('pager').innerHTML = '';
                     return;
                 }
@@ -274,7 +275,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="11" class="empty">暂无流转记录</td></tr>';
+                        '<tr><td colspan="12" class="empty">暂无流转记录</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => `
@@ -286,14 +287,15 @@
                             </button>
                         </td>
                         <td>${esc(r.PRODUCT_ID)}</td>
-                        <td>${esc(r.WAFER_ID)}</td>
                         <td>${esc(r.LOT_ID)}</td>
+                        <td>${esc(r.WAFER_ID)}</td>
                         <td>${esc(r.STATION)}</td>
                         <td>${disposeBadge(r.DISPOSE, r.DISPOSE_LABEL)}</td>
                         <td>${esc(r.DISPOSED_OWNER_NAME || r.DISPOSED_OWNER_ID)}</td>
                         <td>${esc(r.NEXT_OWNER_NAME || r.NEXT_OWNER_ID || '-')}</td>
                         <td>${esc(r.DISPOSE_DTTM || '-')}</td>
                         <td class="detail">${esc(r.DISPOSE_DETAIL || '')}</td>
+                        <td class="detail">${esc(r.DISPOSE_NOTE || '')}</td>
                     </tr>
                 `).join('');
             } catch (e) {
@@ -328,8 +330,8 @@
 
                 const fields = [
                     ['型号', record.PRODUCT_ID],
-                    ['Wafer', record.WAFER_ID],
                     ['Lot', record.LOT_ID],
+                    ['Wafer', record.WAFER_ID],
                     ['站点', record.STATION],
                     ['设备', record.EQUIP_ID],
                     ['Hold Code', record.HOLD_CODE],
@@ -352,7 +354,8 @@
                             ${disposeBadge(c.DISPOSE, c.DISPOSE_LABEL)}
                             &nbsp;${esc(c.DISPOSED_OWNER_NAME || c.DISPOSED_OWNER_ID)}
                             → ${esc(c.NEXT_OWNER_NAME || c.NEXT_OWNER_ID || '-')}
-                            ${c.DISPOSE_DETAIL ? '<div class="detail" style="margin-top:4px;">备注: ' + esc(c.DISPOSE_DETAIL) + '</div>' : ''}
+                            ${c.DISPOSE_DETAIL ? '<div class="detail" style="margin-top:4px;">处置详情: ' + esc(c.DISPOSE_DETAIL) + '</div>' : ''}
+                            ${c.DISPOSE_NOTE ? '<div class="detail" style="margin-top:4px;">工程备注: ' + esc(c.DISPOSE_NOTE) + '</div>' : ''}
                         </div>
                     </div>
                 `).join('');

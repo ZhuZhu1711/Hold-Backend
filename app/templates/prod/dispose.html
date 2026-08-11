@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>生产处置</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            max-width: 820px;
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .summary {
+            background: #f8f9fa; border-radius: 6px; padding: 12px 14px;
+            font-size: 13px; line-height: 1.6; margin-bottom: 18px;
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 16px;
+        }
+        .summary .k { color: #888; font-size: 12px; }
+        .summary .v { color: #222; word-break: break-word; }
+        .section-title {
+            font-size: 14px; font-weight: 600; margin: 18px 0 10px; color: #333;
+            border-left: 3px solid #007bff; padding-left: 8px;
+        }
+        .action-list { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-bottom: 8px; }
+        .action-list label {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 14px; cursor: pointer; user-select: none;
+        }
+        .action-list input { accent-color: #007bff; }
+        .form-row { margin-bottom: 12px; }
+        .form-row label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .form-row textarea {
+            width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px; font-family: inherit; min-height: 72px; resize: vertical;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+        .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+        .hint { font-size: 12px; color: #888; margin-top: 6px; }
+        .err { color: #dc3545; font-size: 13px; margin-top: 8px; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .page-actions {
+            display: flex; justify-content: flex-end; gap: 10px;
+            margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;
+        }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            background: #ff9800; color: #fff; font-size: 12px;
+        }
+        .badge-muted { background: #6c757d; }
+        .d-1 { background: #28a745; }
+        .d-2 { background: #fd7e14; }
+        .d-3 { background: #17a2b8; }
+        .d-5 { background: #6610f2; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>生产</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/prod/">工作台</a></li>
+            <li class="active"><a href="/prod/holds">Hold Record</a></li>
+            <li><a href="/prod/circulations">Hold 流转</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>生产处置</h1>
+            <p class="sub">按 dispose_api：分析(返回) / 回退 / 关闭。确认后流转离开生产节点或关闭记录。</p>
+            <div id="loadErr" class="err" style="display:none;"></div>
+            <div id="content" class="empty">加载中...</div>
+        </div>
+    </main>
+
+    <script>
+        const RECORD_ID = {{ record_id|int }};
+        const DISPOSE_ANALYZE_RETURN = 66;
+        const DISPOSE_ROLLBACK = 8;
+        const DISPOSE_CLOSE = 99;
+
+        let record = null;
+
+        function esc(v) {
+            return String(v ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;');
+        }
+
+        function selectedDispose() {
+            const el = document.querySelector('input[name=dispose]:checked');
+            return el ? Number(el.value) : DISPOSE_ANALYZE_RETURN;
+        }
+
+        function engDisposeBadge() {
+            const code = Number(record && record.LAST_DISPOSE);
+            const cls = [1, 2, 3, 5].includes(code) ? ('d-' + code) : 'badge-muted';
+            const label = (record && record.LAST_DISPOSE_LABEL) || '-';
+            return `<span class="badge ${cls}">${esc(label)}</span>`;
+        }
+
+        function render() {
+            const can = !!(record && record.CAN_DISPOSE);
+            const canAnalyzeReturn = !!(record && record.CAN_ANALYZE_RETURN);
+            const statusBadge = record.IS_CLOSED
+                ? '<span class="badge badge-muted">已关闭</span>'
+                : (can ? '<span class="badge">待生产处置</span>' : '<span class="badge badge-muted">不可处置</span>');
+
+            const defaultDispose = canAnalyzeReturn ? DISPOSE_ANALYZE_RETURN : DISPOSE_ROLLBACK;
+            const analyzeReturnLabel = canAnalyzeReturn
+                ? `<label><input type="radio" name="dispose" value="${DISPOSE_ANALYZE_RETURN}" ${defaultDispose === DISPOSE_ANALYZE_RETURN ? 'checked' : ''} ${can ? '' : 'disabled'} /> 分析(返回)</label>`
+                : `<label title="仅工程师已执行「分析」后可用" style="opacity:.55;cursor:not-allowed;">
+                    <input type="radio" name="dispose" value="${DISPOSE_ANALYZE_RETURN}" disabled /> 分析(返回)
+                   </label>`;
+
+            document.getElementById('content').innerHTML = `
+                <div class="summary">
+                    <div><div class="k">Record</div><div class="v">#${esc(record.ID)} ${statusBadge}</div></div>
+                    <div><div class="k">处置单类型</div><div class="v">${esc(record.RECORD_TYPE_NAME || '-')}</div></div>
+                    <div><div class="k">型号</div><div class="v">${esc(record.PRODUCT_ID || '-')}</div></div>
+                    <div><div class="k">Lot / Wafer</div><div class="v">${esc(record.LOT_ID || '-')} / ${esc(record.WAFER_ID || '-')}</div></div>
+                    <div><div class="k">站点/设备</div><div class="v">${esc(record.STATION || '-')} / ${esc(record.EQUIP_ID || '-')}</div></div>
+                    <div><div class="k">工程师处置</div><div class="v">${engDisposeBadge()}</div></div>
+                    <div><div class="k">处置详情</div><div class="v">${esc(record.LAST_DISPOSE_DETAIL || '-')}</div></div>
+                    <div><div class="k">工程备注</div><div class="v">${esc(record.LAST_DISPOSE_NOTE || '-')}</div></div>
+                    <div><div class="k">等级/数量</div><div class="v">${esc(record.GRADE_NUM_DISPLAY || record.GRADE_NUM || '-')}</div></div>
+                </div>
+
+                <div class="section-title">处置方式</div>
+                <div class="action-list">
+                    ${analyzeReturnLabel}
+                    <label><input type="radio" name="dispose" value="${DISPOSE_ROLLBACK}" ${defaultDispose === DISPOSE_ROLLBACK ? 'checked' : ''} ${can ? '' : 'disabled'} /> 回退</label>
+                    <label><input type="radio" name="dispose" value="${DISPOSE_CLOSE}" ${can ? '' : 'disabled'} /> 关闭</label>
+                </div>
+                <p class="hint">分析(返回)仅在工程师已执行「分析」后可选；回退交回工程师；关闭结束流转。</p>
+
+                <div class="form-row" style="margin-top:14px;">
+                    <label>备注（可选）</label>
+                    <textarea id="dispose_detail" maxlength="1024" placeholder="可选说明" ${can ? '' : 'disabled'}></textarea>
+                </div>
+
+                <div id="submitErr" class="err"></div>
+                <div class="page-actions">
+                    <button type="button" class="btn btn-ghost" id="cancelBtn">取消</button>
+                    <button type="button" class="btn ${defaultDispose === DISPOSE_CLOSE ? 'btn-danger' : 'btn-success'}" id="confirmBtn" ${can ? '' : 'disabled'}>确认</button>
+                </div>
+            `;
+
+            document.querySelectorAll('input[name=dispose]').forEach(el => {
+                el.addEventListener('change', () => {
+                    const btn = document.getElementById('confirmBtn');
+                    if (!btn) return;
+                    btn.className = 'btn ' + (selectedDispose() === DISPOSE_CLOSE ? 'btn-danger' : 'btn-success');
+                });
+            });
+            document.getElementById('cancelBtn').addEventListener('click', () => {
+                window.location.href = '/prod/holds';
+            });
+            document.getElementById('confirmBtn').addEventListener('click', submitDispose);
+        }
+
+        async function submitDispose() {
+            const errEl = document.getElementById('submitErr');
+            errEl.textContent = '';
+            if (!record || !record.CAN_DISPOSE) {
+                errEl.textContent = '当前不可处置';
+                return;
+            }
+            const dispose = selectedDispose();
+            if (
+                (dispose === DISPOSE_ANALYZE_RETURN)
+                && !record.CAN_ANALYZE_RETURN
+            ) {
+                errEl.textContent = '分析(返回)仅在工程师已执行「分析」后可用';
+                return;
+            }
+            if (dispose === DISPOSE_CLOSE) {
+                if (!window.confirm('确认关闭该 Hold Record？关闭后不可继续流转。')) return;
+            }
+            const detail = (document.getElementById('dispose_detail').value || '').trim();
+            const body = {
+                hold_record_id: RECORD_ID,
+                dispose,
+                dispose_detail: detail || null,
+            };
+            const btn = document.getElementById('confirmBtn');
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/prod/api/dispose', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    errEl.textContent = json.msg || '处置失败';
+                    btn.disabled = false;
+                    return;
+                }
+                window.location.href = '/prod/holds';
+            } catch (e) {
+                errEl.textContent = '请求失败: ' + e;
+                btn.disabled = false;
+            }
+        }
+
+        async function loadRecord() {
+            try {
+                const resp = await fetch('/prod/api/records/' + RECORD_ID);
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('loadErr').style.display = 'block';
+                    document.getElementById('loadErr').textContent = json.msg || '加载失败';
+                    document.getElementById('content').textContent = '';
+                    return;
+                }
+                record = json.data || {};
+                render();
+            } catch (e) {
+                document.getElementById('loadErr').style.display = 'block';
+                document.getElementById('loadErr').textContent = '请求失败: ' + e;
+                document.getElementById('content').textContent = '';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadRecord);
+    </script>
+</body>
+</html>
