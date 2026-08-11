@@ -1,7 +1,7 @@
 from app import db
 from app.models.testlog import FtWltTestlog
 from sqlalchemy import desc
-from app.utils.FtpPool import testlog_ftp_pool
+from app.utils.FtpPool import testlog_ftp_pool, FtpUnavailableError
 from lxml import etree
 import re
 import os
@@ -113,7 +113,7 @@ def get_testlog_bysite_str(wafer_id: str, step_list: list):
 
 
 def _download_and_parse_testlog(ftp_path: str):
-    """从 FTP 下载 testlog 并按扩展名解析 bysite。"""
+    """从 FTP 下载 testlog 并按扩展名解析 bysite。FTP 不可用时返回 None。"""
     ftp_conn = None
     local_path = None
     try:
@@ -130,12 +130,18 @@ def _download_and_parse_testlog(ftp_path: str):
         if local_path.lower().endswith('xml'):
             return parse_XML(local_path)
         return None
+    except FtpUnavailableError as e:
+        print(f"FTP unavailable, skip testlog download: {e}")
+        return None
     except Exception as e:
         print(e)
         return None
     finally:
         if ftp_conn is not None:
-            ftp_conn.close()
+            try:
+                ftp_conn.close()
+            except Exception:
+                pass
 
 
 # 辅助函数

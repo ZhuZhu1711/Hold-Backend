@@ -196,6 +196,8 @@ def get_holding_records(
                 ON c.ID = r.LAST_CIRCULATION_ID
             LEFT JOIN USERS u
                 ON u.ID = c.NEXT_OWNER_ID
+            LEFT JOIN USERS u_disp
+                ON u_disp.ID = c.DISPOSED_OWNER_ID
         """
 
         count_sql = f"""
@@ -227,7 +229,12 @@ def get_holding_records(
                 r.HOLD_DTTM,
                 c.NEXT_OWNER_ID AS CURRENT_OWNER_ID,
                 c.DISPOSE AS LAST_DISPOSE,
+                c.DISPOSE_DETAIL AS LAST_DISPOSE_DETAIL,
+                c.DISPOSE_NOTE AS LAST_DISPOSE_NOTE,
+                c.DISPOSE_DTTM AS LAST_DISPOSE_DTTM,
+                c.DISPOSED_OWNER_ID AS LAST_DISPOSED_OWNER_ID,
                 u.NAME AS CURRENT_OWNER_NAME,
+                u_disp.NAME AS LAST_DISPOSED_OWNER_NAME,
                 COUNT(i.ID) AS INFO_CNT
             {from_sql}
             {where_sql}
@@ -235,7 +242,8 @@ def get_holding_records(
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
                 r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
-                c.NEXT_OWNER_ID, c.DISPOSE, u.NAME
+                c.NEXT_OWNER_ID, c.DISPOSE, c.DISPOSE_DETAIL, c.DISPOSE_NOTE, c.DISPOSE_DTTM,
+                c.DISPOSED_OWNER_ID, u.NAME, u_disp.NAME
             ORDER BY r.HOLD_DTTM DESC NULLS LAST, r.ID DESC
             OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
         """

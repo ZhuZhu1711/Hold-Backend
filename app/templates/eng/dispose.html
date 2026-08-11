@@ -128,7 +128,6 @@
     <main class="main">
         <div class="card">
             <h1>工程师处置</h1>
-            <p class="sub">选择处置方式后确认。降级/重测按等级操作；放行与可靠性分析对全部等级统一生效。</p>
             <div id="loadErr" class="err" style="display:none;"></div>
             <div id="content" class="empty">加载中...</div>
         </div>
@@ -362,7 +361,7 @@
             const body = { hold_record_id: RECORD_ID, dispose };
 
             if (dispose === DISPOSE_RELEASE) {
-                body.dispose_detail = selectedEngNote();
+                body.dispose_note = selectedEngNote() || null;
             } else if (dispose === DISPOSE_ANALYZE) {
                 const detail = (document.getElementById('dispose_detail').value || '').trim();
                 body.dispose_detail = detail || null;
@@ -373,7 +372,7 @@
                     return;
                 }
                 body.downgrades = downgrades;
-                body.dispose_detail = selectedEngNote();
+                body.dispose_note = selectedEngNote() || null;
             } else if (dispose === DISPOSE_RETEST) {
                 if (retestMode() === 'code') {
                     const code = (document.getElementById('retest_code').value || '').trim();

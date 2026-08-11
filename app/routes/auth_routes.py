@@ -4,9 +4,12 @@ from app.utils.auth_decorators import (
     login_required,
     ROLE_ROOT,
     ROLE_ENGINEER,
+    ROLE_PRODUCTION,
     home_endpoint_for_role,
     current_role_name,
 )
+
+_LOGIN_ALLOWED_ROLES = (ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
 
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/')
@@ -66,8 +69,8 @@ def login_page():
         user = auth_ctrl.authenticate(employee_no, password)
 
         if user:
-            if user.ROLE not in (ROLE_ROOT, ROLE_ENGINEER):
-                flash('权限不足：仅超级管理员或产品工程师可登录后台', 'danger')
+            if user.ROLE not in _LOGIN_ALLOWED_ROLES:
+                flash('权限不足：仅超级管理员、产品工程师或生产可登录后台', 'danger')
             else:
                 _establish_session(
                     user.ID, user.NAME, user.EMPLOYEE_NO, user.ROLE, remember=remember
@@ -105,10 +108,10 @@ def api_login():
         return jsonify({'code': 401, 'msg': msg}), 401
 
     role = user_data.get('role')
-    if role not in (ROLE_ROOT, ROLE_ENGINEER):
+    if role not in _LOGIN_ALLOWED_ROLES:
         return jsonify({
             'code': 403,
-            'msg': '权限不足：仅超级管理员或产品工程师可登录后台',
+            'msg': '权限不足：仅超级管理员、产品工程师或生产可登录后台',
         }), 403
 
     _establish_session(
@@ -140,6 +143,8 @@ def dashboard():
     if session.get('role') != ROLE_ROOT:
         if session.get('role') == ROLE_ENGINEER:
             return redirect(url_for('engineer.dashboard'))
+        if session.get('role') == ROLE_PRODUCTION:
+            return redirect(url_for('production.dashboard'))
         return redirect(url_for('auth.login_page'))
 
     return render_template(

@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>生产节点 Hold Record</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid #dee2e6; }
+        .tab {
+            padding: 10px 18px; border: none; background: transparent; cursor: pointer;
+            font-size: 14px; color: #666; border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .tab:hover { color: #007bff; }
+        .tab.active { color: #007bff; border-bottom-color: #007bff; font-weight: 600; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .filters input {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+            text-decoration: none; display: inline-block;
+        }
+        .btn:hover { background: #0069d9; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
+        .pager {
+            display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            margin-top: 12px; font-size: 13px; color: #555;
+        }
+        .pager .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+        .pager select { padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+        th { background: #f8f9fa; position: sticky; top: 0; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .reason {
+            max-width: 280px; line-height: 1.45; color: #444; white-space: normal;
+        }
+        .reason .line { display: block; word-break: break-word; }
+        .site-equip { white-space: nowrap; }
+        .site-equip .equip { color: #888; font-size: 12px; }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            background: #28a745; color: #fff; font-size: 12px; white-space: nowrap;
+        }
+        .badge-muted { background: #6c757d; }
+        .d-1 { background: #28a745; }
+        .d-2 { background: #fd7e14; }
+        .d-3 { background: #17a2b8; }
+        .d-5 { background: #6610f2; }
+        .d-other { background: #007bff; }
+        .detail { max-width: 220px; word-break: break-word; color: #555; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>生产</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/prod/">工作台</a></li>
+            <li class="active"><a href="/prod/holds">Hold Record</a></li>
+            <li><a href="/prod/circulations">Hold 流转</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>生产节点 Hold Record</h1>
+            <p class="sub">仅显示当前流转节点在生产、仍在线 hold 的记录；可查看工程师处置结论、执行生产处置（分析返回/回退/关闭），并导出 xlsx。</p>
+
+            <div class="tabs" id="tabs">
+                <button type="button" class="tab active" data-type="0" onclick="switchTab(0)">FT异常反馈单</button>
+                <button type="button" class="tab" data-type="1" onclick="switchTab(1)">FVI异常反馈单</button>
+                <button type="button" class="tab" data-type="2" onclick="switchTab(2)">WLT异常反馈单</button>
+            </div>
+
+            <div class="filters">
+                <input id="product_id" placeholder="型号 PRODUCT_ID" />
+                <input id="station" placeholder="站点 STATION" />
+                <input id="keyword" placeholder="Wafer / Lot / Code / Reason" />
+                <button class="btn" onclick="loadData()">查询</button>
+                <button class="btn btn-ghost" onclick="resetFilters()">重置</button>
+                <button class="btn btn-success" onclick="exportXlsx()">导出 xlsx</button>
+            </div>
+            <div class="meta" id="meta">加载中...</div>
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>型号</th>
+                            <th>站点/设备</th>
+                            <th>Lot</th>
+                            <th>Wafer</th>
+                            <th>Hold Code</th>
+                            <th>原因</th>
+                            <th>工程师处置</th>
+                            <th>处置详情</th>
+                            <th>工程备注</th>
+                            <th>处置人</th>
+                            <th>Hold 时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody">
+                        <tr><td colspan="12" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pager" id="pager"></div>
+        </div>
+    </main>
+
+    <script>
+        const REASON_MAX_LEN = 80;
+        let currentPage = 1;
+        let pageSize = 20;
+        let totalPages = 1;
+        let recordType = 0;
+
+        function esc(v) {
+            return String(v ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;');
+        }
+
+        function formatSiteEquip(station, equip) {
+            const s = station || '-';
+            const e = equip || '';
+            if (!e) return esc(s);
+            return `${esc(s)}<div class="equip">${esc(e)}</div>`;
+        }
+
+        function formatReason(raw) {
+            const full = String(raw || '').trim();
+            if (!full) return '-';
+            const parts = full.split('@').map(s => s.trim()).filter(Boolean);
+            const lines = (parts.length ? parts : [full]).map(p => {
+                const shown = p.length > REASON_MAX_LEN ? (p.slice(0, REASON_MAX_LEN) + '…') : p;
+                return `<span class="line" title="${esc(p)}">${esc(shown)}</span>`;
+            });
+            return lines.join('');
+        }
+
+        function disposeBadge(dispose, label) {
+            const code = Number(dispose);
+            const cls = [1, 2, 3, 5].includes(code) ? ('d-' + code) : 'd-other';
+            return `<span class="badge ${cls}">${esc(label || dispose || '-')}</span>`;
+        }
+
+        function switchTab(type) {
+            recordType = Number(type);
+            document.querySelectorAll('.tab').forEach(el => {
+                el.classList.toggle('active', Number(el.dataset.type) === recordType);
+            });
+            loadData(true);
+        }
+
+        function renderPager(total, page, pages, size) {
+            currentPage = page;
+            totalPages = pages;
+            pageSize = size;
+            document.getElementById('pager').innerHTML = `
+                <span>共 ${total} 条 · 第 ${page}/${pages} 页</span>
+                <button class="btn" ${page <= 1 ? 'disabled' : ''} onclick="gotoPage(${page - 1})">上一页</button>
+                <button class="btn" ${page >= pages ? 'disabled' : ''} onclick="gotoPage(${page + 1})">下一页</button>
+                <label>每页
+                    <select onchange="changePageSize(this.value)">
+                        ${[10,20,50,100].map(n =>
+                            `<option value="${n}" ${n === size ? 'selected' : ''}>${n}</option>`
+                        ).join('')}
+                    </select>
+                </label>
+            `;
+        }
+
+        function gotoPage(p) {
+            if (p < 1 || p > totalPages) return;
+            currentPage = p;
+            loadData(false);
+        }
+
+        function changePageSize(size) {
+            pageSize = Number(size) || 20;
+            currentPage = 1;
+            loadData(false);
+        }
+
+        function resetFilters() {
+            document.getElementById('product_id').value = '';
+            document.getElementById('station').value = '';
+            document.getElementById('keyword').value = '';
+            loadData(true);
+        }
+
+        function buildQuery(includePager) {
+            const params = new URLSearchParams({
+                record_type: String(recordType),
+                product_id: document.getElementById('product_id').value.trim(),
+                station: document.getElementById('station').value.trim(),
+                keyword: document.getElementById('keyword').value.trim(),
+            });
+            if (includePager) {
+                params.set('page', String(currentPage));
+                params.set('page_size', String(pageSize));
+            }
+            return params;
+        }
+
+        async function loadData(resetPage = true) {
+            if (resetPage) currentPage = 1;
+            const params = buildQuery(true);
+            document.getElementById('meta').textContent = '查询中...';
+            try {
+                const resp = await fetch('/prod/api/holding_records?' + params.toString());
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('meta').textContent = json.msg || '查询失败';
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="12" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                    document.getElementById('pager').innerHTML = '';
+                    return;
+                }
+                const rows = json.data || [];
+                const total = json.total || 0;
+                const page = json.page || 1;
+                const pages = json.pages || 1;
+                const size = json.page_size || pageSize;
+                document.getElementById('meta').textContent =
+                    `共 ${total} 条 · 第 ${page}/${pages} 页（当前节点：生产）`;
+                renderPager(total, page, pages, size);
+                if (!rows.length) {
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="12" class="empty">暂无生产节点 Hold</td></tr>';
+                    return;
+                }
+                document.getElementById('tbody').innerHTML = rows.map(r => {
+                    const can = !!r.CAN_DISPOSE;
+                    const action = can
+                        ? `<a class="btn btn-success" style="padding:4px 10px;font-size:12px;" href="/prod/dispose/${esc(r.ID)}">处置</a>`
+                        : `<span class="badge badge-muted">不可处置</span>`;
+                    return `
+                    <tr>
+                        <td>${esc(r.PRODUCT_ID)}</td>
+                        <td class="site-equip">${formatSiteEquip(r.STATION, r.EQUIP_ID)}</td>
+                        <td>${esc(r.LOT_ID || '-')}</td>
+                        <td>${esc(r.WAFER_ID || '-')}</td>
+                        <td>${esc(r.HOLD_CODE || '-')}</td>
+                        <td class="reason">${formatReason(r.HOLD_REASON)}</td>
+                        <td>${disposeBadge(r.LAST_DISPOSE, r.LAST_DISPOSE_LABEL)}</td>
+                        <td class="detail">${esc(r.LAST_DISPOSE_DETAIL || '-')}</td>
+                        <td class="detail">${esc(r.LAST_DISPOSE_NOTE || '-')}</td>
+                        <td>${esc(r.LAST_DISPOSED_OWNER_NAME || r.LAST_DISPOSED_OWNER_ID || '-')}</td>
+                        <td>${esc(r.HOLD_DTTM || '-')}</td>
+                        <td>${action}</td>
+                    </tr>`;
+                }).join('');
+            } catch (e) {
+                document.getElementById('meta').textContent = '请求失败: ' + e;
+            }
+        }
+
+        function exportXlsx() {
+            const params = buildQuery(false);
+            window.location.href = '/prod/api/holding_records/export?' + params.toString();
+        }
+
+        document.addEventListener('DOMContentLoaded', () => loadData(true));
+        document.querySelectorAll('.filters input').forEach(el => {
+            el.addEventListener('keyup', ev => { if (ev.key === 'Enter') loadData(true); });
+        });
+    </script>
+</body>
+</html>

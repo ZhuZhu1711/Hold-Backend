@@ -9,11 +9,12 @@ Hold Record 处置流转业务逻辑。
 
 同一事务内：插入 CIRCULATION_HISTORY + 回写 LAST_CIRCULATION_ID / STATUS。
 
-DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成）：
+DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不含工程备注）：
   降级: DG:HA>F;FB>F
   重测(等级): RT:F,HA
   重测(WLT code): RT:CODE=123
-  放行/可靠性分析: 可选自由备注
+  可靠性分析等自由备注：可写入 DISPOSE_DETAIL
+DISPOSE_NOTE：工程师处置时选择的工程备注文本（与 DISPOSE_DETAIL 分离）
 """
 import re
 from datetime import date, datetime
@@ -23,7 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
 from app.config import Config
-from app.utils.auth_decorators import ROLE_ROOT
+from app.utils.auth_decorators import ROLE_ROOT, ROLE_PRODUCTION
 from app.utils.database_util import format_wafer_id_display
 
 
@@ -40,6 +41,7 @@ DISPOSE_PROD_ANALYZE_RETURN = 66  # 分析(返回) — 生产
 DISPOSE_CLOSE = 99           # 关闭
 
 DISPOSE_DETAIL_MAX_LEN = 1024
+DISPOSE_NOTE_MAX_LEN = 1024
 RECORD_TYPE_WLT = 2
 
 DISPOSE_LABELS = {
@@ -65,11 +67,13 @@ ENGINEER_DISPOSES = {
     # DISPOSE_TRANSFER,  # TODO: 转交方案确定后再开放
 }
 
-# 生产 OP 可发起（当前 owner 应为生产 OP）
+# 生产可发起（当前节点应为生产 OP；见 dispose_api.md「生产处置」）
+# 6 保留兼容旧客户端；UI 以 66/8/99 为准
 PRODUCTION_DISPOSES = {
     DISPOSE_ANALYZE_RETURN,
     DISPOSE_PROD_ANALYZE_RETURN,
     DISPOSE_ROLLBACK,
+    DISPOSE_CLOSE,
 }
 
 # 系统/root 可发起
@@ -205,9 +209,11 @@ def build_dispose_detail(
     record_type=None,
 ):
     """
-    按处置行为生成 DISPOSE_DETAIL。
-    结构化字段优先；放行可用工程备注文本；可靠性分析可用自由备注。
-    降级格式: DG:HA>F;FB>F 或附工程备注 DG:HA>F||备注文本
+    按处置行为生成 DISPOSE_DETAIL（不含工程备注）。
+    降级: DG:HA>F;FB>F
+    重测: RT:F,HA 或 RT:CODE=123
+    可靠性分析等：可用自由备注写入 DISPOSE_DETAIL
+    放行：DISPOSE_DETAIL 为空（工程备注走 DISPOSE_NOTE）
     成功返回 (True, detail_or_None)；失败返回 (False, err_msg)。
     """
     try:
@@ -240,8 +246,6 @@ def build_dispose_detail(
         if not pairs:
             return False, '降级须至少变更一个等级（不能全部保持源→源）'
         detail = 'DG:' + ';'.join(pairs)
-        if free:
-            detail = f'{detail}||{free}'
     elif dispose == DISPOSE_RETEST:
         code_raw = None if retest_code is None else str(retest_code).strip()
         grades = []
@@ -276,15 +280,28 @@ def build_dispose_detail(
             detail = 'RT:' + ','.join(uniq)
         else:
             return False, '重测须选择等级或填写 code'
-    elif dispose in (DISPOSE_RELEASE, DISPOSE_ANALYZE):
+    elif dispose == DISPOSE_RELEASE:
+        # 放行无规则化详情；工程备注写入 DISPOSE_NOTE
+        detail = None
+    elif dispose == DISPOSE_ANALYZE:
         detail = free
     else:
-        # 其它行为（生产/系统）仍允许自由备注
+        # 其它行为（生产/系统）仍允许自由备注进 DISPOSE_DETAIL
         detail = free
 
     if detail is not None and len(detail) > DISPOSE_DETAIL_MAX_LEN:
         return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符'
     return True, detail
+
+
+def normalize_dispose_note(dispose_note):
+    """校验并规范化工程备注；成功 (True, note_or_None)，失败 (False, err)。"""
+    if dispose_note is None:
+        return True, None
+    note = str(dispose_note).strip() or None
+    if note is not None and len(note) > DISPOSE_NOTE_MAX_LEN:
+        return False, f'dispose_note 最长 {DISPOSE_NOTE_MAX_LEN} 字符'
+    return True, note
 
 
 def enrich_record_grades(record):
@@ -323,7 +340,7 @@ def _load_circulation(circ_id):
             SELECT
                 ID, HOLD_RECORD_ID, DISPOSED_OWNER_ID, DISPOSE,
                 NEXT_OWNER_ID, DISPOSE_SOURCE, DISPOSE_DTTM,
-                DISPOSE_TYPE, DISPOSE_DETAIL
+                DISPOSE_TYPE, DISPOSE_DETAIL, DISPOSE_NOTE
             FROM CIRCULATION_HISTORY
             WHERE ID = :cid
         """),
@@ -360,33 +377,61 @@ def _resolve_owners(dispose: int, product_id: str, actor_user_id: int):
         return pro_eng_id, prod_op
 
     if dispose == DISPOSE_CLOSE:
+        # 生产关闭：DISPOSED_OWNER_ID=生产 OP；系统/root 关闭：系统用户
+        if int(actor_user_id) == prod_op:
+            return None, prod_op
         return None, system_id
 
     raise ValueError(f'不支持的处置行为: {dispose}')
 
 
-def _actor_may_dispose(dispose: int, actor_user_id: int, actor_role, current_owner_id):
+def _last_dispose_was_analyze(last_circ) -> bool:
+    """最近一次流转是否为工程师「分析」(5)。生产「分析(返回)」依赖此前置。"""
+    if not last_circ:
+        return False
+    try:
+        return int(last_circ.get('DISPOSE')) == DISPOSE_ANALYZE
+    except (TypeError, ValueError):
+        return False
+
+
+def _actor_may_dispose(dispose: int, actor_user_id: int, actor_role, current_owner_id, last_circ=None):
     """校验操作人是否有权执行该处置。"""
     is_root = actor_role == ROLE_ROOT
+    is_prod_role = actor_role == ROLE_PRODUCTION
     prod_op = _production_op_id()
 
     if dispose not in USER_DISPOSES:
         return False, f'不支持的处置行为: {dispose}'
 
-    if dispose in SYSTEM_DISPOSES and not is_root:
-        return False, '关闭仅系统/管理员可执行'
+    # 生产「分析(返回)」仅当前置流转为工程师「分析」(5) 时可用
+    if dispose in (DISPOSE_ANALYZE_RETURN, DISPOSE_PROD_ANALYZE_RETURN):
+        if not _last_dispose_was_analyze(last_circ):
+            return False, '分析(返回)仅在工程师已执行「分析」后可用'
+
+    # 关闭：root 任意节点可关；生产仅当前节点在生产时可关
+    if dispose == DISPOSE_CLOSE and not is_root and not (
+        dispose in PRODUCTION_DISPOSES and (is_prod_role or int(actor_user_id) == prod_op)
+    ):
+        return False, '关闭仅系统/管理员或生产可执行'
 
     if not is_root:
         if current_owner_id is None:
             return False, '记录无当前负责人，无法处置'
+
+        if dispose in PRODUCTION_DISPOSES:
+            is_prod_actor = is_prod_role or int(actor_user_id) == prod_op
+            if not is_prod_actor:
+                return False, '仅生产可执行该处置'
+            if int(current_owner_id) != prod_op:
+                return False, '仅当前节点在生产时可处置'
+            return True, ''
+
         if int(actor_user_id) != int(current_owner_id):
             return False, '仅当前负责人可处置该记录'
 
         if dispose in ENGINEER_DISPOSES and int(actor_user_id) == prod_op:
             return False, '生产账号不可执行工程师处置'
-
-        if dispose in PRODUCTION_DISPOSES and int(actor_user_id) != prod_op:
-            return False, '仅生产 OP 可执行该处置'
 
     return True, ''
 
@@ -426,11 +471,12 @@ def dispose_engineer_record(
     actor_user_id,
     actor_role,
     dispose_detail=None,
+    dispose_note=None,
     downgrades=None,
     retest_grades=None,
     retest_code=None,
 ):
-    """工程师处置：仅允许 ENGINEER_DISPOSES。"""
+    """工程师处置：仅允许 ENGINEER_DISPOSES。dispose_note 为工程备注。"""
     try:
         dispose = int(dispose)
     except (TypeError, ValueError):
@@ -443,6 +489,7 @@ def dispose_engineer_record(
         actor_user_id=actor_user_id,
         actor_role=actor_role,
         dispose_detail=dispose_detail,
+        dispose_note=dispose_note,
         downgrades=downgrades,
         retest_grades=retest_grades,
         retest_code=retest_code,
@@ -451,20 +498,29 @@ def dispose_engineer_record(
 
 def dispose_production_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_detail=None):
     """
-    生产处置：仅允许 PRODUCTION_DISPOSES。
-    供外部生产系统联动调用（本后台不实现生产处置 UI）。
+    生产处置：仅允许 PRODUCTION_DISPOSES（66 分析返回 / 8 回退 / 99 关闭；6 兼容）。
+    供生产工作台与外部生产系统调用。
+    生产角色代操作时，流转表仍记 DISPOSED_OWNER_ID=生产 OP。
     """
     try:
         dispose = int(dispose)
+        actor_user_id = int(actor_user_id)
     except (TypeError, ValueError):
         return False, 'dispose 无效', None
     if dispose not in PRODUCTION_DISPOSES:
         return False, '非生产处置行为', None
+
+    effective_actor = actor_user_id
+    effective_role = actor_role
+    if actor_role == ROLE_PRODUCTION:
+        effective_actor = _production_op_id()
+        effective_role = ROLE_PRODUCTION
+
     return dispose_record(
         hold_record_id=hold_record_id,
         dispose=dispose,
-        actor_user_id=actor_user_id,
-        actor_role=actor_role,
+        actor_user_id=effective_actor,
+        actor_role=effective_role,
         dispose_detail=dispose_detail,
     )
 
@@ -499,7 +555,7 @@ def get_circulations(hold_record_id):
                 SELECT
                     c.ID, c.HOLD_RECORD_ID, c.DISPOSED_OWNER_ID, c.DISPOSE,
                     c.NEXT_OWNER_ID, c.DISPOSE_SOURCE, c.DISPOSE_DTTM,
-                    c.DISPOSE_TYPE, c.DISPOSE_DETAIL,
+                    c.DISPOSE_TYPE, c.DISPOSE_DETAIL, c.DISPOSE_NOTE,
                     u1.NAME AS DISPOSED_OWNER_NAME,
                     u2.NAME AS NEXT_OWNER_NAME
                 FROM CIRCULATION_HISTORY c
@@ -585,6 +641,7 @@ def query_circulations(
                     OR UPPER(r.PRODUCT_ID) LIKE UPPER(:keyword)
                     OR UPPER(r.HOLD_CODE) LIKE UPPER(:keyword)
                     OR UPPER(NVL(c.DISPOSE_DETAIL, '')) LIKE UPPER(:keyword)
+                    OR UPPER(NVL(c.DISPOSE_NOTE, '')) LIKE UPPER(:keyword)
                 )
             """
             params['keyword'] = f"%{str(keyword).strip()}%"
@@ -614,7 +671,7 @@ def query_circulations(
             SELECT
                 c.ID, c.HOLD_RECORD_ID, c.DISPOSED_OWNER_ID, c.DISPOSE,
                 c.NEXT_OWNER_ID, c.DISPOSE_SOURCE, c.DISPOSE_DTTM,
-                c.DISPOSE_TYPE, c.DISPOSE_DETAIL,
+                c.DISPOSE_TYPE, c.DISPOSE_DETAIL, c.DISPOSE_NOTE,
                 u1.NAME AS DISPOSED_OWNER_NAME,
                 u2.NAME AS NEXT_OWNER_NAME,
                 r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
@@ -748,6 +805,7 @@ def dispose_record(
     actor_user_id,
     actor_role,
     dispose_detail=None,
+    dispose_note=None,
     downgrades=None,
     retest_grades=None,
     retest_code=None,
@@ -755,7 +813,8 @@ def dispose_record(
     """
     对 hold_record 执行一次处置流转。
     成功返回 (True, msg, {circulation_id, next_owner_id, ...})
-    工程师降级/重测优先用结构化参数生成 DISPOSE_DETAIL。
+    DISPOSE_DETAIL：规则化详情（降级/重测等）或非工程备注自由文本。
+    DISPOSE_NOTE：工程师工程备注。
     """
     try:
         rid = int(hold_record_id)
@@ -772,13 +831,46 @@ def dispose_record(
         if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
 
+        ok_note, note_or_err = normalize_dispose_note(dispose_note)
+        if not ok_note:
+            return False, note_or_err, None
+        note = note_or_err
+
         has_structured = (
             downgrades is not None
             or retest_grades is not None
             or retest_code is not None
         )
+
+        # 兼容旧客户端：放行/降级把工程备注塞在 dispose_detail
+        if (
+            dispose in (DISPOSE_RELEASE, DISPOSE_DOWNGRADE)
+            and note is None
+            and dispose_detail is not None
+            and not has_structured
+            and dispose == DISPOSE_RELEASE
+        ):
+            ok_note, note_or_err = normalize_dispose_note(dispose_detail)
+            if not ok_note:
+                return False, note_or_err, None
+            note = note_or_err
+            dispose_detail = None
+        elif (
+            dispose == DISPOSE_DOWNGRADE
+            and note is None
+            and has_structured
+            and dispose_detail is not None
+            and not str(dispose_detail).strip().upper().startswith('DG:')
+        ):
+            # 旧客户端：downgrades + dispose_detail 作为工程备注
+            ok_note, note_or_err = normalize_dispose_note(dispose_detail)
+            if not ok_note:
+                return False, note_or_err, None
+            note = note_or_err
+            dispose_detail = None
+
         if dispose in (DISPOSE_DOWNGRADE, DISPOSE_RETEST) and not has_structured and dispose_detail:
-            # 兼容旧客户端：直接传入已拼好的详情
+            # 兼容旧客户端：直接传入已拼好的详情（可能含历史 ||备注，原样写入 DETAIL）
             detail = str(dispose_detail).strip() or None
             if detail and len(detail) > DISPOSE_DETAIL_MAX_LEN:
                 return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
@@ -806,7 +898,9 @@ def dispose_record(
         last_circ = _load_circulation(record.get('LAST_CIRCULATION_ID'))
         current_owner_id = last_circ.get('NEXT_OWNER_ID') if last_circ else None
 
-        ok, err = _actor_may_dispose(dispose, actor_user_id, actor_role, current_owner_id)
+        ok, err = _actor_may_dispose(
+            dispose, actor_user_id, actor_role, current_owner_id, last_circ=last_circ,
+        )
         if not ok:
             return False, err, None
 
@@ -828,7 +922,8 @@ def dispose_record(
                     DISPOSE_SOURCE,
                     DISPOSE_DTTM,
                     DISPOSE_TYPE,
-                    DISPOSE_DETAIL
+                    DISPOSE_DETAIL,
+                    DISPOSE_NOTE
                 ) VALUES (
                     :circ_id,
                     :hold_record_id,
@@ -838,7 +933,8 @@ def dispose_record(
                     :dispose_source,
                     SYSDATE,
                     :dispose_type,
-                    :dispose_detail
+                    :dispose_detail,
+                    :dispose_note
                 )
             """),
             {
@@ -850,6 +946,7 @@ def dispose_record(
                 'dispose_source': 'SYS',
                 'dispose_type': dispose,
                 'dispose_detail': detail,
+                'dispose_note': note,
             },
         )
 
@@ -871,6 +968,8 @@ def dispose_record(
             'dispose_label': DISPOSE_LABELS.get(dispose, str(dispose)),
             'disposed_owner_id': disposed_owner_id,
             'next_owner_id': next_owner_id,
+            'dispose_detail': detail,
+            'dispose_note': note,
             'status': dispose,
         }
     except ValueError as e:

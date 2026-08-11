@@ -12,7 +12,9 @@ from app.utils.auth_decorators import (
     role_required,
     ROLE_ROOT,
     ROLE_ENGINEER,
+    ROLE_PRODUCTION,
     is_root,
+    is_production,
     current_role_name,
 )
 
@@ -58,13 +60,15 @@ def api_dispose():
     Body JSON:
       hold_record_id  (必填)
       dispose         (必填，工程师：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
-      dispose_detail  (可选，备注，最长 1024)
+      dispose_detail  (可选，规则化详情/非工程备注，最长 1024)
+      dispose_note    (可选，工程备注，最长 1024)
       downgrades / retest_grades / retest_code 同工程师处置 API
     """
     data = request.get_json(silent=True) or {}
     hold_record_id = data.get('hold_record_id')
     dispose = data.get('dispose')
     dispose_detail = data.get('dispose_detail')
+    dispose_note = data.get('dispose_note')
     downgrades = data.get('downgrades')
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
@@ -81,6 +85,7 @@ def api_dispose():
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             dispose_detail=dispose_detail,
+            dispose_note=dispose_note,
             downgrades=downgrades,
             retest_grades=retest_grades,
             retest_code=retest_code,
@@ -92,6 +97,7 @@ def api_dispose():
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             dispose_detail=dispose_detail,
+            dispose_note=dispose_note,
             downgrades=downgrades,
             retest_grades=retest_grades,
             retest_code=retest_code,
@@ -111,12 +117,12 @@ def api_dispose():
 @login_required
 def api_production_dispose():
     """
-    生产处置接口（供外部生产系统联动调用，本后台无生产处置 UI）。
-    需先 /api/login；操作人应为生产 OP（USERS.ID=PRODUCTION_OP_ID，默认 181），root 可代操作。
+    生产处置接口（供生产工作台与外部生产系统联动调用）。
+    需先登录；生产角色或生产 OP（USERS.ID=PRODUCTION_OP_ID）可操作，root 可代操作。
 
     Body JSON:
       hold_record_id  (必填)
-      dispose         (必填：6 分析返回 / 66 分析返回 / 8 回退)
+      dispose         (必填：66 分析返回 / 8 回退 / 99 关闭；6 兼容)
       dispose_detail  (可选，备注，最长 1024)
 
     规则见 dispose_api.md「生产处置」。
@@ -140,7 +146,7 @@ def api_production_dispose():
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
 
-    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非生产')
+    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非生产', '关闭', '分析')
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
@@ -198,10 +204,11 @@ def api_circulations(record_id):
 
 
 @dispose_bp.route('/api/pending_records', methods=['GET'])
-@role_required(ROLE_ROOT, ROLE_ENGINEER)
+@role_required(ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
 def api_pending_records():
     """
     待办列表：最新流转 NEXT_OWNER_ID = 当前用户（root 默认全量，可传 owner_id 过滤）。
+    生产角色固定 owner_id = PRODUCTION_OP_ID。
     Query: product_id, keyword, page, page_size, owner_id(仅 root)
     """
     product_id = request.args.get('product_id', '').strip()
@@ -219,6 +226,9 @@ def api_pending_records():
                 owner_id = int(owner_raw)
             except (TypeError, ValueError):
                 return jsonify({'code': 400, 'msg': 'owner_id 无效', 'data': [], 'total': 0}), 400
+    elif is_production():
+        from app.config import Config
+        owner_id = int(getattr(Config, 'PRODUCTION_OP_ID', 181) or 181)
     else:
         owner_id = actor_user_id
 
