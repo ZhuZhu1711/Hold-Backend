@@ -231,6 +231,7 @@ def get_holding_records(
                 c.DISPOSE AS LAST_DISPOSE,
                 c.DISPOSE_DETAIL AS LAST_DISPOSE_DETAIL,
                 c.DISPOSE_NOTE AS LAST_DISPOSE_NOTE,
+                c.DISPOSE_MANUAL_NOTE AS LAST_DISPOSE_MANUAL_NOTE,
                 c.DISPOSE_DTTM AS LAST_DISPOSE_DTTM,
                 c.DISPOSED_OWNER_ID AS LAST_DISPOSED_OWNER_ID,
                 u.NAME AS CURRENT_OWNER_NAME,
@@ -242,7 +243,8 @@ def get_holding_records(
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
                 r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
-                c.NEXT_OWNER_ID, c.DISPOSE, c.DISPOSE_DETAIL, c.DISPOSE_NOTE, c.DISPOSE_DTTM,
+                c.NEXT_OWNER_ID, c.DISPOSE, c.DISPOSE_DETAIL, c.DISPOSE_NOTE,
+                c.DISPOSE_MANUAL_NOTE, c.DISPOSE_DTTM,
                 c.DISPOSED_OWNER_ID, u.NAME, u_disp.NAME
             ORDER BY r.HOLD_DTTM DESC NULLS LAST, r.ID DESC
             OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY

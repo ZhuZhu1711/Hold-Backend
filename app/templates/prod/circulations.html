@@ -154,10 +154,11 @@
                             <th>处置时间</th>
                             <th>处置详情</th>
                             <th>工程备注</th>
+                            <th>手输备注</th>
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="12" class="empty">加载中...</td></tr>
+                        <tr><td colspan="13" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -254,7 +255,7 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="12" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="13" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     document.getElementById('pager').innerHTML = '';
                     return;
                 }
@@ -268,7 +269,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="12" class="empty">暂无流转记录</td></tr>';
+                        '<tr><td colspan="13" class="empty">暂无流转记录</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => `
@@ -289,6 +290,7 @@
                         <td>${esc(r.DISPOSE_DTTM || '-')}</td>
                         <td class="detail">${esc(r.DISPOSE_DETAIL || '')}</td>
                         <td class="detail">${esc(r.DISPOSE_NOTE || '')}</td>
+                        <td class="detail">${esc(r.DISPOSE_MANUAL_NOTE || '')}</td>
                     </tr>
                 `).join('');
             } catch (e) {
@@ -349,6 +351,7 @@
                             → ${esc(c.NEXT_OWNER_NAME || c.NEXT_OWNER_ID || '-')}
                             ${c.DISPOSE_DETAIL ? '<div class="detail" style="margin-top:4px;">处置详情: ' + esc(c.DISPOSE_DETAIL) + '</div>' : ''}
                             ${c.DISPOSE_NOTE ? '<div class="detail" style="margin-top:4px;">工程备注: ' + esc(c.DISPOSE_NOTE) + '</div>' : ''}
+                            ${c.DISPOSE_MANUAL_NOTE ? '<div class="detail" style="margin-top:4px;">手输备注: ' + esc(c.DISPOSE_MANUAL_NOTE) + '</div>' : ''}
                         </div>
                     </div>
                 `).join('');

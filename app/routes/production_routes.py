@@ -144,12 +144,14 @@ def api_dispose():
     Body JSON:
       hold_record_id  (必填)
       dispose         (必填：66 分析返回 / 8 回退 / 99 关闭；6 兼容)
-      dispose_detail  (可选备注)
+      dispose_detail  (可选，兼容旧字段)
+      dispose_manual_note (可选，手输备注)
     """
     data = request.get_json(silent=True) or {}
     hold_record_id = data.get('hold_record_id')
     dispose = data.get('dispose')
     dispose_detail = data.get('dispose_detail')
+    dispose_manual_note = data.get('dispose_manual_note')
 
     if hold_record_id is None or dispose is None:
         return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
@@ -161,6 +163,7 @@ def api_dispose():
         actor_user_id=actor_user_id,
         actor_role=actor_role,
         dispose_detail=dispose_detail,
+        dispose_manual_note=dispose_manual_note,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})

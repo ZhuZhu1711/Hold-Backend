@@ -60,8 +60,9 @@ def api_dispose():
     Body JSON:
       hold_record_id  (必填)
       dispose         (必填，工程师：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
-      dispose_detail  (可选，规则化详情/非工程备注，最长 1024)
+      dispose_detail  (可选，规则化详情；一般由服务端生成)
       dispose_note    (可选，工程备注，最长 1024)
+      dispose_manual_note (可选，手输备注，最长 1024)
       downgrades / retest_grades / retest_code 同工程师处置 API
     """
     data = request.get_json(silent=True) or {}
@@ -69,6 +70,7 @@ def api_dispose():
     dispose = data.get('dispose')
     dispose_detail = data.get('dispose_detail')
     dispose_note = data.get('dispose_note')
+    dispose_manual_note = data.get('dispose_manual_note')
     downgrades = data.get('downgrades')
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
@@ -86,6 +88,7 @@ def api_dispose():
             actor_role=actor_role,
             dispose_detail=dispose_detail,
             dispose_note=dispose_note,
+            dispose_manual_note=dispose_manual_note,
             downgrades=downgrades,
             retest_grades=retest_grades,
             retest_code=retest_code,
@@ -98,6 +101,7 @@ def api_dispose():
             actor_role=actor_role,
             dispose_detail=dispose_detail,
             dispose_note=dispose_note,
+            dispose_manual_note=dispose_manual_note,
             downgrades=downgrades,
             retest_grades=retest_grades,
             retest_code=retest_code,
@@ -123,7 +127,8 @@ def api_production_dispose():
     Body JSON:
       hold_record_id  (必填)
       dispose         (必填：66 分析返回 / 8 回退 / 99 关闭；6 兼容)
-      dispose_detail  (可选，备注，最长 1024)
+      dispose_detail  (可选，兼容旧字段；自由备注请用 dispose_manual_note)
+      dispose_manual_note (可选，手输备注，最长 1024)
 
     规则见 dispose_api.md「生产处置」。
     """
@@ -131,6 +136,7 @@ def api_production_dispose():
     hold_record_id = data.get('hold_record_id')
     dispose = data.get('dispose')
     dispose_detail = data.get('dispose_detail')
+    dispose_manual_note = data.get('dispose_manual_note')
 
     if hold_record_id is None or dispose is None:
         return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
@@ -142,6 +148,7 @@ def api_production_dispose():
         actor_user_id=actor_user_id,
         actor_role=actor_role,
         dispose_detail=dispose_detail,
+        dispose_manual_note=dispose_manual_note,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})

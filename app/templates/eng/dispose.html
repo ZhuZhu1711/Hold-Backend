@@ -163,7 +163,6 @@
             document.getElementById('panelEngNote').classList.toggle(
                 'hidden', !(d === DISPOSE_RELEASE || d === DISPOSE_DOWNGRADE)
             );
-            document.getElementById('panelRemark').classList.toggle('hidden', d !== DISPOSE_ANALYZE);
             document.getElementById('panelDowngrade').classList.toggle('hidden', d !== DISPOSE_DOWNGRADE);
             document.getElementById('panelRetest').classList.toggle('hidden', d !== DISPOSE_RETEST);
             if (d === DISPOSE_RETEST) syncRetestMode();
@@ -295,19 +294,11 @@
                         <select id="eng_note" class="note-select" ${can ? '' : 'disabled'}>
                             ${engNoteOptionsHtml()}
                         </select>
-                        <p class="hint">来自该型号 FT_ENG_NOTES；可不选。</p>
-                    </div>
-                </div>
-
-                <div id="panelRemark" class="panel hidden">
-                    <div class="form-row">
-                        <label>备注（可选）</label>
-                        <textarea id="dispose_detail" maxlength="1024" placeholder="可选说明" ${can ? '' : 'disabled'}></textarea>
                     </div>
                 </div>
 
                 <div id="panelDowngrade" class="panel hidden">
-                    <p class="hint" style="margin-bottom:10px;">默认源→源表示不降该等级；改目标等级才会降级（整级全量）。全部未改不可提交。</p>
+                    <p class="hint" style="margin-bottom:10px;">降级操作必须至少变更一个等级（不能全部保持源→源）。</p>
                     <div class="dg-rows" id="dgRows"></div>
                     ${grades.length ? '' : '<div class="hint">无等级数据，无法降级</div>'}
                 </div>
@@ -325,6 +316,13 @@
                             <label>指定 code（数字）</label>
                             <input id="retest_code" type="text" inputmode="numeric" placeholder="例如 123" ${can ? '' : 'disabled'} />
                         </div>
+                    </div>
+                </div>
+
+                <div id="panelManualNote" class="panel">
+                    <div class="form-row">
+                        <label>手输备注（可选）</label>
+                        <textarea id="dispose_manual_note" maxlength="1024" placeholder="" ${can ? '' : 'disabled'}></textarea>
                     </div>
                 </div>
 
@@ -362,9 +360,6 @@
 
             if (dispose === DISPOSE_RELEASE) {
                 body.dispose_note = selectedEngNote() || null;
-            } else if (dispose === DISPOSE_ANALYZE) {
-                const detail = (document.getElementById('dispose_detail').value || '').trim();
-                body.dispose_detail = detail || null;
             } else if (dispose === DISPOSE_DOWNGRADE) {
                 const downgrades = collectDowngrades();
                 if (!downgrades.length) {
@@ -390,6 +385,8 @@
                     body.retest_grades = gs;
                 }
             }
+            const manual = (document.getElementById('dispose_manual_note').value || '').trim();
+            body.dispose_manual_note = manual || null;
 
             const btn = document.getElementById('confirmBtn');
             btn.disabled = true;

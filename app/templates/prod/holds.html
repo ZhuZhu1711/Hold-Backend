@@ -122,13 +122,14 @@
                             <th>工程师处置</th>
                             <th>处置详情</th>
                             <th>工程备注</th>
+                            <th>手输备注</th>
                             <th>处置人</th>
                             <th>Hold 时间</th>
                             <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="12" class="empty">加载中...</td></tr>
+                        <tr><td colspan="13" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -244,7 +245,7 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="12" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="13" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     document.getElementById('pager').innerHTML = '';
                     return;
                 }
@@ -258,7 +259,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="12" class="empty">暂无生产节点 Hold</td></tr>';
+                        '<tr><td colspan="13" class="empty">暂无生产节点 Hold</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => {
@@ -277,6 +278,7 @@
                         <td>${disposeBadge(r.LAST_DISPOSE, r.LAST_DISPOSE_LABEL)}</td>
                         <td class="detail">${esc(r.LAST_DISPOSE_DETAIL || '-')}</td>
                         <td class="detail">${esc(r.LAST_DISPOSE_NOTE || '-')}</td>
+                        <td class="detail">${esc(r.LAST_DISPOSE_MANUAL_NOTE || '-')}</td>
                         <td>${esc(r.LAST_DISPOSED_OWNER_NAME || r.LAST_DISPOSED_OWNER_ID || '-')}</td>
                         <td>${esc(r.HOLD_DTTM || '-')}</td>
                         <td>${action}</td>

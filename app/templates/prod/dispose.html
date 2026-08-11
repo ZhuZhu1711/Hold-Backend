@@ -153,6 +153,7 @@
                     <div><div class="k">工程师处置</div><div class="v">${engDisposeBadge()}</div></div>
                     <div><div class="k">处置详情</div><div class="v">${esc(record.LAST_DISPOSE_DETAIL || '-')}</div></div>
                     <div><div class="k">工程备注</div><div class="v">${esc(record.LAST_DISPOSE_NOTE || '-')}</div></div>
+                    <div><div class="k">手输备注</div><div class="v">${esc(record.LAST_DISPOSE_MANUAL_NOTE || '-')}</div></div>
                     <div><div class="k">等级/数量</div><div class="v">${esc(record.GRADE_NUM_DISPLAY || record.GRADE_NUM || '-')}</div></div>
                 </div>
 
@@ -165,8 +166,8 @@
                 <p class="hint">分析(返回)仅在工程师已执行「分析」后可选；回退交回工程师；关闭结束流转。</p>
 
                 <div class="form-row" style="margin-top:14px;">
-                    <label>备注（可选）</label>
-                    <textarea id="dispose_detail" maxlength="1024" placeholder="可选说明" ${can ? '' : 'disabled'}></textarea>
+                    <label>手输备注（可选）</label>
+                    <textarea id="dispose_manual_note" maxlength="1024" placeholder="任意处置均可填写" ${can ? '' : 'disabled'}></textarea>
                 </div>
 
                 <div id="submitErr" class="err"></div>
@@ -207,11 +208,11 @@
             if (dispose === DISPOSE_CLOSE) {
                 if (!window.confirm('确认关闭该 Hold Record？关闭后不可继续流转。')) return;
             }
-            const detail = (document.getElementById('dispose_detail').value || '').trim();
+            const detail = (document.getElementById('dispose_manual_note').value || '').trim();
             const body = {
                 hold_record_id: RECORD_ID,
                 dispose,
-                dispose_detail: detail || null,
+                dispose_manual_note: detail || null,
             };
             const btn = document.getElementById('confirmBtn');
             btn.disabled = true;

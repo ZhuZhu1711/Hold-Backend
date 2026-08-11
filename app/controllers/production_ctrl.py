@@ -76,6 +76,7 @@ def get_production_dispose_record(hold_record_id):
         record['LAST_DISPOSE'] = last_circ.get('DISPOSE')
         record['LAST_DISPOSE_DETAIL'] = last_circ.get('DISPOSE_DETAIL')
         record['LAST_DISPOSE_NOTE'] = last_circ.get('DISPOSE_NOTE')
+        record['LAST_DISPOSE_MANUAL_NOTE'] = last_circ.get('DISPOSE_MANUAL_NOTE')
         record['LAST_DISPOSE_LABEL'] = dispose_ctrl.DISPOSE_LABELS.get(
             last_circ.get('DISPOSE'),
             str(last_circ.get('DISPOSE') if last_circ.get('DISPOSE') is not None else '-'),
@@ -143,6 +144,7 @@ def export_production_holding_records_xlsx(
         '工程师处置',
         '处置详情',
         '工程备注',
+        '手输备注',
         '处置人',
         '处置时间',
         'Hold 时间',
@@ -164,6 +166,7 @@ def export_production_holding_records_xlsx(
             item.get('LAST_DISPOSE_LABEL') or '',
             item.get('LAST_DISPOSE_DETAIL') or '',
             item.get('LAST_DISPOSE_NOTE') or '',
+            item.get('LAST_DISPOSE_MANUAL_NOTE') or '',
             item.get('LAST_DISPOSED_OWNER_NAME') or item.get('LAST_DISPOSED_OWNER_ID') or '',
             item.get('LAST_DISPOSE_DTTM') or '',
             item.get('HOLD_DTTM') or '',

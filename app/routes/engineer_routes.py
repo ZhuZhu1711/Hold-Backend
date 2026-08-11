@@ -207,8 +207,9 @@ def api_dispose():
     Body JSON:
       hold_record_id  (必填)
       dispose         (必填：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
-      dispose_detail  (可选，可靠性分析等非工程备注文本 / 规则化详情，最长 1024)
+      dispose_detail  (可选，规则化详情；一般由服务端生成 DG:/RT:)
       dispose_note    (可选，工程备注文本，最长 1024)
+      dispose_manual_note (可选，手输备注，最长 1024)
       downgrades      (降级：[{from, to}, ...]，服务端生成 DISPOSE_DETAIL)
       retest_grades   (重测等级列表)
       retest_code     (WLT 按 code 重测，与 retest_grades 互斥，须为数字)
@@ -219,6 +220,7 @@ def api_dispose():
     dispose = data.get('dispose')
     dispose_detail = data.get('dispose_detail')
     dispose_note = data.get('dispose_note')
+    dispose_manual_note = data.get('dispose_manual_note')
     downgrades = data.get('downgrades')
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
@@ -233,6 +235,7 @@ def api_dispose():
         actor_role=session.get('role'),
         dispose_detail=dispose_detail,
         dispose_note=dispose_note,
+        dispose_manual_note=dispose_manual_note,
         downgrades=downgrades,
         retest_grades=retest_grades,
         retest_code=retest_code,
