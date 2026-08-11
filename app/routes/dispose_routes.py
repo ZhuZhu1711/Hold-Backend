@@ -57,13 +57,17 @@ def api_dispose():
     执行一次处置流转（工程师 / root）。
     Body JSON:
       hold_record_id  (必填)
-      dispose         (必填，工程师：1放行 2降级 3重测 5分析；转交7暂屏蔽)
-      dispose_detail  (可选，备注，最长 100)
+      dispose         (必填，工程师：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
+      dispose_detail  (可选，备注，最长 1024)
+      downgrades / retest_grades / retest_code 同工程师处置 API
     """
     data = request.get_json(silent=True) or {}
     hold_record_id = data.get('hold_record_id')
     dispose = data.get('dispose')
     dispose_detail = data.get('dispose_detail')
+    downgrades = data.get('downgrades')
+    retest_grades = data.get('retest_grades')
+    retest_code = data.get('retest_code')
 
     if hold_record_id is None or dispose is None:
         return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
@@ -77,6 +81,9 @@ def api_dispose():
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             dispose_detail=dispose_detail,
+            downgrades=downgrades,
+            retest_grades=retest_grades,
+            retest_code=retest_code,
         )
     else:
         success, msg, result = dispose_ctrl.dispose_engineer_record(
@@ -85,11 +92,17 @@ def api_dispose():
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             dispose_detail=dispose_detail,
+            downgrades=downgrades,
+            retest_grades=retest_grades,
+            retest_code=retest_code,
         )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
 
-    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非工程师')
+    bad_keys = (
+        '不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持',
+        '无当前', '非工程师', '降级', '重测', '互斥', '至少', '不能', '须',
+    )
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
@@ -104,7 +117,7 @@ def api_production_dispose():
     Body JSON:
       hold_record_id  (必填)
       dispose         (必填：6 分析返回 / 66 分析返回 / 8 回退)
-      dispose_detail  (可选，备注，最长 100)
+      dispose_detail  (可选，备注，最长 1024)
 
     规则见 dispose_api.md「生产处置」。
     """

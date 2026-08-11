@@ -23,7 +23,12 @@ from app.utils.database_util import (
     query_fvi_defect_details,
     query_split_merge_history,
 )
-from app.controllers.dispose_ctrl import DISPOSE_LABELS, DISPOSE_CLOSE
+from app.controllers.dispose_ctrl import (
+    DISPOSE_LABELS,
+    DISPOSE_CLOSE,
+    format_grade_num_display,
+    parse_grade_num,
+)
 from app.controllers.rawdata_ctrl import get_latest_defect_bincodes
 from app.controllers import testlog_ctrl
 
@@ -215,6 +220,7 @@ def get_holding_records(
                 r.SOURCE,
                 r.SECOND_CODE,
                 r.ROUTE_ID,
+                r.GRADE_NUM,
                 r.RECORD_TYPE,
                 r.STATUS,
                 r.LAST_CIRCULATION_ID,
@@ -228,7 +234,7 @@ def get_holding_records(
             GROUP BY
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
-                r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
+                r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
                 c.NEXT_OWNER_ID, c.DISPOSE, u.NAME
             ORDER BY r.HOLD_DTTM DESC NULLS LAST, r.ID DESC
             OFFSET :offset ROWS FETCH NEXT :page_size ROWS ONLY
@@ -257,6 +263,8 @@ def get_holding_records(
             except (TypeError, ValueError):
                 status_val = 0
             item['IS_CLOSED'] = status_val == DISPOSE_CLOSE
+            item['GRADE_NUM_DISPLAY'] = format_grade_num_display(item.get('GRADE_NUM')) or ''
+            item['GRADES'] = parse_grade_num(item.get('GRADE_NUM'))
             data.append(item)
         return True, '获取成功', _page_payload(data, total, page, page_size)
     except ValueError as e:

@@ -272,6 +272,53 @@ def get_owned_holding_records(
     return True, msg, payload
 
 
+def get_owned_dispose_record(eng_user_id, hold_record_id):
+    """
+    加载工程师处置页所需的 hold_record。
+    须为所属型号；附带 CAN_DISPOSE / GRADE 解析结果。
+    """
+    from app.controllers import dispose_ctrl
+    from app.controllers.hold_report_ctrl import RECORD_TYPE_LABELS
+
+    try:
+        eng_id = int(eng_user_id)
+        rid = int(hold_record_id)
+    except (TypeError, ValueError):
+        return False, '参数无效', None
+
+    record = dispose_ctrl._load_record(rid)
+    if not record:
+        return False, 'hold_record 不存在', None
+
+    product_id = record.get('PRODUCT_ID')
+    owned = ProductInfo.query.filter_by(
+        PRODUCT_ID=product_id, PRO_ENG_ID=eng_id,
+    ).first()
+    if not owned:
+        return False, '该记录不属于您负责的型号', None
+
+    try:
+        rt = int(record.get('RECORD_TYPE')) if record.get('RECORD_TYPE') is not None else None
+    except (TypeError, ValueError):
+        rt = None
+    record['RECORD_TYPE_NAME'] = RECORD_TYPE_LABELS.get(rt, '-')
+
+    last_circ = dispose_ctrl._load_circulation(record.get('LAST_CIRCULATION_ID'))
+    current_owner_id = last_circ.get('NEXT_OWNER_ID') if last_circ else None
+    record['CURRENT_OWNER_ID'] = current_owner_id
+    try:
+        status_val = int(record.get('STATUS')) if record.get('STATUS') is not None else 0
+    except (TypeError, ValueError):
+        status_val = 0
+    record['IS_CLOSED'] = status_val == dispose_ctrl.DISPOSE_CLOSE
+    record['CAN_DISPOSE'] = bool(
+        current_owner_id is not None
+        and int(current_owner_id) == eng_id
+        and not record['IS_CLOSED']
+    )
+    return True, '获取成功', record
+
+
 def get_owned_fvi_defect_details(eng_user_id, lot_id, line_type='FT'):
     """
     查询所属型号 FVI 缺陷明细。

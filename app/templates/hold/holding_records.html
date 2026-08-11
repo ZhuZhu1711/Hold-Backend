@@ -169,6 +169,7 @@
                             <th>站点/设备</th>
                             <th>Lot</th>
                             <th>Wafer</th>
+                            <th>等级/数量</th>
                             <th>原因</th>
                             <th>Hold 时间</th>
                             <th>状态</th>
@@ -176,7 +177,7 @@
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="9" class="empty">加载中...</td></tr>
+                        <tr><td colspan="10" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -613,7 +614,7 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="9" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="10" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     document.getElementById('pager').innerHTML = '';
                     return;
                 }
@@ -627,7 +628,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="9" class="empty">暂无在线 Holding Record</td></tr>';
+                        '<tr><td colspan="10" class="empty">暂无在线 Holding Record</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => {
@@ -643,6 +644,7 @@
                         <td class="site-equip">${formatSiteEquip(r.STATION, r.EQUIP_ID)}</td>
                         <td>${esc(r.LOT_ID)}</td>
                         <td>${esc(r.WAFER_ID)}</td>
+                        <td title="${esc(r.GRADE_NUM || '')}">${esc(r.GRADE_NUM_DISPLAY || r.GRADE_NUM || '-')}</td>
                         <td class="${reasonCls}" ${reasonAttrs}>${formatReason(r.HOLD_REASON, isFvi)}</td>
                         <td>${esc(r.HOLD_DTTM || '-')}</td>
                         <td><span class="badge">Holding</span></td>

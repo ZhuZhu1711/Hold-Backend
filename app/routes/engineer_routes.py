@@ -53,6 +53,13 @@ def holds_page():
     return render_template('eng/holds.html', **_page_ctx())
 
 
+@engineer_bp.route('/dispose/<int:record_id>')
+@engineer_required
+def dispose_page(record_id):
+    """工程师处置页：放行/降级/重测/可靠性分析。"""
+    return render_template('eng/dispose.html', **_page_ctx(record_id=record_id))
+
+
 @engineer_bp.route('/circulations')
 @engineer_required
 def circulations_page():
@@ -176,9 +183,20 @@ def api_holding_records():
 @engineer_bp.route('/api/dispose_actions', methods=['GET'])
 @engineer_required
 def api_dispose_actions():
-    """工程师可发起的处置行为：放行/降级/重测/分析（转交暂屏蔽）。"""
+    """工程师可发起的处置行为：放行/降级/重测/可靠性分析（转交暂屏蔽）。"""
     success, msg, data = dispose_ctrl.list_dispose_actions(group='engineer')
     return jsonify({'code': 200, 'msg': msg, 'data': data})
+
+
+@engineer_bp.route('/api/records/<int:record_id>', methods=['GET'])
+@engineer_required
+def api_dispose_record(record_id):
+    """处置页加载单条 hold_record（须为所属型号）。"""
+    success, msg, data = engineer_ctrl.get_owned_dispose_record(_eng_id(), record_id)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 403 if '不属于' in msg else (404 if '不存在' in msg else 400)
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
 @engineer_bp.route('/api/dispose', methods=['POST'])
@@ -188,14 +206,20 @@ def api_dispose():
     工程师处置（dispose_api.md「工程师处置」）。
     Body JSON:
       hold_record_id  (必填)
-      dispose         (必填：1放行 2降级 3重测 5分析；转交7暂屏蔽)
-      dispose_detail  (可选，备注，最长 100)
+      dispose         (必填：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
+      dispose_detail  (可选，放行/可靠性分析备注，最长 1024)
+      downgrades      (降级：[{from, to}, ...]，服务端生成 DISPOSE_DETAIL)
+      retest_grades   (重测等级列表)
+      retest_code     (WLT 按 code 重测，与 retest_grades 互斥，须为数字)
     须为当前负责人。
     """
     data = request.get_json(silent=True) or {}
     hold_record_id = data.get('hold_record_id')
     dispose = data.get('dispose')
     dispose_detail = data.get('dispose_detail')
+    downgrades = data.get('downgrades')
+    retest_grades = data.get('retest_grades')
+    retest_code = data.get('retest_code')
 
     if hold_record_id is None or dispose is None:
         return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
@@ -206,11 +230,17 @@ def api_dispose():
         actor_user_id=_eng_id(),
         actor_role=session.get('role'),
         dispose_detail=dispose_detail,
+        downgrades=downgrades,
+        retest_grades=retest_grades,
+        retest_code=retest_code,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
 
-    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非工程师')
+    bad_keys = (
+        '不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持',
+        '无当前', '非工程师', '降级', '重测', '互斥', '至少', '不能', '须',
+    )
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 

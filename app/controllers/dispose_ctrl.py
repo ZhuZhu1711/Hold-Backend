@@ -8,7 +8,14 @@ Hold Record 处置流转业务逻辑。
   - 1 → SYSTEM_USER_ID（系统）
 
 同一事务内：插入 CIRCULATION_HISTORY + 回写 LAST_CIRCULATION_ID / STATUS。
+
+DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成）：
+  降级: DG:HA>F;FB>F
+  重测(等级): RT:F,HA
+  重测(WLT code): RT:CODE=123
+  放行/可靠性分析: 可选自由备注
 """
+import re
 from datetime import date, datetime
 
 from sqlalchemy import text
@@ -25,19 +32,22 @@ DISPOSE_CREATE = 0
 DISPOSE_RELEASE = 1          # 放行
 DISPOSE_DOWNGRADE = 2        # 降级
 DISPOSE_RETEST = 3           # 重测
-DISPOSE_ANALYZE = 5          # 分析
+DISPOSE_ANALYZE = 5          # 可靠性分析
 DISPOSE_ANALYZE_RETURN = 6   # 分析(返回) — 生产侧
 DISPOSE_TRANSFER = 7         # 转交
 DISPOSE_ROLLBACK = 8         # 回退
 DISPOSE_PROD_ANALYZE_RETURN = 66  # 分析(返回) — 生产
 DISPOSE_CLOSE = 99           # 关闭
 
+DISPOSE_DETAIL_MAX_LEN = 1024
+RECORD_TYPE_WLT = 2
+
 DISPOSE_LABELS = {
     DISPOSE_CREATE: '创建',
     DISPOSE_RELEASE: '放行',
     DISPOSE_DOWNGRADE: '降级',
     DISPOSE_RETEST: '重测',
-    DISPOSE_ANALYZE: '分析',
+    DISPOSE_ANALYZE: '可靠性分析',
     DISPOSE_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_TRANSFER: '转交',
     DISPOSE_ROLLBACK: '回退',
@@ -129,6 +139,164 @@ def _lookup_pro_eng_id(product_id: str) -> int:
     return _system_user_id()
 
 
+def parse_grade_num(raw):
+    """
+    解析 GRADE_NUM 文本（如 F:1151,HA:49）为 [{grade, qty}, ...]。
+    含字母 F（不区分大小写）的等级排在前面，组内按等级名排序。
+    """
+    if raw is None:
+        return []
+    text_val = str(raw).strip()
+    if not text_val:
+        return []
+
+    items = []
+    for part in re.split(r'[,，;；]+', text_val):
+        part = part.strip()
+        if not part:
+            continue
+        if ':' in part:
+            grade, qty = part.split(':', 1)
+        elif '：' in part:
+            grade, qty = part.split('：', 1)
+        else:
+            grade, qty = part, ''
+        grade = grade.strip()
+        qty = qty.strip()
+        if not grade:
+            continue
+        items.append({'grade': grade, 'qty': qty})
+
+    def sort_key(it):
+        g = it['grade']
+        has_f = 0 if 'F' in g.upper() else 1
+        return (has_f, g.upper(), g)
+
+    items.sort(key=sort_key)
+    return items
+
+
+def format_grade_num_display(raw):
+    """将 GRADE_NUM 格式化为展示文本（F 优先）。"""
+    items = parse_grade_num(raw)
+    if not items:
+        return ''
+    parts = []
+    for it in items:
+        if it['qty'] != '':
+            parts.append(f"{it['grade']}:{it['qty']}")
+        else:
+            parts.append(it['grade'])
+    return ', '.join(parts)
+
+
+def _norm_grade_token(value):
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def build_dispose_detail(
+    dispose,
+    dispose_detail=None,
+    downgrades=None,
+    retest_grades=None,
+    retest_code=None,
+    record_type=None,
+):
+    """
+    按处置行为生成 DISPOSE_DETAIL。
+    结构化字段优先；放行可用工程备注文本；可靠性分析可用自由备注。
+    降级格式: DG:HA>F;FB>F 或附工程备注 DG:HA>F||备注文本
+    成功返回 (True, detail_or_None)；失败返回 (False, err_msg)。
+    """
+    try:
+        dispose = int(dispose)
+    except (TypeError, ValueError):
+        return False, 'dispose 无效'
+
+    free = None
+    if dispose_detail is not None:
+        free = str(dispose_detail).strip() or None
+
+    if dispose == DISPOSE_DOWNGRADE:
+        pairs = []
+        seen_from = set()
+        for item in (downgrades or []):
+            if not isinstance(item, dict):
+                return False, 'downgrades 格式无效'
+            src = _norm_grade_token(item.get('from') if 'from' in item else item.get('from_grade'))
+            dst = _norm_grade_token(item.get('to') if 'to' in item else item.get('to_grade'))
+            if not src or not dst:
+                return False, '降级映射源/目标等级不能为空'
+            if src == dst:
+                # 未变更的等级跳过（默认源→源）
+                continue
+            key = src.upper()
+            if key in seen_from:
+                return False, f'同一源等级只能降一次: {src}'
+            seen_from.add(key)
+            pairs.append(f'{src}>{dst}')
+        if not pairs:
+            return False, '降级须至少变更一个等级（不能全部保持源→源）'
+        detail = 'DG:' + ';'.join(pairs)
+        if free:
+            detail = f'{detail}||{free}'
+    elif dispose == DISPOSE_RETEST:
+        code_raw = None if retest_code is None else str(retest_code).strip()
+        grades = []
+        for g in (retest_grades or []):
+            token = _norm_grade_token(g)
+            if token:
+                grades.append(token)
+
+        try:
+            rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
+        except (TypeError, ValueError):
+            return False, 'record_type 无效'
+
+        if code_raw and grades:
+            return False, 'WLT 重测等级与 code 互斥，只能选一种'
+        if code_raw:
+            if rt is not None and rt != RECORD_TYPE_WLT:
+                return False, '仅 WLT 处置单支持按 code 重测'
+            if not re.fullmatch(r'\d+', code_raw):
+                return False, '重测 code 须为数字'
+            detail = f'RT:CODE={code_raw}'
+        elif grades:
+            # 去重保序
+            uniq = []
+            seen = set()
+            for g in grades:
+                k = g.upper()
+                if k in seen:
+                    continue
+                seen.add(k)
+                uniq.append(g)
+            detail = 'RT:' + ','.join(uniq)
+        else:
+            return False, '重测须选择等级或填写 code'
+    elif dispose in (DISPOSE_RELEASE, DISPOSE_ANALYZE):
+        detail = free
+    else:
+        # 其它行为（生产/系统）仍允许自由备注
+        detail = free
+
+    if detail is not None and len(detail) > DISPOSE_DETAIL_MAX_LEN:
+        return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符'
+    return True, detail
+
+
+def enrich_record_grades(record):
+    """为 record dict 附加 GRADE_NUM_DISPLAY / GRADES。"""
+    if not record:
+        return record
+    raw = record.get('GRADE_NUM')
+    record['GRADE_NUM_DISPLAY'] = format_grade_num_display(raw) or (str(raw).strip() if raw else '')
+    record['GRADES'] = parse_grade_num(raw)
+    return record
+
+
 def _load_record(record_id: int):
     record_table = _record_table()
     row = db.session.execute(
@@ -136,13 +304,15 @@ def _load_record(record_id: int):
             SELECT
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
-                r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM
+                r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM
             FROM {record_table} r
             WHERE r.ID = :rid
         """),
         {'rid': record_id},
     ).fetchone()
-    return _row_to_dict(row) if row else None
+    if not row:
+        return None
+    return enrich_record_grades(_row_to_dict(row))
 
 
 def _load_circulation(circ_id):
@@ -250,7 +420,16 @@ def list_dispose_actions(group=None):
     return True, '获取成功', actions
 
 
-def dispose_engineer_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_detail=None):
+def dispose_engineer_record(
+    hold_record_id,
+    dispose,
+    actor_user_id,
+    actor_role,
+    dispose_detail=None,
+    downgrades=None,
+    retest_grades=None,
+    retest_code=None,
+):
     """工程师处置：仅允许 ENGINEER_DISPOSES。"""
     try:
         dispose = int(dispose)
@@ -264,6 +443,9 @@ def dispose_engineer_record(hold_record_id, dispose, actor_user_id, actor_role, 
         actor_user_id=actor_user_id,
         actor_role=actor_role,
         dispose_detail=dispose_detail,
+        downgrades=downgrades,
+        retest_grades=retest_grades,
+        retest_code=retest_code,
     )
 
 
@@ -560,10 +742,20 @@ def get_pending_records(
         return False, f'查询失败: {e}', _page_payload([], 0, 1, 20)
 
 
-def dispose_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_detail=None):
+def dispose_record(
+    hold_record_id,
+    dispose,
+    actor_user_id,
+    actor_role,
+    dispose_detail=None,
+    downgrades=None,
+    retest_grades=None,
+    retest_code=None,
+):
     """
     对 hold_record 执行一次处置流转。
     成功返回 (True, msg, {circulation_id, next_owner_id, ...})
+    工程师降级/重测优先用结构化参数生成 DISPOSE_DETAIL。
     """
     try:
         rid = int(hold_record_id)
@@ -572,11 +764,6 @@ def dispose_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_d
     except (TypeError, ValueError):
         return False, '参数无效', None
 
-    if dispose_detail is not None:
-        dispose_detail = str(dispose_detail).strip() or None
-        if dispose_detail and len(dispose_detail) > 100:
-            return False, 'dispose_detail 最长 100 字符', None
-
     try:
         record = _load_record(rid)
         if not record:
@@ -584,6 +771,37 @@ def dispose_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_d
 
         if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
+
+        has_structured = (
+            downgrades is not None
+            or retest_grades is not None
+            or retest_code is not None
+        )
+        if dispose in (DISPOSE_DOWNGRADE, DISPOSE_RETEST) and not has_structured and dispose_detail:
+            # 兼容旧客户端：直接传入已拼好的详情
+            detail = str(dispose_detail).strip() or None
+            if detail and len(detail) > DISPOSE_DETAIL_MAX_LEN:
+                return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
+        elif dispose in (
+            DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_RELEASE, DISPOSE_ANALYZE,
+        ) or has_structured:
+            ok_detail, built = build_dispose_detail(
+                dispose=dispose,
+                dispose_detail=dispose_detail,
+                downgrades=downgrades,
+                retest_grades=retest_grades,
+                retest_code=retest_code,
+                record_type=record.get('RECORD_TYPE'),
+            )
+            if not ok_detail:
+                return False, built, None
+            detail = built
+        else:
+            detail = None
+            if dispose_detail is not None:
+                detail = str(dispose_detail).strip() or None
+                if detail and len(detail) > DISPOSE_DETAIL_MAX_LEN:
+                    return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
 
         last_circ = _load_circulation(record.get('LAST_CIRCULATION_ID'))
         current_owner_id = last_circ.get('NEXT_OWNER_ID') if last_circ else None
@@ -631,7 +849,7 @@ def dispose_record(hold_record_id, dispose, actor_user_id, actor_role, dispose_d
                 'next_owner_id': next_owner_id,
                 'dispose_source': 'SYS',
                 'dispose_type': dispose,
-                'dispose_detail': dispose_detail,
+                'dispose_detail': detail,
             },
         )
 

@@ -40,6 +40,7 @@
         .btn {
             padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
             background: #007bff; color: #fff; font-size: 14px;
+            text-decoration: none; display: inline-block;
         }
         .btn:hover { background: #0069d9; }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
@@ -165,7 +166,7 @@
         <div class="card">
             <h1>所属型号 Hold Record</h1>
             <p class="sub">
-                查看自己负责型号的在线 Hold。当前负责人为本人时可处置（放行/降级/重测/分析）。
+                查看自己负责型号的在线 Hold。当前负责人为本人时可处置（放行/降级/重测/可靠性分析）。
                 FVI 可点击原因查看缺陷明细；可点「分析」查看 bysite / raw_data。
             </p>
 
@@ -197,6 +198,7 @@
                             <th>站点/设备</th>
                             <th>Lot</th>
                             <th>Wafer</th>
+                            <th>等级/数量</th>
                             <th>原因</th>
                             <th>当前负责人</th>
                             <th>Hold 时间</th>
@@ -205,7 +207,7 @@
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="10" class="empty">加载中...</td></tr>
+                        <tr><td colspan="11" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -232,25 +234,6 @@
             </table>
             <div class="modal-actions">
                 <button class="btn" onclick="closeFviModal()">关闭</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal-mask" id="disposeModal">
-        <div class="modal sm">
-            <h3>工程师处置</h3>
-            <div class="modal-sub" id="disposeSub">-</div>
-            <div class="form-row">
-                <label>处置行为</label>
-                <select id="dispose_action"></select>
-            </div>
-            <div class="form-row">
-                <label>备注（可选，最长 100）</label>
-                <textarea id="dispose_detail" maxlength="100" placeholder="处置说明"></textarea>
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-ghost" onclick="closeDisposeModal()">取消</button>
-                <button class="btn btn-success" id="disposeSubmitBtn" onclick="submitDispose()">确认处置</button>
             </div>
         </div>
     </div>
@@ -282,8 +265,6 @@
             { bg: 'rgba(108, 117, 125, 0.7)', border: 'rgba(108, 117, 125, 1)' },
             { bg: 'rgba(232, 62, 140, 0.7)', border: 'rgba(232, 62, 140, 1)' },
         ];
-        let disposeActions = [];
-        let disposeTargetId = null;
         let currentPage = 1;
         let pageSize = 20;
         let totalPages = 1;
@@ -350,11 +331,6 @@
 
         function closeFviModal() {
             document.getElementById('fviModal').classList.remove('show');
-        }
-
-        function closeDisposeModal() {
-            document.getElementById('disposeModal').classList.remove('show');
-            disposeTargetId = null;
         }
 
         function destroyRawChart() {
@@ -600,20 +576,6 @@
             }
         }
 
-        async function loadDisposeActions() {
-            const resp = await fetch('/eng/api/dispose_actions');
-            const json = await resp.json();
-            disposeActions = json.data || [];
-            const sel = document.getElementById('dispose_action');
-            if (!disposeActions.length) {
-                sel.innerHTML = '<option value="">无可用处置</option>';
-                return;
-            }
-            sel.innerHTML = disposeActions.map(a =>
-                `<option value="${a.dispose}">${esc(a.label)} (${a.dispose})</option>`
-            ).join('');
-        }
-
         async function showFviDefects(lotId) {
             if (!lotId) {
                 alert('缺少 Lot ID');
@@ -661,53 +623,6 @@
             }
         }
 
-        function openDisposeModal(recordId, productId, waferId) {
-            disposeTargetId = recordId;
-            document.getElementById('disposeSub').textContent =
-                `Record #${recordId} · ${productId || '-'} · ${waferId || '-'}`;
-            document.getElementById('dispose_detail').value = '';
-            if (disposeActions.length) {
-                document.getElementById('dispose_action').value = String(disposeActions[0].dispose);
-            }
-            document.getElementById('disposeModal').classList.add('show');
-        }
-
-        async function submitDispose() {
-            if (!disposeTargetId) return;
-            const dispose = document.getElementById('dispose_action').value;
-            const dispose_detail = document.getElementById('dispose_detail').value.trim();
-            if (!dispose) {
-                alert('请选择处置行为');
-                return;
-            }
-            const btn = document.getElementById('disposeSubmitBtn');
-            btn.disabled = true;
-            try {
-                const resp = await fetch('/eng/api/dispose', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        hold_record_id: disposeTargetId,
-                        dispose: Number(dispose),
-                        dispose_detail: dispose_detail || null,
-                    }),
-                });
-                const json = await resp.json();
-                if (json.code !== 200) {
-                    alert(json.msg || '处置失败');
-                    return;
-                }
-                const d = json.data || {};
-                alert(`处置成功：${d.dispose_label || dispose} → next_owner=${d.next_owner_id ?? '-'}`);
-                closeDisposeModal();
-                loadData();
-            } catch (e) {
-                alert('请求失败: ' + e);
-            } finally {
-                btn.disabled = false;
-            }
-        }
-
         async function loadProducts() {
             const sel = document.getElementById('product_id');
             const resp = await fetch('/eng/api/products');
@@ -741,7 +656,7 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        `<tr><td colspan="10" class="empty">${esc(json.msg || '查询失败')}</td></tr>`;
+                        `<tr><td colspan="11" class="empty">${esc(json.msg || '查询失败')}</td></tr>`;
                     document.getElementById('pager').innerHTML = '';
                     return;
                 }
@@ -756,7 +671,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="10" class="empty">暂无所属型号的 Holding Record</td></tr>';
+                        '<tr><td colspan="11" class="empty">暂无所属型号的 Holding Record</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => {
@@ -775,14 +690,14 @@
                             ? '<span class="badge badge-warn">待我处置</span>'
                             : '<span class="badge">Holding</span>');
                     const actionBtn = canDispose
-                        ? `<button class="btn btn-sm" data-dispose-id="${esc(r.ID)}"
-                                data-product="${esc(r.PRODUCT_ID)}" data-wafer="${esc(r.WAFER_ID)}">处置</button>`
+                        ? `<a class="btn btn-sm" href="/eng/dispose/${esc(r.ID)}">处置</a>`
                         : `<button class="btn btn-sm btn-disabled" disabled title="仅当前负责人可处置">处置</button>`;
                     const analyzeBtn = `<button class="btn btn-sm btn-ghost"
                         data-analyze-wafer="${esc(r.WAFER_ID)}"
                         data-analyze-lot="${esc(r.LOT_ID || '')}"
                         data-analyze-type="${esc(r.RECORD_TYPE ?? '')}"
                         data-analyze-station="${esc(r.STATION || '')}">分析</button>`;
+                    const gradeText = r.GRADE_NUM_DISPLAY || r.GRADE_NUM || '-';
                     return `
                     <tr>
                         <td>${esc(r.RECORD_TYPE_NAME || '-')}</td>
@@ -790,6 +705,7 @@
                         <td class="site-equip">${formatSiteEquip(r.STATION, r.EQUIP_ID)}</td>
                         <td>${esc(r.LOT_ID)}</td>
                         <td>${esc(r.WAFER_ID)}</td>
+                        <td title="${esc(r.GRADE_NUM || '')}">${esc(gradeText)}</td>
                         <td class="${reasonCls}" ${reasonAttrs}>${formatReason(r.HOLD_REASON, isFvi)}</td>
                         <td>${ownerText}</td>
                         <td>${esc(r.HOLD_DTTM || '-')}</td>
@@ -807,13 +723,6 @@
                         }
                     });
                 });
-                document.querySelectorAll('[data-dispose-id]').forEach(el => {
-                    el.addEventListener('click', () => openDisposeModal(
-                        Number(el.dataset.disposeId),
-                        el.dataset.product,
-                        el.dataset.wafer,
-                    ));
-                });
                 document.querySelectorAll('[data-analyze-wafer]').forEach(el => {
                     el.addEventListener('click', () => showAnalysis(
                         el.dataset.analyzeWafer,
@@ -828,7 +737,7 @@
         }
 
         document.addEventListener('DOMContentLoaded', async () => {
-            await Promise.all([loadProducts(), loadDisposeActions()]);
+            await loadProducts();
             await loadData(true);
         });
         document.querySelectorAll('.filters input:not([type=checkbox])').forEach(el => {
@@ -839,9 +748,6 @@
         document.getElementById('pending_only').addEventListener('change', () => loadData(true));
         document.getElementById('fviModal').addEventListener('click', (e) => {
             if (e.target.id === 'fviModal') closeFviModal();
-        });
-        document.getElementById('disposeModal').addEventListener('click', (e) => {
-            if (e.target.id === 'disposeModal') closeDisposeModal();
         });
         document.getElementById('analysisModal').addEventListener('click', (e) => {
             if (e.target.id === 'analysisModal') closeAnalysisModal();
