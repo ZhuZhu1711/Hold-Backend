@@ -21,7 +21,7 @@
         .card {
             background: #fff; border-radius: 8px; padding: 20px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            max-width: 920px;
+            max-width: 980px;
         }
         h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
         .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
@@ -107,6 +107,19 @@
             background: #ff9800; color: #fff; font-size: 12px;
         }
         .badge-muted { background: #6c757d; }
+        .wafer-card {
+            border: 1px solid #e0e4ea; border-radius: 8px; padding: 14px;
+            margin-bottom: 12px; background: #fff;
+        }
+        .wafer-card-h {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 10px; gap: 10px;
+        }
+        .wafer-card-h .wid {
+            font-weight: 600; font-size: 15px; color: #222;
+        }
+        .wafer-sub { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #eee; }
+        .wafer-sub.hidden { display: none; }
     </style>
 </head>
 <body>
@@ -140,10 +153,12 @@
         const DISPOSE_DOWNGRADE = 2;
         const DISPOSE_RETEST = 3;
         const DISPOSE_ANALYZE = 5;
+        const RETEST_CODES_RE = /^(@\d+)+$/;
 
         let record = null;
         let grades = [];
         let engNotes = [];
+        let wafers = [];
 
         function esc(v) {
             return String(v ?? '')
@@ -153,38 +168,69 @@
                 .replaceAll('"', '&quot;');
         }
 
+        function isWlt() {
+            return Number(record && record.RECORD_TYPE) === RECORD_TYPE_WLT;
+        }
+
         function selectedDispose() {
             const el = document.querySelector('input[name=dispose]:checked');
             return el ? Number(el.value) : DISPOSE_RELEASE;
         }
 
         function syncPanels() {
+            if (isWlt()) {
+                syncWltEngNote();
+                return;
+            }
             const d = selectedDispose();
             document.getElementById('panelEngNote').classList.toggle(
                 'hidden', !(d === DISPOSE_RELEASE || d === DISPOSE_DOWNGRADE)
             );
             document.getElementById('panelDowngrade').classList.toggle('hidden', d !== DISPOSE_DOWNGRADE);
             document.getElementById('panelRetest').classList.toggle('hidden', d !== DISPOSE_RETEST);
-            if (d === DISPOSE_RETEST) syncRetestMode();
         }
 
-        function isWlt() {
-            return Number(record && record.RECORD_TYPE) === RECORD_TYPE_WLT;
+        function syncWltEngNote() {
+            const panel = document.getElementById('panelEngNote');
+            if (!panel) return;
+            let need = false;
+            wafers.forEach((_, idx) => {
+                const d = Number(
+                    (document.querySelector(`input[name=wdispose_${idx}]:checked`) || {}).value || 0
+                );
+                if (d === DISPOSE_RELEASE || d === DISPOSE_DOWNGRADE) need = true;
+            });
+            panel.classList.toggle('hidden', !need);
         }
 
-        function retestMode() {
-            if (!isWlt()) return 'grade';
-            const el = document.querySelector('input[name=retest_mode]:checked');
-            return el ? el.value : 'grade';
+        function syncWaferSub(idx) {
+            const d = Number(
+                (document.querySelector(`input[name=wdispose_${idx}]:checked`) || {}).value
+                    || DISPOSE_RELEASE
+            );
+            const dg = document.getElementById(`w_dg_${idx}`);
+            const rt = document.getElementById(`w_rt_${idx}`);
+            if (dg) dg.classList.toggle('hidden', d !== DISPOSE_DOWNGRADE);
+            if (rt) rt.classList.toggle('hidden', d !== DISPOSE_RETEST);
+            if (d === DISPOSE_RETEST) syncWaferRtMode(idx);
+            syncWltEngNote();
         }
 
-        function syncRetestMode() {
-            const mode = retestMode();
-            const gradeBox = document.getElementById('retestGradeBox');
-            const codeBox = document.getElementById('retestCodeBox');
-            if (!gradeBox || !codeBox) return;
-            gradeBox.classList.toggle('hidden', mode === 'code');
-            codeBox.classList.toggle('hidden', mode !== 'code');
+        function waferDgMode(idx) {
+            const el = document.querySelector(`input[name=wdg_mode_${idx}]:checked`);
+            return el ? el.value : 'main_split';
+        }
+
+        function waferRtMode(idx) {
+            const el = document.querySelector(`input[name=wrt_mode_${idx}]:checked`);
+            return el ? el.value : 'full';
+        }
+
+        function syncWaferRtMode(idx) {
+            const box = document.getElementById(`w_rt_codes_box_${idx}`);
+            if (!box) return;
+            const mode = waferRtMode(idx);
+            box.classList.toggle('hidden', mode === 'full');
         }
 
         function engNoteOptionsHtml() {
@@ -203,8 +249,9 @@
             return v || null;
         }
 
-        function addDowngradeRow(fromGrade, toGrade) {
-            const wrap = document.getElementById('dgRows');
+        function addDowngradeRow(containerId, fromGrade, toGrade) {
+            const wrap = document.getElementById(containerId);
+            if (!wrap) return;
             const row = document.createElement('div');
             row.className = 'dg-row';
             const src = fromGrade || '';
@@ -225,22 +272,66 @@
             wrap.appendChild(row);
         }
 
-        function collectDowngrades() {
+        function collectDowngrades(containerId) {
             const rows = [];
-            document.querySelectorAll('#dgRows .dg-row').forEach(row => {
+            document.querySelectorAll(`#${containerId} .dg-row`).forEach(row => {
                 const from = (row.querySelector('.dg-from').value || '').trim();
                 const to = (row.querySelector('.dg-to').value || '').trim();
                 if (!from || !to) return;
-                // 源→源表示不降级该等级，不提交
                 if (from === to) return;
                 rows.push({ from, to });
             });
             return rows;
         }
 
-        function collectRetestGrades() {
-            return Array.from(document.querySelectorAll('input[name=retest_grade]:checked'))
+        function collectRetestGrades(name) {
+            return Array.from(document.querySelectorAll(`input[name=${name}]:checked`))
                 .map(el => el.value);
+        }
+
+        function gradeChecksHtml(namePrefix) {
+            if (!grades.length) {
+                return '<div class="hint">无已有等级</div>';
+            }
+            return `<div class="grade-checks">${grades.map(g => `
+                <label>
+                    <input type="checkbox" name="${esc(namePrefix)}" value="${esc(g.grade)}" />
+                    ${esc(g.grade)}${g.qty !== '' ? ' · ' + esc(g.qty) : ''}
+                </label>`).join('')}</div>`;
+        }
+
+        function waferBlockHtml(wafer, idx, can) {
+            const dis = can ? '' : 'disabled';
+            return `
+            <div class="wafer-card" data-wafer="${esc(wafer)}" data-idx="${idx}">
+                <div class="wafer-card-h">
+                    <span class="wid">${esc(wafer)}</span>
+                    <span class="hint">须对本片下达处置</span>
+                </div>
+                <div class="action-list">
+                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_RELEASE}" checked ${dis} /> 放行</label>
+                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_DOWNGRADE}" ${dis} /> 降级</label>
+                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_RETEST}" ${dis} /> 重测</label>
+                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_ANALYZE}" ${dis} /> 可靠性分析</label>
+                </div>
+                <div id="w_dg_${idx}" class="wafer-sub hidden">
+                    <div class="mode-row">
+                        <label><input type="radio" name="wdg_mode_${idx}" value="main_split" checked ${dis} /> 降main拆批</label>
+                        <label><input type="radio" name="wdg_mode_${idx}" value="main_nosplit" ${dis} /> 降main不拆批</label>
+                    </div>
+                </div>
+                <div id="w_rt_${idx}" class="wafer-sub hidden">
+                    <div class="mode-row">
+                        <label><input type="radio" name="wrt_mode_${idx}" value="full" checked ${dis} /> 整片重测</label>
+                        <label><input type="radio" name="wrt_mode_${idx}" value="fixture_a" ${dis} /> 重测A夹具</label>
+                        <label><input type="radio" name="wrt_mode_${idx}" value="fixture_b" ${dis} /> 重测B夹具</label>
+                    </div>
+                    <div id="w_rt_codes_box_${idx}" class="form-row hidden">
+                        <label>重测 code（必填，如 @1@361）</label>
+                        <input id="wrt_codes_${idx}" type="text" placeholder="@1@361" ${dis} />
+                    </div>
+                </div>
+            </div>`;
         }
 
         function renderPage() {
@@ -253,22 +344,7 @@
                 grades.map(g => `<option value="${esc(g.grade)}"></option>`).join('')
             }</datalist>`;
 
-            const retestChecks = grades.length
-                ? `<div class="grade-checks">${grades.map(g => `
-                    <label>
-                        <input type="checkbox" name="retest_grade" value="${esc(g.grade)}" />
-                        ${esc(g.grade)}${g.qty !== '' ? ' · ' + esc(g.qty) : ''}
-                    </label>`).join('')}</div>`
-                : '<div class="hint">无已有等级，可仅在 WLT 下使用 code 模式</div>';
-
-            const wltMode = isWlt()
-                ? `<div class="mode-row">
-                    <label><input type="radio" name="retest_mode" value="grade" checked /> 按等级</label>
-                    <label><input type="radio" name="retest_mode" value="code" /> 按 code（数字）</label>
-                   </div>`
-                : '';
-
-            document.getElementById('content').innerHTML = `
+            const summaryHtml = `
                 <div class="summary">
                     <div><div class="k">Record</div><div class="v">#${esc(record.ID)} ${statusBadge}</div></div>
                     <div><div class="k">处置单类型</div><div class="v">${esc(record.RECORD_TYPE_NAME || '-')}</div></div>
@@ -277,17 +353,10 @@
                     <div><div class="k">站点/设备</div><div class="v">${esc(record.STATION || '-')} / ${esc(record.EQUIP_ID || '-')}</div></div>
                     <div><div class="k">等级/数量</div><div class="v">${esc(record.GRADE_NUM_DISPLAY || record.GRADE_NUM || '-')}</div></div>
                 </div>
-
                 ${datalist}
+            `;
 
-                <div class="section-title">处置方式</div>
-                <div class="action-list">
-                    <label><input type="radio" name="dispose" value="${DISPOSE_RELEASE}" checked ${can ? '' : 'disabled'} /> 放行</label>
-                    <label><input type="radio" name="dispose" value="${DISPOSE_DOWNGRADE}" ${can ? '' : 'disabled'} /> 降级</label>
-                    <label><input type="radio" name="dispose" value="${DISPOSE_RETEST}" ${can ? '' : 'disabled'} /> 重测</label>
-                    <label><input type="radio" name="dispose" value="${DISPOSE_ANALYZE}" ${can ? '' : 'disabled'} /> 可靠性分析</label>
-                </div>
-
+            const engNotePanel = `
                 <div id="panelEngNote" class="panel">
                     <div class="form-row">
                         <label>工程备注（可选）</label>
@@ -295,57 +364,137 @@
                             ${engNoteOptionsHtml()}
                         </select>
                     </div>
-                </div>
+                </div>`;
 
-                <div id="panelDowngrade" class="panel hidden">
-                    <p class="hint" style="margin-bottom:10px;">降级操作必须至少变更一个等级（不能全部保持源→源）。</p>
-                    <div class="dg-rows" id="dgRows"></div>
-                    ${grades.length ? '' : '<div class="hint">无等级数据，无法降级</div>'}
-                </div>
-
-                <div id="panelRetest" class="panel hidden">
-                    ${wltMode}
-                    <div id="retestGradeBox">
-                        <div class="form-row">
-                            <label>选择重测等级（可多选）</label>
-                            ${retestChecks}
-                        </div>
-                    </div>
-                    <div id="retestCodeBox" class="panel hidden" style="margin-top:0;border:none;padding:0;background:transparent;">
-                        <div class="form-row">
-                            <label>指定 code（数字）</label>
-                            <input id="retest_code" type="text" inputmode="numeric" placeholder="例如 123" ${can ? '' : 'disabled'} />
-                        </div>
-                    </div>
-                </div>
-
+            const manualPanel = `
                 <div id="panelManualNote" class="panel">
                     <div class="form-row">
                         <label>手输备注（可选）</label>
                         <textarea id="dispose_manual_note" maxlength="1024" placeholder="" ${can ? '' : 'disabled'}></textarea>
                     </div>
-                </div>
+                </div>`;
 
+            const actions = `
                 <div id="submitErr" class="err"></div>
                 <div class="page-actions">
                     <button type="button" class="btn btn-ghost" id="cancelBtn">取消</button>
                     <button type="button" class="btn btn-success" id="confirmBtn" ${can ? '' : 'disabled'}>确认</button>
-                </div>
-            `;
+                </div>`;
 
-            document.querySelectorAll('input[name=dispose]').forEach(el => {
-                el.addEventListener('change', syncPanels);
-            });
-            document.querySelectorAll('input[name=retest_mode]').forEach(el => {
-                el.addEventListener('change', syncRetestMode);
-            });
+            if (isWlt()) {
+                if (!wafers.length) {
+                    document.getElementById('content').innerHTML = `
+                        ${summaryHtml}
+                        <div class="err">无法解析 wafer 列表，不能处置</div>
+                        ${actions}
+                    `;
+                    document.getElementById('cancelBtn').addEventListener('click', () => {
+                        window.location.href = '/eng/holds';
+                    });
+                    return;
+                }
+                document.getElementById('content').innerHTML = `
+                    ${summaryHtml}
+                    <div class="section-title">按片处置（须一次性覆盖全部 ${wafers.length} 片）</div>
+                    <p class="hint" style="margin-bottom:12px;">工程师意见不改写等级数量；各片可选择不同处置。</p>
+                    <div id="waferList">
+                        ${wafers.map((w, i) => waferBlockHtml(w, i, can)).join('')}
+                    </div>
+                    ${engNotePanel}
+                    ${manualPanel}
+                    ${actions}
+                `;
+
+                wafers.forEach((_, idx) => {
+                    document.querySelectorAll(`input[name=wdispose_${idx}]`).forEach(el => {
+                        el.addEventListener('change', () => syncWaferSub(idx));
+                    });
+                    document.querySelectorAll(`input[name=wrt_mode_${idx}]`).forEach(el => {
+                        el.addEventListener('change', () => syncWaferRtMode(idx));
+                    });
+                    syncWaferSub(idx);
+                });
+            } else {
+                const retestChecks = grades.length
+                    ? `<div class="grade-checks">${grades.map(g => `
+                        <label>
+                            <input type="checkbox" name="retest_grade" value="${esc(g.grade)}" />
+                            ${esc(g.grade)}${g.qty !== '' ? ' · ' + esc(g.qty) : ''}
+                        </label>`).join('')}</div>`
+                    : '<div class="hint">无已有等级</div>';
+
+                document.getElementById('content').innerHTML = `
+                    ${summaryHtml}
+                    <div class="section-title">处置方式</div>
+                    <div class="action-list">
+                        <label><input type="radio" name="dispose" value="${DISPOSE_RELEASE}" checked ${can ? '' : 'disabled'} /> 放行</label>
+                        <label><input type="radio" name="dispose" value="${DISPOSE_DOWNGRADE}" ${can ? '' : 'disabled'} /> 降级</label>
+                        <label><input type="radio" name="dispose" value="${DISPOSE_RETEST}" ${can ? '' : 'disabled'} /> 重测</label>
+                        <label><input type="radio" name="dispose" value="${DISPOSE_ANALYZE}" ${can ? '' : 'disabled'} /> 可靠性分析</label>
+                    </div>
+                    ${engNotePanel}
+                    <div id="panelDowngrade" class="panel hidden">
+                        <p class="hint" style="margin-bottom:10px;">降级操作必须至少变更一个等级（不能全部保持源→源）。意见不改写等级数量字段。</p>
+                        <div class="dg-rows" id="dgRows"></div>
+                        ${grades.length ? '' : '<div class="hint">无等级数据，无法降级</div>'}
+                    </div>
+                    <div id="panelRetest" class="panel hidden">
+                        <div id="retestGradeBox">
+                            <div class="form-row">
+                                <label>选择重测等级（可多选）</label>
+                                ${retestChecks}
+                            </div>
+                        </div>
+                    </div>
+                    ${manualPanel}
+                    ${actions}
+                `;
+
+                document.querySelectorAll('input[name=dispose]').forEach(el => {
+                    el.addEventListener('change', syncPanels);
+                });
+                grades.forEach(g => addDowngradeRow('dgRows', g.grade, g.grade));
+                syncPanels();
+            }
+
             document.getElementById('cancelBtn').addEventListener('click', () => {
                 window.location.href = '/eng/holds';
             });
             document.getElementById('confirmBtn').addEventListener('click', submitDispose);
+        }
 
-            grades.forEach(g => addDowngradeRow(g.grade, g.grade));
-            syncPanels();
+        function collectWltWaferActions() {
+            const actions = [];
+            for (let idx = 0; idx < wafers.length; idx++) {
+                const wafer = wafers[idx];
+                const dispose = Number(
+                    (document.querySelector(`input[name=wdispose_${idx}]:checked`) || {}).value
+                );
+                if (!dispose) {
+                    return { error: `${wafer} 未选择处置方式` };
+                }
+                const item = { wafer, dispose };
+                if (dispose === DISPOSE_DOWNGRADE) {
+                    item.downgrade_mode = waferDgMode(idx);
+                } else if (dispose === DISPOSE_RETEST) {
+                    const mode = waferRtMode(idx);
+                    item.retest_mode = mode;
+                    if (mode === 'full') {
+                        // 整片重测不填 code
+                    } else {
+                        const codes = (document.getElementById(`wrt_codes_${idx}`).value || '').trim();
+                        if (!codes) {
+                            return { error: `${wafer} 夹具重测须填写 code（如 @1@361）` };
+                        }
+                        if (!RETEST_CODES_RE.test(codes)) {
+                            return { error: `${wafer} 重测 code 须为 @数字 形式，如 @1@361` };
+                        }
+                        item.retest_codes = codes;
+                    }
+                }
+                actions.push(item);
+            }
+            return { actions };
         }
 
         async function submitDispose() {
@@ -355,29 +504,39 @@
                 errEl.textContent = '当前不可处置';
                 return;
             }
-            const dispose = selectedDispose();
-            const body = { hold_record_id: RECORD_ID, dispose };
 
-            if (dispose === DISPOSE_RELEASE) {
-                body.dispose_note = selectedEngNote() || null;
-            } else if (dispose === DISPOSE_DOWNGRADE) {
-                const downgrades = collectDowngrades();
-                if (!downgrades.length) {
-                    errEl.textContent = '降级须至少变更一个等级（不能全部保持源→源）';
+            const body = { hold_record_id: RECORD_ID };
+            const manual = (document.getElementById('dispose_manual_note').value || '').trim();
+            body.dispose_manual_note = manual || null;
+
+            if (isWlt()) {
+                const collected = collectWltWaferActions();
+                if (collected.error) {
+                    errEl.textContent = collected.error;
                     return;
                 }
-                body.downgrades = downgrades;
-                body.dispose_note = selectedEngNote() || null;
-            } else if (dispose === DISPOSE_RETEST) {
-                if (retestMode() === 'code') {
-                    const code = (document.getElementById('retest_code').value || '').trim();
-                    if (!/^\d+$/.test(code)) {
-                        errEl.textContent = '重测 code 须为数字';
+                body.wafer_actions = collected.actions;
+                const needNote = collected.actions.some(
+                    a => a.dispose === DISPOSE_RELEASE || a.dispose === DISPOSE_DOWNGRADE
+                );
+                if (needNote) {
+                    body.dispose_note = selectedEngNote() || null;
+                }
+            } else {
+                const dispose = selectedDispose();
+                body.dispose = dispose;
+                if (dispose === DISPOSE_RELEASE) {
+                    body.dispose_note = selectedEngNote() || null;
+                } else if (dispose === DISPOSE_DOWNGRADE) {
+                    const downgrades = collectDowngrades('dgRows');
+                    if (!downgrades.length) {
+                        errEl.textContent = '降级须至少变更一个等级（不能全部保持源→源）';
                         return;
                     }
-                    body.retest_code = code;
-                } else {
-                    const gs = collectRetestGrades();
+                    body.downgrades = downgrades;
+                    body.dispose_note = selectedEngNote() || null;
+                } else if (dispose === DISPOSE_RETEST) {
+                    const gs = collectRetestGrades('retest_grade');
                     if (!gs.length) {
                         errEl.textContent = '请至少选择一个重测等级';
                         return;
@@ -385,8 +544,6 @@
                     body.retest_grades = gs;
                 }
             }
-            const manual = (document.getElementById('dispose_manual_note').value || '').trim();
-            body.dispose_manual_note = manual || null;
 
             const btn = document.getElementById('confirmBtn');
             btn.disabled = true;
@@ -402,7 +559,7 @@
                     return;
                 }
                 const d = json.data || {};
-                alert(`处置成功：${d.dispose_label || dispose}`);
+                alert(`处置成功：${d.dispose_label || d.dispose || ''}`);
                 window.location.href = '/eng/holds';
             } catch (e) {
                 errEl.textContent = '请求失败: ' + e;
@@ -438,6 +595,7 @@
                 }
                 record = json.data || {};
                 grades = Array.isArray(record.GRADES) ? record.GRADES : [];
+                wafers = Array.isArray(record.WAFERS) ? record.WAFERS.slice() : [];
                 await loadEngNotes(record.PRODUCT_ID);
                 renderPage();
             } catch (e) {

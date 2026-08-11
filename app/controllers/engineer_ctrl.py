@@ -275,7 +275,7 @@ def get_owned_holding_records(
 def get_owned_dispose_record(eng_user_id, hold_record_id):
     """
     加载工程师处置页所需的 hold_record。
-    须为所属型号；附带 CAN_DISPOSE / GRADE 解析结果。
+    须为所属型号；附带 CAN_DISPOSE / GRADE 解析结果 / WAFERS（WLT 按片用）。
     """
     from app.controllers import dispose_ctrl
     from app.controllers.hold_report_ctrl import RECORD_TYPE_LABELS

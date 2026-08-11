@@ -101,6 +101,7 @@
         </div>
     </main>
 
+    <script src="{{ url_for('static', filename='js/dispose_detail_view.js') }}"></script>
     <script>
         const RECORD_ID = {{ record_id|int }};
         const DISPOSE_ANALYZE_RETURN = 66;
@@ -151,7 +152,7 @@
                     <div><div class="k">Lot / Wafer</div><div class="v">${esc(record.LOT_ID || '-')} / ${esc(record.WAFER_ID || '-')}</div></div>
                     <div><div class="k">站点/设备</div><div class="v">${esc(record.STATION || '-')} / ${esc(record.EQUIP_ID || '-')}</div></div>
                     <div><div class="k">工程师处置</div><div class="v">${engDisposeBadge()}</div></div>
-                    <div><div class="k">处置详情</div><div class="v">${esc(record.LAST_DISPOSE_DETAIL || '-')}</div></div>
+                    <div><div class="k">处置详情</div><div class="v">${renderDisposeDetail(record.LAST_DISPOSE_DETAIL || '-')}</div></div>
                     <div><div class="k">工程备注</div><div class="v">${esc(record.LAST_DISPOSE_NOTE || '-')}</div></div>
                     <div><div class="k">手输备注</div><div class="v">${esc(record.LAST_DISPOSE_MANUAL_NOTE || '-')}</div></div>
                     <div><div class="k">等级/数量</div><div class="v">${esc(record.GRADE_NUM_DISPLAY || record.GRADE_NUM || '-')}</div></div>

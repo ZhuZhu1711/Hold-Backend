@@ -13,6 +13,8 @@ DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不�
   降级: DG:HA>F;FB>F
   重测(等级): RT:F,HA
   重测(WLT code): RT:CODE=123
+  WLT 按片（直白中文，片间 ;）：#02，降级，降main拆批;#03，重测，整片重测;#04，重测，重测A夹具，@1@361
+工程师处置仅为意见，不改写 FT_HOLD_RECORD.GRADE_NUM。
 DISPOSE_NOTE：工程师处置时选择的工程备注文本
 DISPOSE_MANUAL_NOTE：任意处置时可选手输备注（工程师/生产）
 """
@@ -25,7 +27,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import db
 from app.config import Config
 from app.utils.auth_decorators import ROLE_ROOT, ROLE_PRODUCTION
-from app.utils.database_util import format_wafer_id_display
+from app.utils.database_util import (
+    expand_display_wafer_ids,
+    format_wafer_id_display,
+)
 
 
 # ---------- DISPOSE 行为码 ----------
@@ -40,10 +45,28 @@ DISPOSE_ROLLBACK = 8         # 回退
 DISPOSE_PROD_ANALYZE_RETURN = 66  # 分析(返回) — 生产
 DISPOSE_CLOSE = 99           # 关闭
 
-DISPOSE_DETAIL_MAX_LEN = 1024
+DISPOSE_DETAIL_MAX_LEN = 4000
 DISPOSE_NOTE_MAX_LEN = 1024
 DISPOSE_MANUAL_NOTE_MAX_LEN = 1024
 RECORD_TYPE_WLT = 2
+
+# WLT 降级 / 重测子类型（API 入参）
+DG_MODE_MAIN_SPLIT = 'main_split'
+DG_MODE_MAIN_NOSPLIT = 'main_nosplit'
+RT_MODE_FULL = 'full'
+RT_MODE_FIXTURE_A = 'fixture_a'
+RT_MODE_FIXTURE_B = 'fixture_b'
+
+_DG_MODE_LABEL = {
+    DG_MODE_MAIN_SPLIT: '降main拆批',
+    DG_MODE_MAIN_NOSPLIT: '降main不拆批',
+}
+_RT_MODE_LABEL = {
+    RT_MODE_FULL: '整片重测',
+    RT_MODE_FIXTURE_A: '重测A夹具',
+    RT_MODE_FIXTURE_B: '重测B夹具',
+}
+_RETEST_CODES_RE = re.compile(r'^(@\d+)+$')
 
 DISPOSE_LABELS = {
     DISPOSE_CREATE: '创建',
@@ -201,6 +224,237 @@ def _norm_grade_token(value):
     return str(value).strip()
 
 
+def _norm_wafer_display(value):
+    """统一为 #后缀 展示键。"""
+    if value is None:
+        return ''
+    text_val = str(value).strip()
+    if not text_val:
+        return ''
+    return format_wafer_id_display(text_val) or text_val
+
+
+def list_wafers_for_record(record):
+    """
+    从 hold_record 展开 wafer 展示列表，如 ['#01', '#02']。
+    WAFER_ID 可能已是 #01#02 展示串或完整片号。
+    """
+    if not record:
+        return []
+    wafer_raw = record.get('WAFER_ID')
+    lot_raw = record.get('LOT_ID')
+    expanded = expand_display_wafer_ids(wafer_raw, lot_raw)
+    if not expanded and wafer_raw is not None and str(wafer_raw).strip():
+        raw = str(wafer_raw).strip()
+        if raw.startswith('#'):
+            parts = re.findall(r'#([^#\s]+)', raw)
+            if parts:
+                return [f'#{p}' for p in parts]
+        expanded = [raw]
+    displays = []
+    seen = set()
+    for wid in expanded:
+        disp = _norm_wafer_display(wid)
+        # 防御：误把合并串当成一片
+        if disp.startswith('#') and disp.count('#') > 1:
+            for suffix in re.findall(r'#([^#\s]+)', disp):
+                token = f'#{suffix}'
+                if token not in seen:
+                    seen.add(token)
+                    displays.append(token)
+            continue
+        if not disp or disp in seen:
+            continue
+        seen.add(disp)
+        displays.append(disp)
+    return displays
+
+
+def enrich_record_wafers(record):
+    """为 record dict 附加 WAFERS 展示列表。"""
+    if not record:
+        return record
+    record['WAFERS'] = list_wafers_for_record(record)
+    return record
+
+
+def summarize_wafer_disposes(dispose_codes):
+    """
+    多片 dispose 汇总为记录级 STATUS/DISPOSE：
+    任一 5 → 5；否则任一 3 → 3；否则任一 2 → 2；否则 1。
+    """
+    codes = []
+    for c in dispose_codes or []:
+        try:
+            codes.append(int(c))
+        except (TypeError, ValueError):
+            continue
+    if DISPOSE_ANALYZE in codes:
+        return DISPOSE_ANALYZE
+    if DISPOSE_RETEST in codes:
+        return DISPOSE_RETEST
+    if DISPOSE_DOWNGRADE in codes:
+        return DISPOSE_DOWNGRADE
+    return DISPOSE_RELEASE
+
+
+def normalize_retest_codes(retest_codes):
+    """校验 @1@361 形式；成功 (True, normalized_or_empty)，失败 (False, err)。"""
+    if retest_codes is None:
+        return True, ''
+    raw = str(retest_codes).strip()
+    if not raw:
+        return True, ''
+    if not _RETEST_CODES_RE.fullmatch(raw):
+        return False, '重测 code 须为 @数字 形式，如 @1@361'
+    return True, raw
+
+
+def _build_downgrade_pairs(downgrades):
+    """成功 (True, pairs_list)；失败 (False, err)。"""
+    pairs = []
+    seen_from = set()
+    for item in (downgrades or []):
+        if not isinstance(item, dict):
+            return False, 'downgrades 格式无效'
+        src = _norm_grade_token(item.get('from') if 'from' in item else item.get('from_grade'))
+        dst = _norm_grade_token(item.get('to') if 'to' in item else item.get('to_grade'))
+        if not src or not dst:
+            return False, '降级映射源/目标等级不能为空'
+        if src == dst:
+            continue
+        key = src.upper()
+        if key in seen_from:
+            return False, f'同一源等级只能降一次: {src}'
+        seen_from.add(key)
+        pairs.append(f'{src}>{dst}')
+    if not pairs:
+        return False, '降级须至少变更一个等级（不能全部保持源→源）'
+    return True, pairs
+
+
+def _build_retest_grade_list(retest_grades):
+    """成功 (True, uniq_grades)；失败 (False, err)。"""
+    uniq = []
+    seen = set()
+    for g in (retest_grades or []):
+        token = _norm_grade_token(g)
+        if not token:
+            continue
+        k = token.upper()
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(token)
+    if not uniq:
+        return False, '重测须至少选择一个等级'
+    return True, uniq
+
+
+def _encode_one_wafer_action(action):
+    """
+    编码单片直白中文片段，如「#02，降级，降main拆批」。
+    成功 (True, fragment, dispose_int)；失败 (False, err, None)。
+    """
+    if not isinstance(action, dict):
+        return False, 'wafer_actions 项格式无效', None
+
+    wafer = _norm_wafer_display(action.get('wafer') or action.get('wafer_id'))
+    if not wafer:
+        return False, 'wafer 不能为空', None
+
+    try:
+        dispose = int(action.get('dispose'))
+    except (TypeError, ValueError):
+        return False, f'{wafer} dispose 无效', None
+
+    if dispose not in ENGINEER_DISPOSES:
+        return False, f'{wafer} 不支持的处置行为: {dispose}', None
+
+    action_label = DISPOSE_LABELS.get(dispose, str(dispose))
+    parts = [wafer, action_label]
+
+    if dispose in (DISPOSE_RELEASE, DISPOSE_ANALYZE):
+        return True, '，'.join(parts), dispose
+
+    if dispose == DISPOSE_DOWNGRADE:
+        mode = str(action.get('downgrade_mode') or '').strip().lower()
+        if mode not in _DG_MODE_LABEL:
+            return False, f'{wafer} 降级须指定 downgrade_mode（main_split/main_nosplit）', None
+        parts.append(_DG_MODE_LABEL[mode])
+        return True, '，'.join(parts), dispose
+
+    if dispose == DISPOSE_RETEST:
+        mode = str(action.get('retest_mode') or '').strip().lower()
+        if mode not in _RT_MODE_LABEL:
+            return False, (
+                f'{wafer} 重测须指定 retest_mode'
+                f'（full/fixture_a/fixture_b）'
+            ), None
+        ok_codes, codes_or_err = normalize_retest_codes(action.get('retest_codes'))
+        if not ok_codes:
+            return False, f'{wafer} {codes_or_err}', None
+        parts.append(_RT_MODE_LABEL[mode])
+        if mode == RT_MODE_FULL:
+            if codes_or_err:
+                return False, f'{wafer} 整片重测不支持填写 code', None
+            return True, '，'.join(parts), dispose
+        # 夹具重测须填 code
+        if not codes_or_err:
+            return False, f'{wafer} 夹具重测须填写 code（如 @1@361）', None
+        parts.append(codes_or_err)
+        return True, '，'.join(parts), dispose
+
+    return False, f'{wafer} 不支持的处置行为: {dispose}', None
+
+
+def build_wlt_wafer_dispose_detail(wafer_actions, expected_wafers):
+    """
+    校验并生成 WLT 按片 DISPOSE_DETAIL（直白中文，片间 ; 分隔）。
+    成功 (True, detail, summarized_dispose)；失败 (False, err, None)。
+    """
+    if not isinstance(wafer_actions, list) or not wafer_actions:
+        return False, 'WLT 处置须提供 wafer_actions', None
+
+    expected = [_norm_wafer_display(w) for w in (expected_wafers or [])]
+    expected = [w for w in expected if w]
+    if not expected:
+        return False, '记录无有效 wafer，无法按片处置', None
+
+    expected_set = set(expected)
+    fragments = []
+    dispose_codes = []
+    seen = set()
+
+    for action in wafer_actions:
+        ok, frag_or_err, disp = _encode_one_wafer_action(action)
+        if not ok:
+            return False, frag_or_err, None
+        wafer = _norm_wafer_display(action.get('wafer') or action.get('wafer_id'))
+        if wafer in seen:
+            return False, f'wafer 重复: {wafer}', None
+        if wafer not in expected_set:
+            return False, f'未知 wafer: {wafer}', None
+        seen.add(wafer)
+        fragments.append(frag_or_err)
+        dispose_codes.append(disp)
+
+    missing = [w for w in expected if w not in seen]
+    if missing:
+        return False, f'须一次性处置全部 wafer，缺少: {",".join(missing)}', None
+
+    # 按 expected 顺序重排，便于阅读
+    by_wafer = {}
+    for frag, action in zip(fragments, wafer_actions):
+        w = _norm_wafer_display(action.get('wafer') or action.get('wafer_id'))
+        by_wafer[w] = frag
+    ordered = [by_wafer[w] for w in expected]
+    detail = ';'.join(ordered)
+    if len(detail) > DISPOSE_DETAIL_MAX_LEN:
+        return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
+    return True, detail, summarize_wafer_disposes(dispose_codes)
+
+
 def build_dispose_detail(
     dispose,
     dispose_detail=None,
@@ -208,39 +462,44 @@ def build_dispose_detail(
     retest_grades=None,
     retest_code=None,
     record_type=None,
+    wafer_actions=None,
+    expected_wafers=None,
 ):
     """
     按处置行为生成 DISPOSE_DETAIL（仅规则化文本，不含工程备注/手输备注）。
     降级: DG:HA>F;FB>F
     重测: RT:F,HA 或 RT:CODE=123
+    WLT 按片: #01，放行;#02，降级，降main拆批;#03，重测，整片重测;#04，重测，重测A夹具，@1@361
     其它行为：DISPOSE_DETAIL 为空
-    成功返回 (True, detail_or_None)；失败返回 (False, err_msg)。
+    成功返回 (True, detail_or_None[, summarized_dispose])；
+    无 wafer_actions 时仍为 (True, detail)；失败返回 (False, err_msg)。
+    若传入 wafer_actions（WLT），返回 (True, detail, summarized_dispose)。
     """
+    try:
+        rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
+    except (TypeError, ValueError):
+        return False, 'record_type 无效'
+
+    if wafer_actions is not None:
+        if rt is not None and rt != RECORD_TYPE_WLT:
+            return False, '仅 WLT 处置单支持按片 wafer_actions'
+        ok, detail_or_err, summarized = build_wlt_wafer_dispose_detail(
+            wafer_actions, expected_wafers,
+        )
+        if not ok:
+            return False, detail_or_err
+        return True, detail_or_err, summarized
+
     try:
         dispose = int(dispose)
     except (TypeError, ValueError):
         return False, 'dispose 无效'
 
     if dispose == DISPOSE_DOWNGRADE:
-        pairs = []
-        seen_from = set()
-        for item in (downgrades or []):
-            if not isinstance(item, dict):
-                return False, 'downgrades 格式无效'
-            src = _norm_grade_token(item.get('from') if 'from' in item else item.get('from_grade'))
-            dst = _norm_grade_token(item.get('to') if 'to' in item else item.get('to_grade'))
-            if not src or not dst:
-                return False, '降级映射源/目标等级不能为空'
-            if src == dst:
-                continue
-            key = src.upper()
-            if key in seen_from:
-                return False, f'同一源等级只能降一次: {src}'
-            seen_from.add(key)
-            pairs.append(f'{src}>{dst}')
-        if not pairs:
-            return False, '降级须至少变更一个等级（不能全部保持源→源）'
-        detail = 'DG:' + ';'.join(pairs)
+        ok, pairs_or_err = _build_downgrade_pairs(downgrades)
+        if not ok:
+            return False, pairs_or_err
+        detail = 'DG:' + ';'.join(pairs_or_err)
     elif dispose == DISPOSE_RETEST:
         code_raw = None if retest_code is None else str(retest_code).strip()
         grades = []
@@ -249,38 +508,32 @@ def build_dispose_detail(
             if token:
                 grades.append(token)
 
-        try:
-            rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
-        except (TypeError, ValueError):
-            return False, 'record_type 无效'
-
         if code_raw and grades:
             return False, 'WLT 重测等级与 code 互斥，只能选一种'
         if code_raw:
             if rt is not None and rt != RECORD_TYPE_WLT:
                 return False, '仅 WLT 处置单支持按 code 重测'
-            if not re.fullmatch(r'\d+', code_raw):
-                return False, '重测 code 须为数字'
-            detail = f'RT:CODE={code_raw}'
+            # 兼容旧单数字；也接受 @1@361
+            if re.fullmatch(r'\d+', code_raw):
+                detail = f'RT:CODE={code_raw}'
+            elif _RETEST_CODES_RE.fullmatch(code_raw):
+                detail = f'RT:CODE={code_raw}'
+            else:
+                return False, '重测 code 须为数字或 @数字 形式'
         elif grades:
-            uniq = []
-            seen = set()
-            for g in grades:
-                k = g.upper()
-                if k in seen:
-                    continue
-                seen.add(k)
-                uniq.append(g)
-            detail = 'RT:' + ','.join(uniq)
+            ok, uniq_or_err = _build_retest_grade_list(grades)
+            if not ok:
+                return False, uniq_or_err
+            detail = 'RT:' + ','.join(uniq_or_err)
         else:
             return False, '重测须选择等级或填写 code'
     else:
         # 放行/分析/生产等：规则化详情为空；手输备注走 DISPOSE_MANUAL_NOTE
         detail = None
-        # 兼容：若直接传入已拼好的 DG:/RT: 串
+        # 兼容：若直接传入已拼好的 DG:/RT:/W: 或按片直白串
         if dispose_detail is not None:
             raw = str(dispose_detail).strip()
-            if raw.upper().startswith(('DG:', 'RT:')):
+            if _is_structured_dispose_detail(raw):
                 detail = raw
 
     if detail is not None and len(detail) > DISPOSE_DETAIL_MAX_LEN:
@@ -308,6 +561,17 @@ def normalize_dispose_manual_note(dispose_manual_note):
     return True, note
 
 
+def _is_structured_dispose_detail(raw):
+    """是否为规则化处置详情（非自由备注）。"""
+    if raw is None:
+        return False
+    text_val = str(raw).strip()
+    if not text_val:
+        return False
+    upper = text_val.upper()
+    return upper.startswith(('DG:', 'RT:', 'W:')) or text_val.startswith('#')
+
+
 def enrich_record_grades(record):
     """为 record dict 附加 GRADE_NUM_DISPLAY / GRADES。"""
     if not record:
@@ -333,7 +597,7 @@ def _load_record(record_id: int):
     ).fetchone()
     if not row:
         return None
-    return enrich_record_grades(_row_to_dict(row))
+    return enrich_record_wafers(enrich_record_grades(_row_to_dict(row)))
 
 
 def _load_circulation(circ_id):
@@ -480,14 +744,20 @@ def dispose_engineer_record(
     downgrades=None,
     retest_grades=None,
     retest_code=None,
+    wafer_actions=None,
 ):
     """工程师处置：仅允许 ENGINEER_DISPOSES。dispose_note 为工程备注。"""
-    try:
-        dispose = int(dispose)
-    except (TypeError, ValueError):
+    # WLT 按片：dispose 可由 wafer_actions 汇总，此处先占位，dispose_record 内再校验
+    if dispose is not None and str(dispose).strip() != '':
+        try:
+            dispose = int(dispose)
+        except (TypeError, ValueError):
+            return False, 'dispose 无效', None
+        if dispose not in ENGINEER_DISPOSES:
+            return False, '非工程师处置行为', None
+    elif wafer_actions is None:
         return False, 'dispose 无效', None
-    if dispose not in ENGINEER_DISPOSES:
-        return False, '非工程师处置行为', None
+
     return dispose_record(
         hold_record_id=hold_record_id,
         dispose=dispose,
@@ -499,6 +769,7 @@ def dispose_engineer_record(
         downgrades=downgrades,
         retest_grades=retest_grades,
         retest_code=retest_code,
+        wafer_actions=wafer_actions,
     )
 
 
@@ -533,7 +804,7 @@ def dispose_production_record(
     manual = dispose_manual_note
     if manual is None and dispose_detail is not None:
         raw = str(dispose_detail).strip()
-        if raw and not raw.upper().startswith(('DG:', 'RT:')):
+        if raw and not _is_structured_dispose_detail(raw):
             manual = dispose_detail
             dispose_detail = None
 
@@ -833,6 +1104,7 @@ def dispose_record(
     downgrades=None,
     retest_grades=None,
     retest_code=None,
+    wafer_actions=None,
 ):
     """
     对 hold_record 执行一次处置流转。
@@ -840,13 +1112,23 @@ def dispose_record(
     DISPOSE_DETAIL：规则化详情（降级/重测等）。
     DISPOSE_NOTE：工程师工程备注。
     DISPOSE_MANUAL_NOTE：手输备注（任意处置可选）。
+    工程师处置仅为意见：仅回写 LAST_CIRCULATION_ID / STATUS，不改 GRADE_NUM。
+    WLT 可传 wafer_actions；此时 dispose 可省略，由各片汇总。
     """
     try:
         rid = int(hold_record_id)
-        dispose = int(dispose)
         actor_user_id = int(actor_user_id)
     except (TypeError, ValueError):
         return False, '参数无效', None
+
+    dispose_given = dispose is not None and str(dispose).strip() != ''
+    if dispose_given:
+        try:
+            dispose = int(dispose)
+        except (TypeError, ValueError):
+            return False, '参数无效', None
+    else:
+        dispose = None
 
     try:
         record = _load_record(rid)
@@ -855,6 +1137,26 @@ def dispose_record(
 
         if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
+
+        try:
+            record_type = (
+                int(record.get('RECORD_TYPE'))
+                if record.get('RECORD_TYPE') is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            return False, 'record_type 无效', None
+
+        is_wlt = record_type == RECORD_TYPE_WLT
+        engineer_side = dispose in ENGINEER_DISPOSES if dispose is not None else (
+            wafer_actions is not None
+        )
+        if is_wlt and engineer_side and wafer_actions is None:
+            return False, 'WLT 处置须提供 wafer_actions', None
+        if (not is_wlt) and wafer_actions is not None:
+            return False, '仅 WLT 处置单支持按片 wafer_actions', None
+        if dispose is None and wafer_actions is None:
+            return False, '参数无效', None
 
         ok_note, note_or_err = normalize_dispose_note(dispose_note)
         if not ok_note:
@@ -866,80 +1168,102 @@ def dispose_record(
             return False, manual_or_err, None
         manual_note = manual_or_err
 
-        has_structured = (
-            downgrades is not None
-            or retest_grades is not None
-            or retest_code is not None
-        )
+        detail = None
+        if is_wlt and wafer_actions is not None:
+            built = build_dispose_detail(
+                dispose=dispose,
+                dispose_detail=dispose_detail,
+                record_type=record_type,
+                wafer_actions=wafer_actions,
+                expected_wafers=record.get('WAFERS') or list_wafers_for_record(record),
+            )
+            if not built[0]:
+                return False, built[1], None
+            detail = built[1]
+            summarized = built[2]
+            if dispose is not None and int(dispose) != int(summarized):
+                return False, (
+                    f'dispose 与按片汇总不一致（汇总为 {summarized}，'
+                    f'传入 {dispose}）'
+                ), None
+            dispose = int(summarized)
+            if dispose not in ENGINEER_DISPOSES and actor_role != ROLE_ROOT:
+                return False, '非工程师处置行为', None
+        else:
+            has_structured = (
+                downgrades is not None
+                or retest_grades is not None
+                or retest_code is not None
+            )
 
-        # 兼容旧客户端：放行/降级把工程备注塞在 dispose_detail
-        if (
-            dispose == DISPOSE_RELEASE
-            and note is None
-            and dispose_detail is not None
-            and not has_structured
-        ):
-            raw = str(dispose_detail).strip()
-            if raw and not raw.upper().startswith(('DG:', 'RT:')):
+            # 兼容旧客户端：放行/降级把工程备注塞在 dispose_detail
+            if (
+                dispose == DISPOSE_RELEASE
+                and note is None
+                and dispose_detail is not None
+                and not has_structured
+            ):
+                raw = str(dispose_detail).strip()
+                if raw and not _is_structured_dispose_detail(raw):
+                    ok_note, note_or_err = normalize_dispose_note(dispose_detail)
+                    if not ok_note:
+                        return False, note_or_err, None
+                    note = note_or_err
+                    dispose_detail = None
+            elif (
+                dispose == DISPOSE_DOWNGRADE
+                and note is None
+                and has_structured
+                and dispose_detail is not None
+                and not str(dispose_detail).strip().upper().startswith('DG:')
+            ):
                 ok_note, note_or_err = normalize_dispose_note(dispose_detail)
                 if not ok_note:
                     return False, note_or_err, None
                 note = note_or_err
                 dispose_detail = None
-        elif (
-            dispose == DISPOSE_DOWNGRADE
-            and note is None
-            and has_structured
-            and dispose_detail is not None
-            and not str(dispose_detail).strip().upper().startswith('DG:')
-        ):
-            ok_note, note_or_err = normalize_dispose_note(dispose_detail)
-            if not ok_note:
-                return False, note_or_err, None
-            note = note_or_err
-            dispose_detail = None
 
-        # 兼容：分析/其它行为曾把手输备注放在 dispose_detail
-        if (
-            manual_note is None
-            and dispose_detail is not None
-            and dispose not in (DISPOSE_DOWNGRADE, DISPOSE_RETEST)
-            and not has_structured
-        ):
-            raw = str(dispose_detail).strip()
-            if raw and not raw.upper().startswith(('DG:', 'RT:')):
-                ok_manual, manual_or_err = normalize_dispose_manual_note(dispose_detail)
-                if not ok_manual:
-                    return False, manual_or_err, None
-                manual_note = manual_or_err
-                dispose_detail = None
-
-        if dispose in (DISPOSE_DOWNGRADE, DISPOSE_RETEST) and not has_structured and dispose_detail:
-            detail = str(dispose_detail).strip() or None
-            if detail and len(detail) > DISPOSE_DETAIL_MAX_LEN:
-                return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
-        elif dispose in (
-            DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_RELEASE, DISPOSE_ANALYZE,
-        ) or has_structured:
-            ok_detail, built = build_dispose_detail(
-                dispose=dispose,
-                dispose_detail=dispose_detail,
-                downgrades=downgrades,
-                retest_grades=retest_grades,
-                retest_code=retest_code,
-                record_type=record.get('RECORD_TYPE'),
-            )
-            if not ok_detail:
-                return False, built, None
-            detail = built
-        else:
-            detail = None
-            if dispose_detail is not None:
+            # 兼容：分析/其它行为曾把手输备注放在 dispose_detail
+            if (
+                manual_note is None
+                and dispose_detail is not None
+                and dispose not in (DISPOSE_DOWNGRADE, DISPOSE_RETEST)
+                and not has_structured
+            ):
                 raw = str(dispose_detail).strip()
-                if raw.upper().startswith(('DG:', 'RT:')):
-                    detail = raw
-                    if len(detail) > DISPOSE_DETAIL_MAX_LEN:
-                        return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
+                if raw and not _is_structured_dispose_detail(raw):
+                    ok_manual, manual_or_err = normalize_dispose_manual_note(dispose_detail)
+                    if not ok_manual:
+                        return False, manual_or_err, None
+                    manual_note = manual_or_err
+                    dispose_detail = None
+
+            if dispose in (DISPOSE_DOWNGRADE, DISPOSE_RETEST) and not has_structured and dispose_detail:
+                detail = str(dispose_detail).strip() or None
+                if detail and len(detail) > DISPOSE_DETAIL_MAX_LEN:
+                    return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
+            elif dispose in (
+                DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_RELEASE, DISPOSE_ANALYZE,
+            ) or has_structured:
+                ok_detail, built = build_dispose_detail(
+                    dispose=dispose,
+                    dispose_detail=dispose_detail,
+                    downgrades=downgrades,
+                    retest_grades=retest_grades,
+                    retest_code=retest_code,
+                    record_type=record.get('RECORD_TYPE'),
+                )
+                if not ok_detail:
+                    return False, built, None
+                detail = built
+            else:
+                detail = None
+                if dispose_detail is not None:
+                    raw = str(dispose_detail).strip()
+                    if _is_structured_dispose_detail(raw):
+                        detail = raw
+                        if len(detail) > DISPOSE_DETAIL_MAX_LEN:
+                            return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
 
         last_circ = _load_circulation(record.get('LAST_CIRCULATION_ID'))
         current_owner_id = last_circ.get('NEXT_OWNER_ID') if last_circ else None
@@ -999,6 +1323,7 @@ def dispose_record(
             },
         )
 
+        # 仅回写流转指针与 STATUS；不改 GRADE_NUM（工程师意见未落地）
         db.session.execute(
             text(f"""
                 UPDATE {record_table}

@@ -206,14 +206,16 @@ def api_dispose():
     工程师处置（dispose_api.md「工程师处置」）。
     Body JSON:
       hold_record_id  (必填)
-      dispose         (必填：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
-      dispose_detail  (可选，规则化详情；一般由服务端生成 DG:/RT:)
+      dispose         (非 WLT 必填：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
+                      WLT 可省略，由 wafer_actions 汇总；若传入须与汇总一致
+      dispose_detail  (可选，规则化详情；一般由服务端生成；WLT 为直白中文按片描述)
       dispose_note    (可选，工程备注文本，最长 1024)
       dispose_manual_note (可选，手输备注，最长 1024)
-      downgrades      (降级：[{from, to}, ...]，服务端生成 DISPOSE_DETAIL)
-      retest_grades   (重测等级列表)
-      retest_code     (WLT 按 code 重测，与 retest_grades 互斥，须为数字)
-    须为当前负责人。
+      downgrades      (非 WLT 降级：[{from, to}, ...]，服务端生成 DISPOSE_DETAIL)
+      retest_grades   (非 WLT 重测等级列表)
+      retest_code     (旧版 WLT 单 code，已由 wafer_actions 取代)
+      wafer_actions   (WLT 必填：按片处置列表，须覆盖全部 wafer)
+    须为当前负责人。工程师处置不改写 GRADE_NUM。
     """
     data = request.get_json(silent=True) or {}
     hold_record_id = data.get('hold_record_id')
@@ -224,9 +226,16 @@ def api_dispose():
     downgrades = data.get('downgrades')
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
+    wafer_actions = data.get('wafer_actions')
 
-    if hold_record_id is None or dispose is None:
-        return jsonify({'code': 400, 'msg': 'hold_record_id 与 dispose 必填', 'data': None}), 400
+    if hold_record_id is None:
+        return jsonify({'code': 400, 'msg': 'hold_record_id 必填', 'data': None}), 400
+    if dispose is None and wafer_actions is None:
+        return jsonify({
+            'code': 400,
+            'msg': 'dispose 与 wafer_actions 至少提供其一',
+            'data': None,
+        }), 400
 
     success, msg, result = dispose_ctrl.dispose_engineer_record(
         hold_record_id=hold_record_id,
@@ -239,6 +248,7 @@ def api_dispose():
         downgrades=downgrades,
         retest_grades=retest_grades,
         retest_code=retest_code,
+        wafer_actions=wafer_actions,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
@@ -246,6 +256,7 @@ def api_dispose():
     bad_keys = (
         '不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持',
         '无当前', '非工程师', '降级', '重测', '互斥', '至少', '不能', '须',
+        '缺少', '未知', '重复', 'wafer', '不一致', '提供',
     )
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status

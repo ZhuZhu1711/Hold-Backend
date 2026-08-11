@@ -137,12 +137,50 @@
         </div>
     </main>
 
+    <script src="{{ url_for('static', filename='js/dispose_detail_view.js') }}"></script>
     <script>
         const REASON_MAX_LEN = 80;
         let currentPage = 1;
         let pageSize = 20;
         let totalPages = 1;
         let recordType = 0;
+        const LIST_STATE_KEY = 'prod_holds_list_state';
+
+        function saveListState() {
+            try {
+                sessionStorage.setItem(LIST_STATE_KEY, JSON.stringify({
+                    record_type: recordType,
+                    product_id: document.getElementById('product_id').value,
+                    station: document.getElementById('station').value,
+                    keyword: document.getElementById('keyword').value,
+                    page: currentPage,
+                    page_size: pageSize,
+                }));
+            } catch (e) { /* ignore */ }
+        }
+
+        function restoreListState() {
+            try {
+                const raw = sessionStorage.getItem(LIST_STATE_KEY);
+                if (!raw) return false;
+                const s = JSON.parse(raw);
+                if (!s || typeof s !== 'object') return false;
+                if (s.record_type != null && s.record_type !== '') {
+                    recordType = Number(s.record_type);
+                }
+                if (s.product_id != null) document.getElementById('product_id').value = s.product_id;
+                if (s.station != null) document.getElementById('station').value = s.station;
+                if (s.keyword != null) document.getElementById('keyword').value = s.keyword;
+                if (s.page_size) pageSize = Number(s.page_size) || pageSize;
+                if (s.page) currentPage = Number(s.page) || 1;
+                document.querySelectorAll('.tab').forEach(el => {
+                    el.classList.toggle('active', Number(el.dataset.type) === recordType);
+                });
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
 
         function esc(v) {
             return String(v ?? '')
@@ -218,6 +256,7 @@
             document.getElementById('product_id').value = '';
             document.getElementById('station').value = '';
             document.getElementById('keyword').value = '';
+            try { sessionStorage.removeItem(LIST_STATE_KEY); } catch (e) { /* ignore */ }
             loadData(true);
         }
 
@@ -238,6 +277,7 @@
         async function loadData(resetPage = true) {
             if (resetPage) currentPage = 1;
             const params = buildQuery(true);
+            saveListState();
             document.getElementById('meta').textContent = '查询中...';
             try {
                 const resp = await fetch('/prod/api/holding_records?' + params.toString());
@@ -276,7 +316,7 @@
                         <td>${esc(r.HOLD_CODE || '-')}</td>
                         <td class="reason">${formatReason(r.HOLD_REASON)}</td>
                         <td>${disposeBadge(r.LAST_DISPOSE, r.LAST_DISPOSE_LABEL)}</td>
-                        <td class="detail">${esc(r.LAST_DISPOSE_DETAIL || '-')}</td>
+                        <td class="detail">${renderDisposeDetail(r.LAST_DISPOSE_DETAIL || '-')}</td>
                         <td class="detail">${esc(r.LAST_DISPOSE_NOTE || '-')}</td>
                         <td class="detail">${esc(r.LAST_DISPOSE_MANUAL_NOTE || '-')}</td>
                         <td>${esc(r.LAST_DISPOSED_OWNER_NAME || r.LAST_DISPOSED_OWNER_ID || '-')}</td>
@@ -294,7 +334,10 @@
             window.location.href = '/prod/api/holding_records/export?' + params.toString();
         }
 
-        document.addEventListener('DOMContentLoaded', () => loadData(true));
+        document.addEventListener('DOMContentLoaded', () => {
+            const restored = restoreListState();
+            loadData(!restored);
+        });
         document.querySelectorAll('.filters input').forEach(el => {
             el.addEventListener('keyup', ev => { if (ev.key === 'Enter') loadData(true); });
         });

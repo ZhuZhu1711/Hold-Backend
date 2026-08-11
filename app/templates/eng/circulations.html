@@ -181,6 +181,7 @@
         <div class="timeline" id="timeline"></div>
     </aside>
 
+    <script src="{{ url_for('static', filename='js/dispose_detail_view.js') }}"></script>
     <script>
         let currentPage = 1;
         let pageSize = 20;
@@ -290,7 +291,7 @@
                         <td>${esc(r.DISPOSED_OWNER_NAME || r.DISPOSED_OWNER_ID)}</td>
                         <td>${esc(r.NEXT_OWNER_NAME || r.NEXT_OWNER_ID || '-')}</td>
                         <td>${esc(r.DISPOSE_DTTM || '-')}</td>
-                        <td class="detail">${esc(r.DISPOSE_DETAIL || '')}</td>
+                        <td class="detail">${renderDisposeDetail(r.DISPOSE_DETAIL || '')}</td>
                         <td class="detail">${esc(r.DISPOSE_NOTE || '')}</td>
                         <td class="detail">${esc(r.DISPOSE_MANUAL_NOTE || '')}</td>
                     </tr>
@@ -351,7 +352,7 @@
                             ${disposeBadge(c.DISPOSE, c.DISPOSE_LABEL)}
                             &nbsp;${esc(c.DISPOSED_OWNER_NAME || c.DISPOSED_OWNER_ID)}
                             → ${esc(c.NEXT_OWNER_NAME || c.NEXT_OWNER_ID || '-')}
-                            ${c.DISPOSE_DETAIL ? '<div class="detail" style="margin-top:4px;">处置详情: ' + esc(c.DISPOSE_DETAIL) + '</div>' : ''}
+                            ${c.DISPOSE_DETAIL ? '<div class="detail" style="margin-top:4px;">处置详情:<div style="margin-top:4px;">' + renderDisposeDetail(c.DISPOSE_DETAIL) + '</div></div>' : ''}
                             ${c.DISPOSE_NOTE ? '<div class="detail" style="margin-top:4px;">工程备注: ' + esc(c.DISPOSE_NOTE) + '</div>' : ''}
                             ${c.DISPOSE_MANUAL_NOTE ? '<div class="detail" style="margin-top:4px;">手输备注: ' + esc(c.DISPOSE_MANUAL_NOTE) + '</div>' : ''}
                         </div>
