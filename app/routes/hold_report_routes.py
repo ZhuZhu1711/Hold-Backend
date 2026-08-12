@@ -138,8 +138,10 @@ def api_split_merge_history():
 @login_required
 def api_hold_analysis():
     """
-    Hold Record 数据分析（bysite + raw_data；合批附源 wafer raw_data）。
-    Query: wafer_id (必填), lot_id（展示串 #03 时必填）, record_type, station
+    Hold Record 数据分析（bysite + raw_data + 同 lot 片列表）。
+    Query: wafer_id (必填), lot_id（展示串 #03 时必填；同 lot 分支也依赖原始 LOT_ID）,
+           record_type, station
+    同 lot：见 hold_report_ctrl.get_hold_analysis / docs/03-数据分析.md
     """
     wafer_id = request.args.get('wafer_id', '').strip()
     lot_id = request.args.get('lot_id', '').strip()

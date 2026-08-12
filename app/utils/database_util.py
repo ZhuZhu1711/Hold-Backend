@@ -893,6 +893,20 @@ def normalize_lot_id(lot_id) -> str:
     return text
 
 
+def lot_id_digit_suffix_len(lot_id) -> int:
+    """
+    取 lot_id 最后一个 '-' 后的后缀：若为纯数字则返回位数，否则 0。
+    用于同 lot 分析判定合批（位数 > 2）。
+    """
+    text = str(lot_id).strip() if lot_id is not None else ''
+    if not text or '-' not in text:
+        return 0
+    suffix = text.rsplit('-', 1)[-1].strip()
+    if suffix and suffix.isdigit():
+        return len(suffix)
+    return 0
+
+
 def wafer_suffix(wafer_id) -> str:
     """取最后一个 '-' 之后的文本；无 '-' 则原样返回。"""
     text = str(wafer_id).strip() if wafer_id is not None else ''
@@ -1061,7 +1075,7 @@ def is_merged_wafer_id(wafer_id) -> bool:
     return bool(suffix) and suffix.isdigit() and len(suffix) > 2
 
 
-def query_split_merge_history(wafer_id: str):
+def query_split_merge_history(wafer_id: str, sql_trace=None):
     """
     查询 wafer 合批记录（MES DB link）。
     SELECT source_lot_id
@@ -1070,6 +1084,7 @@ def query_split_merge_history(wafer_id: str):
      ORDER BY source_lot_id ASC
 
     返回 list[str]（source_lot_id）；失败返回 None。
+    sql_trace: 可选 list，追加本次 SQL（供 analysis 记日志）。
     """
     wafer_id = (wafer_id or '').strip()
     if not wafer_id:
@@ -1082,11 +1097,18 @@ def query_split_merge_history(wafer_id: str):
         WHERE s.TARGET_LOT_ID = :wafer_id
         ORDER BY source_lot_id ASC
     """
+    params = {'wafer_id': wafer_id}
+    if sql_trace is not None:
+        sql_trace.append({
+            'tag': 'query_split_merge_history',
+            'sql': ' '.join(sql.split()),
+            'params': dict(params),
+        })
 
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
     try:
         with connection.cursor() as cursor:
-            cursor.execute(sql, {'wafer_id': wafer_id})
+            cursor.execute(sql, params)
             rows = cursor.fetchall()
             result = []
             for (source_lot_id,) in rows:
