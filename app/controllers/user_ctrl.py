@@ -1,18 +1,19 @@
 from app import db
 from app.models import User
-import hashlib
 from werkzeug.security import generate_password_hash
 
 def login(employee_no, password_input):
     """
     登录逻辑
     """
+    from app.controllers.auth_ctrl import password_matches
+
     user = User.query.filter_by(EMPLOYEE_NO=employee_no).first()
     
     if not user:
         return False, "用户不存在", None
         
-    if user.check_password(password_input):
+    if password_matches(user.PASSWORD, password_input):
         return True, f"欢迎 {user.NAME}", {
             "id": user.ID,
             "name": user.NAME,
@@ -23,27 +24,25 @@ def login(employee_no, password_input):
     
 def login_logic(employee_no, password_input):
     """
-    核心登录逻辑
+    核心登录逻辑。
+    password_input：客户端应传 MD5(明文) 的 32 位 hex，避免明文上送。
     :return: (bool: 是否成功, str: 消息, dict: 用户信息或None)
     """
+    from app.controllers.auth_ctrl import password_matches
+
     user = User.query.filter_by(EMPLOYEE_NO=employee_no).first()
-    
+
     if not user:
         return False, "用户不存在", None
-        
-    # 使用 MD5 校验密码
-    input_pwd_hash = hashlib.md5(password_input.encode('utf-8')).hexdigest()
-    
-    if user.PASSWORD == input_pwd_hash:
-        # 登录成功
+
+    if password_matches(user.PASSWORD, password_input):
         return True, "登录成功", {
             "id": user.ID,
             "name": user.NAME,
             "role": user.ROLE,
             "employee_no": user.EMPLOYEE_NO
         }
-    else:
-        return False, "密码错误", None
+    return False, "密码错误", None
 
 def create_user(employee_no, name, password, role=1):
     """

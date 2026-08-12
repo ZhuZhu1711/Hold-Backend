@@ -94,7 +94,7 @@ def api_login():
     URL: /api/login
 
     Body JSON:
-      employee_no, password
+      employee_no, password  (password 为 MD5(明文) 的 32 位 hex，勿传明文)
       remember  是否持久 Cookie 自动登录，默认 true
     """
     data = request.get_json(silent=True) or {}

@@ -152,6 +152,7 @@
         </form>
     </div>
 
+    <script src="{{ url_for('static', filename='js/md5.js') }}"></script>
     <script>
         document.getElementById('loginForm').addEventListener('submit', function(e) {
             e.preventDefault();
@@ -160,8 +161,10 @@
             const btn = document.querySelector('.btn-login');
             
             const employeeNo = document.getElementById('employee_no').value;
-            const password = document.getElementById('password').value;
+            const passwordPlain = document.getElementById('password').value;
             const remember = document.getElementById('remember').checked;
+            // 客户端 MD5 后再上送，避免明文密码进请求体
+            const password = (typeof md5 === 'function') ? md5(passwordPlain) : passwordPlain;
 
             btn.textContent = '验证中...';
             btn.disabled = true;
