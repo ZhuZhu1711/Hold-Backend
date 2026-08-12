@@ -480,8 +480,10 @@ def get_fvi_defect_details(lot_id, line_type='FT'):
     """
     FVI 异常反馈单缺陷明细。
     返回:
-      items: [{defect_code, defect_code_raw, defect_desc, qty}, ...]
-      summary: 组合展示文案，如 "A01 Scratch×3；B02 Particle×1"
+      items: [{defect_code, defect_code_raw, defect_desc, qty, grade, ratio}, ...]
+      summary: 组合展示文案
+      grade_num / grade_num_display / grades / grade_num_total / defect_ratio
+    行比率、总缺陷占比分母均为 grade_num 数量合计。
     """
     if lot_id is None or not str(lot_id).strip():
         return False, '请指定 lot_id', None
@@ -491,8 +493,24 @@ def get_fvi_defect_details(lot_id, line_type='FT'):
     if rows is None:
         return False, '查询 FVI 缺陷明细失败', None
 
-    parts = []
+    grade_num = _lookup_fvi_grade_num(lot_id)
+    grades = parse_grade_num(grade_num)
+    grade_num_total = _sum_grade_qtys(grades)
+    total_qty = sum(int(i.get('qty') or 0) for i in rows)
+
+    items = []
     for item in rows:
+        row = dict(item) if isinstance(item, dict) else {}
+        try:
+            qty = int(row.get('qty') or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        row['qty'] = qty
+        row['ratio'] = _format_pct(qty, grade_num_total)
+        items.append(row)
+
+    parts = []
+    for item in items:
         code = item.get('defect_code') or '-'
         desc = item.get('defect_desc') or ''
         qty = item.get('qty') if item.get('qty') is not None else 0
@@ -504,11 +522,69 @@ def get_fvi_defect_details(lot_id, line_type='FT'):
     return True, '获取成功', {
         'lot_id': lot_id,
         'line_type': (line_type or 'FT').strip() or 'FT',
-        'items': rows,
+        'items': items,
         'summary': '；'.join(parts) if parts else '',
-        'total_qty': sum(int(i.get('qty') or 0) for i in rows),
-        'count': len(rows),
+        'total_qty': total_qty,
+        'count': len(items),
+        'grade_num': grade_num or '',
+        'grade_num_display': format_grade_num_display(grade_num) or '',
+        'grades': grades,
+        'grade_num_total': grade_num_total,
+        'defect_ratio': _format_pct(total_qty, grade_num_total),
     }
+
+
+def _lookup_fvi_grade_num(lot_id: str):
+    """按 lot_id 取最新一条 FVI（RECORD_TYPE=1）Hold 的 GRADE_NUM。"""
+    lot_id = (lot_id or '').strip()
+    if not lot_id:
+        return ''
+    try:
+        _, record_table, _ = _table_names()
+        row = db.session.execute(
+            text(f"""
+                SELECT GRADE_NUM
+                FROM {record_table}
+                WHERE LOT_ID = :lot_id
+                  AND RECORD_TYPE = 1
+                ORDER BY HOLD_DTTM DESC NULLS LAST, ID DESC
+                FETCH FIRST 1 ROWS ONLY
+            """),
+            {'lot_id': lot_id},
+        ).fetchone()
+        if not row:
+            return ''
+        raw = row[0]
+        return str(raw).strip() if raw is not None else ''
+    except Exception as e:
+        logger.warning('lookup FVI GRADE_NUM failed lot_id=%s: %s', lot_id, e)
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return ''
+
+
+def _sum_grade_qtys(grades) -> int:
+    total = 0
+    for item in grades or []:
+        qty = item.get('qty') if isinstance(item, dict) else None
+        try:
+            total += int(qty) if qty not in (None, '') else 0
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _format_pct(numerator, denominator) -> str:
+    try:
+        num = int(numerator or 0)
+        den = int(denominator or 0)
+    except (TypeError, ValueError):
+        return '-'
+    if den <= 0:
+        return '-'
+    return f'{(num / den) * 100:.2f}%'
 
 
 def get_split_merge_history(wafer_id):
@@ -532,54 +608,36 @@ def get_split_merge_history(wafer_id):
     }
 
 
-def _resolve_analysis_params(record_type=None, station=None):
+ALLOWED_ANALYSIS_STATIONS = frozenset({'WLT2', 'FATE-FA', 'VBOX-FA'})
+
+
+def _resolve_analysis_params(station=None):
     """
-    由 hold record 的 RECORD_TYPE / STATION 推断 bysite step 与 raw_data operation_id。
-    FT/FVI → ATE + FATE-FA；WLT → WLT + station。
+    由标准化 station 推断 bysite step 组与 raw_data operation_id。
+    station 仅允许：WLT2 / FATE-FA / VBOX-FA。
     """
     station = (station or '').strip()
-    try:
-        rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
-    except (TypeError, ValueError):
-        rt = None
-
-    if rt == 2:
-        return 'WLT', station or None
-
-    if station.upper().startswith('FATE') if station else False:
-        operation_id = station
-    else:
-        operation_id = 'FATE-FA'
-    return 'ATE', operation_id
+    if station == 'WLT2':
+        return 'WLT', 'WLT2'
+    if station in ('FATE-FA', 'VBOX-FA'):
+        return 'ATE', station
+    return None, None
 
 
-def _station_to_bysite_step_list(station=None, record_type=None, step_group=None):
+def _station_to_bysite_step_list(station=None):
     """
-    Hold STATION → FT_WLT_TESTLOG.STEP 列表（bysite 查询用）。
+    标准化 station → FT_WLT_TESTLOG.STEP 列表（bysite 查询用）。
 
-    数据设计不一致：station 如 FATE-FA，testlog step 为 FA。
+      WLT2     → ['WLTA', 'WLTB']
       FATE-FA  → ['FA']
-      FATE-xx  → ['xx']（取 '-' 后段）
-      WLT/WOQC → ['WLTA', 'WLTB']
-      其它     → 按 step_group（ATE→FA；WLT→WLTA/WLTB）回退
+      VBOX-FA  → ['FA']
     """
     station = (station or '').strip()
-    sta_u = station.upper()
-
-    try:
-        rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
-    except (TypeError, ValueError):
-        rt = None
-
-    if '-' in station and sta_u.startswith('FATE-'):
-        suffix = station.split('-', 1)[1].strip()
-        if suffix:
-            return [suffix]
-
-    if rt == 2 or sta_u == 'WOQC' or (step_group or '').upper() == 'WLT':
+    if station == 'WLT2':
         return ['WLTA', 'WLTB']
-
-    return ['FA']
+    if station in ('FATE-FA', 'VBOX-FA'):
+        return ['FA']
+    return []
 
 
 def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
@@ -589,6 +647,8 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     wafer_id 可为完整片号，或展示串（#03 / #01#02 / #03 #04）；
     展示串需配合 lot_id 还原真实 MES wafer id。
 
+    station 仅允许 WLT2 / FATE-FA / VBOX-FA（由调用方按 record_type + lot_id 推导）。
+
     同 lot（same_lot_rows）按 record_type / lot_id 后缀分情况：
       - record_type=1（FVI）：仅当前片
       - record_type=2（WLT），或 FT 且 lot 后缀位数≠>2：lot 前缀 LIKE TEST_WAFER
@@ -596,6 +656,10 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     """
     if wafer_id is None or not str(wafer_id).strip():
         return False, '请指定 wafer_id', None
+
+    station = (station or '').strip()
+    if station not in ALLOWED_ANALYSIS_STATIONS:
+        return False, 'station 仅支持 WLT2/FATE-FA/VBOX-FA', None
 
     sql_trace = []
 
@@ -618,12 +682,8 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     except (TypeError, ValueError):
         rt = None
 
-    step, operation_id = _resolve_analysis_params(record_type, station)
-    step_list = _station_to_bysite_step_list(
-        station=station,
-        record_type=record_type,
-        step_group=step,
-    )
+    step, operation_id = _resolve_analysis_params(station)
+    step_list = _station_to_bysite_step_list(station)
 
     # 1) bysite（主片；多片时仍以第一片为主展示）
     bysite = None

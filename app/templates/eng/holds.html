@@ -226,10 +226,11 @@
                         <th>缺陷代码</th>
                         <th>描述</th>
                         <th>数量</th>
+                        <th>比率</th>
                     </tr>
                 </thead>
                 <tbody id="fviTbody">
-                    <tr><td colspan="3" class="empty">加载中...</td></tr>
+                    <tr><td colspan="4" class="empty">加载中...</td></tr>
                 </tbody>
             </table>
             <div class="modal-actions">
@@ -254,6 +255,16 @@
     <script>
         const REASON_MAX_LEN = 80;
         const RECORD_TYPE_FVI = 1;
+
+        function resolveAnalysisStation(recordType, lotId) {
+            const rt = Number(recordType);
+            if (rt === 2) return 'WLT2';
+            if (rt === 0) {
+                const lot = (lotId || '').trim();
+                return lot.includes('-') ? 'FATE-FA' : 'VBOX-FA';
+            }
+            return null;
+        }
         const ANALYSIS_API = '/admin/hold/api/analysis';
         const RAW_WAFER_COLORS = [
             { bg: 'rgba(0, 123, 255, 0.7)', border: 'rgba(0, 123, 255, 1)' },
@@ -570,22 +581,31 @@
             return bysiteHtml + rawHtml;
         }
 
-        async function showAnalysis(waferId, recordType, station, lotId) {
+        async function showAnalysis(waferId, recordType, lotId) {
             if (!waferId) {
                 alert('缺少 Wafer ID');
                 return;
             }
+            const rt = Number(recordType);
+            if (rt === RECORD_TYPE_FVI) {
+                showFviDefects(lotId);
+                return;
+            }
+            const station = resolveAnalysisStation(recordType, lotId);
+            if (!station) {
+                alert('当前记录类型无需同lot分析');
+                return;
+            }
             destroyRawChart();
             document.getElementById('analysisSub').textContent =
-                `Wafer: ${waferId}` + (station ? ` · Station: ${station}` : '');
+                `Wafer: ${waferId}` + ` · Station: ${station}`;
             document.getElementById('analysisBody').innerHTML =
                 '<div class="empty">查询中...</div>';
             document.getElementById('analysisModal').classList.add('show');
 
-            const params = new URLSearchParams({ wafer_id: waferId });
+            const params = new URLSearchParams({ wafer_id: waferId, station });
             if (lotId) params.set('lot_id', lotId);
             if (recordType !== '' && recordType != null) params.set('record_type', recordType);
-            if (station) params.set('station', station);
 
             try {
                 const resp = await fetch(ANALYSIS_API + '?' + params.toString());
@@ -599,6 +619,7 @@
                 document.getElementById('analysisSub').textContent = [
                     `Wafer: ${data.wafer_id_display || data.wafer_id || waferId}`,
                     data.lot_id && `Lot: ${data.lot_id}`,
+                    data.station && `station=${data.station}`,
                     data.step && `step=${data.step}`,
                     data.operation_id && `op=${data.operation_id}`,
                     data.is_merged ? '合批' : null,
@@ -620,7 +641,7 @@
             document.getElementById('fviModalSub').textContent = 'Lot: ' + lotId;
             document.getElementById('fviSummary').textContent = '查询中...';
             document.getElementById('fviTbody').innerHTML =
-                '<tr><td colspan="3" class="empty">查询中...</td></tr>';
+                '<tr><td colspan="4" class="empty">查询中...</td></tr>';
             document.getElementById('fviModal').classList.add('show');
 
             try {
@@ -631,18 +652,30 @@
                 if (json.code !== 200) {
                     document.getElementById('fviSummary').textContent = json.msg || '查询失败';
                     document.getElementById('fviTbody').innerHTML =
-                        `<tr><td colspan="3" class="empty">${esc(json.msg || '查询失败')}</td></tr>`;
+                        `<tr><td colspan="4" class="empty">${esc(json.msg || '查询失败')}</td></tr>`;
                     return;
                 }
                 const data = json.data || {};
                 const items = data.items || [];
+                const gradeDisp = data.grade_num_display || data.grade_num || '';
+                const summaryParts = [];
+                if (data.summary) summaryParts.push(data.summary);
+                if (gradeDisp) summaryParts.push('Grade: ' + gradeDisp);
                 document.getElementById('fviSummary').textContent =
-                    data.summary || (items.length ? '' : '无缺陷明细');
-                document.getElementById('fviModalSub').textContent =
-                    `Lot: ${lotId} · ${data.count || 0} 项 · 合计数量 ${data.total_qty || 0}`;
+                    summaryParts.join(' · ') || (items.length ? '' : '无缺陷明细');
+                const subParts = [
+                    `Lot: ${lotId}`,
+                    `${data.count || 0} 项`,
+                    `合计数量 ${data.total_qty || 0}`,
+                ];
+                if (data.grade_num_total) {
+                    subParts.push(`grade合计 ${data.grade_num_total}`);
+                    subParts.push(`总缺陷占比 ${data.defect_ratio || '-'}`);
+                }
+                document.getElementById('fviModalSub').textContent = subParts.join(' · ');
                 if (!items.length) {
                     document.getElementById('fviTbody').innerHTML =
-                        '<tr><td colspan="3" class="empty">无缺陷明细</td></tr>';
+                        '<tr><td colspan="4" class="empty">无缺陷明细</td></tr>';
                     return;
                 }
                 document.getElementById('fviTbody').innerHTML = items.map(it => `
@@ -650,12 +683,13 @@
                         <td title="${esc(it.defect_code_raw || '')}">${esc(it.defect_code || '-')}</td>
                         <td>${esc(it.defect_desc || '-')}</td>
                         <td>${esc(it.qty ?? 0)}</td>
+                        <td>${esc(it.ratio ?? '-')}</td>
                     </tr>
                 `).join('');
             } catch (e) {
                 document.getElementById('fviSummary').textContent = '请求失败: ' + e;
                 document.getElementById('fviTbody').innerHTML =
-                    `<tr><td colspan="3" class="empty">请求失败</td></tr>`;
+                    `<tr><td colspan="4" class="empty">请求失败</td></tr>`;
             }
         }
 
@@ -732,8 +766,7 @@
                     const analyzeBtn = `<button class="btn btn-sm btn-ghost"
                         data-analyze-wafer="${esc(r.WAFER_ID)}"
                         data-analyze-lot="${esc(r.LOT_ID || '')}"
-                        data-analyze-type="${esc(r.RECORD_TYPE ?? '')}"
-                        data-analyze-station="${esc(r.STATION || '')}">分析</button>`;
+                        data-analyze-type="${esc(r.RECORD_TYPE ?? '')}">分析</button>`;
                     const gradeText = r.GRADE_NUM_DISPLAY || r.GRADE_NUM || '-';
                     return `
                     <tr>
@@ -764,7 +797,6 @@
                     el.addEventListener('click', () => showAnalysis(
                         el.dataset.analyzeWafer,
                         el.dataset.analyzeType,
-                        el.dataset.analyzeStation,
                         el.dataset.analyzeLot,
                     ));
                 });

@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, session
 
 from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl
+from app.controllers.defect_code_ctrl import query_bincode_defect
 from app.utils.auth_decorators import root_required, login_required, current_role_name
 
 hold_report_bp = Blueprint('hold_report', __name__, url_prefix='/admin/hold')
@@ -140,7 +141,7 @@ def api_hold_analysis():
     """
     Hold Record 数据分析（bysite + raw_data + 同 lot 片列表）。
     Query: wafer_id (必填), lot_id（展示串 #03 时必填；同 lot 分支也依赖原始 LOT_ID）,
-           record_type, station
+           record_type, station（必填，仅 WLT2 / FATE-FA / VBOX-FA）
     同 lot：见 hold_report_ctrl.get_hold_analysis / docs/03-数据分析.md
     """
     wafer_id = request.args.get('wafer_id', '').strip()
@@ -155,8 +156,28 @@ def api_hold_analysis():
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
-    status = 400 if ('请指定' in msg or '无效' in msg or '需同时' in msg) else 500
+    status = 400 if (
+        '请指定' in msg
+        or '无效' in msg
+        or '需同时' in msg
+        or 'station 仅支持' in msg
+    ) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@hold_report_bp.route('/api/bincode_defect', methods=['GET'])
+@login_required
+def api_bincode_defect():
+    """
+    按产品型号查询 bincode ↔ defect 映射（DEFECT_CODE）。
+    Query: product_id（必填，PRODUCT_INFO.PRODUCT_ID）
+    """
+    product_id = request.args.get('product_id', '').strip()
+    success, msg, data = query_bincode_defect(product_id)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if '请指定' in msg else 500
+    return jsonify({'code': status, 'msg': msg, 'data': []}), status
 
 
 @hold_report_bp.route('/api/history', methods=['GET'])
