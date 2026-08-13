@@ -18,7 +18,7 @@ if project_root_path not in sys.path:
 # ==========================================
 from app import create_app, db
 # 直接从 routes 包中导入所有蓝图
-from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp
+from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
 from app.backend_schedule.FT_HOLD_MERGE_sche import HoldMergeScheduler
 
@@ -38,6 +38,7 @@ app.register_blueprint(hold_report_bp)  # Hold 报表 (/admin/hold/...)
 app.register_blueprint(dispose_bp)      # Hold 处置流转 (/admin/hold/api/dispose...)
 app.register_blueprint(engineer_bp)     # 产品工程师 (/eng/...)
 app.register_blueprint(production_bp)   # 生产 (/prod/...)
+app.register_blueprint(quality_bp)      # 质量部只读报表 (/qa/...)
 
 # ==========================================
 # 程序入口

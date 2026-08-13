@@ -4,6 +4,7 @@
 角色约定（USERS.ROLE）：
   0 = root（最高权限，可查看全部数据）
   1 = 产品工程师（仅所属型号）
+  8 = 质量部（只读：已处置物料报表，不参与决策）
   9 = 生产（查看生产节点 Hold / 流转）
 """
 from functools import wraps
@@ -12,11 +13,13 @@ from flask import session, redirect, url_for, flash, request, jsonify
 
 ROLE_ROOT = 0
 ROLE_ENGINEER = 1
+ROLE_QUALITY = 8
 ROLE_PRODUCTION = 9
 
 ROLE_NAMES = {
     ROLE_ROOT: '超级管理员',
     ROLE_ENGINEER: '产品工程师',
+    ROLE_QUALITY: '质量部',
     ROLE_PRODUCTION: '生产',
 }
 
@@ -86,6 +89,11 @@ def production_required(f):
     return role_required(ROLE_PRODUCTION)(f)
 
 
+def quality_required(f):
+    """仅质量部（ROLE=8）可访问。"""
+    return role_required(ROLE_QUALITY)(f)
+
+
 def is_root():
     return session.get('role') == ROLE_ROOT
 
@@ -96,6 +104,10 @@ def is_engineer():
 
 def is_production():
     return session.get('role') == ROLE_PRODUCTION
+
+
+def is_quality():
+    return session.get('role') == ROLE_QUALITY
 
 
 def current_role_name():
@@ -110,4 +122,6 @@ def home_endpoint_for_role(role=None):
         return 'engineer.dashboard'
     if role == ROLE_PRODUCTION:
         return 'production.dashboard'
+    if role == ROLE_QUALITY:
+        return 'quality.dashboard'
     return 'auth.dashboard'

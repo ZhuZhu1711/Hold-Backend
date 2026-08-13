@@ -44,6 +44,7 @@
         .role-0 { background: #ffebee; color: #c62828; }
         .role-1 { background: #e3f2fd; color: #1565c0; }
         .role-2 { background: #fff3e0; color: #ef6c00; }
+        .role-8 { background: #f3e5f5; color: #6a1b9a; }
         .role-9 { background: #e8f5e9; color: #2e7d32; }
     </style>
 </head>
@@ -101,11 +102,13 @@
                             res.data.forEach(user => {
                                 const roleClass = user.role === 0 ? 'role-0'
                                     : (user.role === 2 ? 'role-2'
-                                    : (user.role === 9 ? 'role-9' : 'role-1'));
+                                    : (user.role === 8 ? 'role-8'
+                                    : (user.role === 9 ? 'role-9' : 'role-1')));
                                 const roleMap = {
                                     0: '超级管理员',
                                     1: '产品工程师',
                                     2: '管理员',
+                                    8: '质量部',
                                     9: '生产'
                                 };
                                 const roleName = roleMap[user.role] || '未知角色';

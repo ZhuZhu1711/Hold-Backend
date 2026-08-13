@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物料处置报表</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; min-height: 100vh; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #6a1b9a; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; line-height: 1.6; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: flex-end; }
+        .filters label { font-size: 12px; color: #555; display: flex; flex-direction: column; gap: 4px; }
+        .filters input, .filters select {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;
+        }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #6a1b9a; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #4a148c; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
+        .pager {
+            display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            margin-top: 12px; font-size: 13px; color: #555;
+        }
+        .pager .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+        .pager select { padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+        th { background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .detail { max-width: 220px; word-break: break-word; color: #555; }
+        .link {
+            color: #6a1b9a; cursor: pointer; text-decoration: underline;
+            background: none; border: none; font: inherit; padding: 0;
+        }
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 12px; color: #fff; white-space: nowrap;
+        }
+        .d-1 { background: #28a745; }
+        .d-2 { background: #fd7e14; }
+        .d-3 { background: #17a2b8; }
+        .rt { background: #eceff1; color: #37474f; }
+        .drawer-mask {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 40;
+        }
+        .drawer-mask.open { display: block; }
+        .drawer {
+            display: none; position: fixed; top: 0; right: 0; width: min(720px, 96vw); height: 100vh;
+            background: #fff; z-index: 50; box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+            padding: 20px; overflow: auto;
+        }
+        .drawer.open { display: block; }
+        .drawer-head {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            gap: 12px; margin-bottom: 14px;
+        }
+        .drawer-head h2 { font-size: 18px; }
+        .record-grid {
+            display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px;
+            background: #f8f9fa; border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 13px;
+        }
+        .record-grid .k { color: #888; }
+        .timeline { border-left: 3px solid #dee2e6; margin-left: 8px; padding-left: 16px; }
+        .tl-item { position: relative; padding-bottom: 16px; }
+        .tl-item::before {
+            content: ''; position: absolute; left: -22px; top: 4px;
+            width: 10px; height: 10px; border-radius: 50%; background: #6a1b9a;
+            border: 2px solid #fff; box-shadow: 0 0 0 1px #6a1b9a;
+        }
+        .tl-meta { font-size: 12px; color: #888; margin-bottom: 4px; }
+        .tl-body { font-size: 13px; color: #333; }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>质量部</h2>
+            <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
+        </div>
+        <ul class="nav-links">
+            <li class="active"><a href="/qa/disposes">物料处置报表</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <div class="card">
+            <h1>物料处置报表</h1>
+            <p class="sub">只读查看全部型号已处置物料（放行 / 降级 / 重测）。未处理及其它流转不展示，不参与决策。</p>
+
+            <div class="filters">
+                <label>处置开始时间
+                    <input id="start_dttm" type="datetime-local" />
+                </label>
+                <label>处置结束时间
+                    <input id="end_dttm" type="datetime-local" />
+                </label>
+                <label>型号
+                    <input id="product_id" list="product_list" placeholder="PRODUCT_ID" />
+                    <datalist id="product_list"></datalist>
+                </label>
+                <label>处置行为
+                    <select id="dispose">
+                        <option value="">全部（放行/降级/重测）</option>
+                        <option value="1">放行</option>
+                        <option value="2">降级</option>
+                        <option value="3">重测</option>
+                    </select>
+                </label>
+                <label>Record 类型
+                    <select id="record_type">
+                        <option value="">全部类型</option>
+                        <option value="0">FT异常反馈单</option>
+                        <option value="1">FVI异常反馈单</option>
+                        <option value="2">WLT异常反馈单</option>
+                    </select>
+                </label>
+                <label>ROUTE
+                    <input id="route" list="route_list" placeholder="ROUTE_ID" />
+                    <datalist id="route_list"></datalist>
+                </label>
+                <button class="btn" onclick="loadData()">查询</button>
+                <button class="btn btn-ghost" onclick="resetFilters()">重置</button>
+            </div>
+            <div class="meta" id="meta">加载中...</div>
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>处置时间</th>
+                            <th>型号</th>
+                            <th>Record类型</th>
+                            <th>ROUTE</th>
+                            <th>处置</th>
+                            <th>Lot</th>
+                            <th>Wafer</th>
+                            <th>站点</th>
+                            <th>Hold Code</th>
+                            <th>处置人</th>
+                            <th>处置详情</th>
+                            <th>工程备注</th>
+                            <th>Record</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody">
+                        <tr><td colspan="13" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pager" id="pager"></div>
+        </div>
+    </main>
+
+    <div class="drawer-mask" id="mask" onclick="closeDrawer()"></div>
+    <aside class="drawer" id="drawer">
+        <div class="drawer-head">
+            <div>
+                <h2 id="drawerTitle">处置详情</h2>
+                <div class="meta" id="drawerMeta" style="margin:6px 0 0;"></div>
+            </div>
+            <button class="btn btn-ghost" onclick="closeDrawer()">关闭</button>
+        </div>
+        <div class="record-grid" id="recordGrid"></div>
+        <div class="timeline" id="timeline"></div>
+    </aside>
+
+    <script src="{{ url_for('static', filename='js/dispose_detail_view.js') }}"></script>
+    <script>
+        let currentPage = 1;
+        let pageSize = 20;
+        let totalPages = 1;
+
+        function pad(n) { return String(n).padStart(2, '0'); }
+        function toLocalInput(d) {
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+                + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        }
+        function initDates() {
+            const end = new Date();
+            end.setHours(23, 59, 0, 0);
+            const start = new Date(end);
+            start.setDate(start.getDate() - 6);
+            start.setHours(0, 0, 0, 0);
+            document.getElementById('start_dttm').value = toLocalInput(start);
+            document.getElementById('end_dttm').value = toLocalInput(end);
+        }
+
+        function esc(v) {
+            return String(v ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;');
+        }
+
+        function disposeBadge(dispose, label) {
+            const code = Number(dispose);
+            const cls = [1, 2, 3].includes(code) ? ('d-' + code) : 'd-1';
+            return `<span class="badge ${cls}">${esc(label || dispose)}</span>`;
+        }
+
+        function renderPager(total, page, pages, size) {
+            currentPage = page;
+            totalPages = pages;
+            pageSize = size;
+            document.getElementById('pager').innerHTML = `
+                <span>共 ${total} 条 · 第 ${page}/${pages} 页</span>
+                <button class="btn" ${page <= 1 ? 'disabled' : ''} onclick="gotoPage(${page - 1})">上一页</button>
+                <button class="btn" ${page >= pages ? 'disabled' : ''} onclick="gotoPage(${page + 1})">下一页</button>
+                <label>每页
+                    <select onchange="changePageSize(this.value)">
+                        ${[10,20,50,100].map(n =>
+                            `<option value="${n}" ${n === size ? 'selected' : ''}>${n}</option>`
+                        ).join('')}
+                    </select>
+                </label>
+            `;
+        }
+
+        function gotoPage(p) {
+            if (p < 1 || p > totalPages) return;
+            currentPage = p;
+            loadData(false);
+        }
+
+        function changePageSize(size) {
+            pageSize = Number(size) || 20;
+            currentPage = 1;
+            loadData(false);
+        }
+
+        function resetFilters() {
+            initDates();
+            document.getElementById('product_id').value = '';
+            document.getElementById('dispose').value = '';
+            document.getElementById('record_type').value = '';
+            document.getElementById('route').value = '';
+            loadData(true);
+        }
+
+        async function loadOptions() {
+            try {
+                const [pResp, rResp] = await Promise.all([
+                    fetch('/qa/api/products'),
+                    fetch('/qa/api/routes'),
+                ]);
+                const pJson = await pResp.json();
+                const rJson = await rResp.json();
+                document.getElementById('product_list').innerHTML =
+                    (pJson.data || []).map(p => `<option value="${esc(p)}"></option>`).join('');
+                document.getElementById('route_list').innerHTML =
+                    (rJson.data || []).map(p => `<option value="${esc(p)}"></option>`).join('');
+            } catch (e) {
+                document.getElementById('product_list').innerHTML = '';
+                document.getElementById('route_list').innerHTML = '';
+            }
+        }
+
+        async function loadData(resetPage = true) {
+            if (resetPage) currentPage = 1;
+            const params = new URLSearchParams({
+                start_dttm: document.getElementById('start_dttm').value.trim(),
+                end_dttm: document.getElementById('end_dttm').value.trim(),
+                product_id: document.getElementById('product_id').value.trim(),
+                dispose: document.getElementById('dispose').value,
+                record_type: document.getElementById('record_type').value,
+                route: document.getElementById('route').value.trim(),
+                page: String(currentPage),
+                page_size: String(pageSize),
+            });
+            document.getElementById('meta').textContent = '查询中...';
+            try {
+                const resp = await fetch('/qa/api/disposes?' + params.toString());
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('meta').textContent = json.msg || '查询失败';
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="13" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                    document.getElementById('pager').innerHTML = '';
+                    return;
+                }
+                const rows = json.data || [];
+                const total = json.total || 0;
+                const page = json.page || 1;
+                const pages = json.pages || 1;
+                const size = json.page_size || pageSize;
+                document.getElementById('meta').textContent =
+                    `共 ${total} 条已处置记录 · 第 ${page}/${pages} 页`;
+                renderPager(total, page, pages, size);
+                if (!rows.length) {
+                    document.getElementById('tbody').innerHTML =
+                        '<tr><td colspan="13" class="empty">该条件下无放行 / 降级 / 重测记录</td></tr>';
+                    return;
+                }
+                document.getElementById('tbody').innerHTML = rows.map(r => `
+                    <tr>
+                        <td>${esc(r.DISPOSE_DTTM || '-')}</td>
+                        <td>${esc(r.PRODUCT_ID)}</td>
+                        <td><span class="badge rt">${esc(r.RECORD_TYPE_NAME || r.RECORD_TYPE)}</span></td>
+                        <td>${esc(r.ROUTE_ID || '-')}</td>
+                        <td>${disposeBadge(r.DISPOSE, r.DISPOSE_LABEL)}</td>
+                        <td>${esc(r.LOT_ID)}</td>
+                        <td>${esc(r.WAFER_ID)}</td>
+                        <td>${esc(r.STATION)}</td>
+                        <td>${esc(r.HOLD_CODE || '-')}</td>
+                        <td>${esc(r.DISPOSED_OWNER_NAME || r.DISPOSED_OWNER_ID || '-')}</td>
+                        <td class="detail">${renderDisposeDetail(r.DISPOSE_DETAIL || '')}</td>
+                        <td class="detail">${esc(r.DISPOSE_NOTE || '')}</td>
+                        <td>
+                            <button class="link" onclick="openRecord(${Number(r.HOLD_RECORD_ID)})">
+                                ${esc(r.HOLD_RECORD_ID)}
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                document.getElementById('meta').textContent = '请求失败: ' + e;
+            }
+        }
+
+        function closeDrawer() {
+            document.getElementById('drawer').classList.remove('open');
+            document.getElementById('mask').classList.remove('open');
+        }
+
+        async function openRecord(recordId) {
+            document.getElementById('drawerTitle').textContent = 'Record #' + recordId + ' 处置情况';
+            document.getElementById('drawerMeta').textContent = '加载中...';
+            document.getElementById('recordGrid').innerHTML = '';
+            document.getElementById('timeline').innerHTML = '';
+            document.getElementById('drawer').classList.add('open');
+            document.getElementById('mask').classList.add('open');
+
+            try {
+                const resp = await fetch('/qa/api/records/' + recordId);
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    document.getElementById('drawerMeta').textContent = json.msg || '加载失败';
+                    return;
+                }
+                const record = (json.data && json.data.record) || {};
+                const disposes = (json.data && json.data.disposes) || [];
+                document.getElementById('drawerMeta').textContent =
+                    '共 ' + disposes.length + ' 次放行 / 降级 / 重测';
+
+                const fields = [
+                    ['型号', record.PRODUCT_ID],
+                    ['Record类型', record.RECORD_TYPE_NAME || record.RECORD_TYPE],
+                    ['ROUTE', record.ROUTE_ID],
+                    ['Lot', record.LOT_ID],
+                    ['Wafer', record.WAFER_ID],
+                    ['站点', record.STATION],
+                    ['设备', record.EQUIP_ID],
+                    ['Hold Code', record.HOLD_CODE],
+                    ['Hold 原因', record.HOLD_REASON],
+                    ['Hold 时间', record.HOLD_DTTM],
+                ];
+                document.getElementById('recordGrid').innerHTML = fields.map(([k, v]) => `
+                    <div><div class="k">${esc(k)}</div><div>${esc(v ?? '-')}</div></div>
+                `).join('');
+
+                if (!disposes.length) {
+                    document.getElementById('timeline').innerHTML =
+                        '<div class="empty">暂无放行 / 降级 / 重测记录</div>';
+                    return;
+                }
+                document.getElementById('timeline').innerHTML = disposes.map(c => `
+                    <div class="tl-item">
+                        <div class="tl-meta">${esc(c.DISPOSE_DTTM || '-')} · #${esc(c.ID)}</div>
+                        <div class="tl-body">
+                            ${disposeBadge(c.DISPOSE, c.DISPOSE_LABEL)}
+                            &nbsp;${esc(c.DISPOSED_OWNER_NAME || c.DISPOSED_OWNER_ID || '-')}
+                            ${c.DISPOSE_DETAIL ? '<div class="detail" style="margin-top:4px;">处置详情:<div style="margin-top:4px;">' + renderDisposeDetail(c.DISPOSE_DETAIL) + '</div></div>' : ''}
+                            ${c.DISPOSE_NOTE ? '<div class="detail" style="margin-top:4px;">工程备注: ' + esc(c.DISPOSE_NOTE) + '</div>' : ''}
+                            ${c.DISPOSE_MANUAL_NOTE ? '<div class="detail" style="margin-top:4px;">手输备注: ' + esc(c.DISPOSE_MANUAL_NOTE) + '</div>' : ''}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                document.getElementById('drawerMeta').textContent = '请求失败: ' + e;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initDates();
+            loadOptions();
+            loadData(true);
+        });
+        document.querySelectorAll('.filters input').forEach(el => {
+            el.addEventListener('keyup', ev => { if (ev.key === 'Enter') loadData(true); });
+        });
+        document.addEventListener('keydown', ev => {
+            if (ev.key === 'Escape') closeDrawer();
+        });
+    </script>
+</body>
+</html>

@@ -8,7 +8,6 @@ from flask import Blueprint, request, jsonify, session, render_template
 
 from app.controllers import dispose_ctrl
 from app.utils.auth_decorators import (
-    login_required,
     role_required,
     ROLE_ROOT,
     ROLE_ENGINEER,
@@ -17,6 +16,8 @@ from app.utils.auth_decorators import (
     is_production,
     current_role_name,
 )
+
+_CIRCULATION_ROLES = (ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
 
 dispose_bp = Blueprint('dispose', __name__, url_prefix='/admin/hold')
 
@@ -30,9 +31,9 @@ def _actor():
 # ==========================================
 
 @dispose_bp.route('/circulations')
-@login_required
+@role_required(*_CIRCULATION_ROLES)
 def circulations_page():
-    """Hold Record 流转报表（全角色可读，含他人型号）。"""
+    """Hold Record 流转报表（root / 工程师 / 生产可读，含他人型号）。"""
     return render_template(
         'hold/circulations.html',
         user_name=session.get('user_name'),
@@ -128,7 +129,7 @@ def api_dispose():
 
 
 @dispose_bp.route('/api/production/dispose', methods=['POST'])
-@login_required
+@role_required(ROLE_ROOT, ROLE_PRODUCTION)
 def api_production_dispose():
     """
     生产处置接口（供生产工作台与外部生产系统联动调用）。
@@ -169,10 +170,10 @@ def api_production_dispose():
 
 
 @dispose_bp.route('/api/circulations', methods=['GET'])
-@login_required
+@role_required(*_CIRCULATION_ROLES)
 def api_query_circulations():
     """
-    流转记录查询（全角色可读，含他人型号，分页）。
+    流转记录查询（root / 工程师 / 生产可读，含他人型号，分页）。
     Query:
       hold_record_id  指定 record
       product_id      型号（模糊）
@@ -206,10 +207,10 @@ def api_query_circulations():
 
 
 @dispose_bp.route('/api/records/<int:record_id>/circulations', methods=['GET'])
-@login_required
+@role_required(*_CIRCULATION_ROLES)
 def api_circulations(record_id):
     """
-    某 hold_record 的流转历史（全角色可读，含他人型号）。
+    某 hold_record 的流转历史（root / 工程师 / 生产可读，含他人型号）。
     返回 record 摘要 + circulations 列表。
     """
     success, msg, data = dispose_ctrl.get_circulations(record_id)
