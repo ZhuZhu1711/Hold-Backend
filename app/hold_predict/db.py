@@ -11,6 +11,40 @@ from app.utils.database_util import DSN, PWD, USER
 
 ENGINEER_DISPOSES = (1, 2, 3, 5)
 RECORD_TYPE_FT = 0
+LEGACY_FT_PRODUCT_LIKE = '%-3.5'
+LEGACY_RELEASE_ENG_DISPOSE = 0
+
+
+def _legacy_hold_dttm_sql(alias: str = 'h') -> str:
+    """HOLD_INFO.HOLD_DATETIME(VARCHAR2) → DATE；无法识别则 NULL。
+
+    - 正则用 [0-9]（Oracle 不把 \\d 当数字类）
+    - TO_DATE 用 HH24MISS（去掉冒号），避免格式串 HH24:MI:SS 被 oracledb
+      误解析为命名绑定 :MI / :SS
+    - 调用方表别名勿用 raw（Oracle 保留字，CASE 中会 ORA-00936）
+    """
+    a = alias
+    # 去掉时间里的冒号后用 HH24MISS，避免格式串中的 :MI/:SS
+    ts_dash = (
+        f"REPLACE(REPLACE(SUBSTR(TRIM({a}.HOLD_DATETIME), 1, 19), 'T', ' '), ':', '')"
+    )
+    ts_slash = f"REPLACE(SUBSTR(TRIM({a}.HOLD_DATETIME), 1, 19), ':', '')"
+    return f"""
+CASE
+  WHEN {a}.HOLD_DATETIME IS NULL OR TRIM({a}.HOLD_DATETIME) IS NULL THEN CAST(NULL AS DATE)
+  WHEN REGEXP_LIKE(TRIM({a}.HOLD_DATETIME), '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}[ T][0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}}') THEN
+    TO_DATE({ts_dash}, 'YYYY-MM-DD HH24MISS')
+  WHEN REGEXP_LIKE(TRIM({a}.HOLD_DATETIME), '^[0-9]{{4}}/[0-9]{{2}}/[0-9]{{2}} [0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}}') THEN
+    TO_DATE({ts_slash}, 'YYYY/MM/DD HH24MISS')
+  WHEN REGEXP_LIKE(TRIM({a}.HOLD_DATETIME), '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$') THEN
+    TO_DATE(TRIM({a}.HOLD_DATETIME), 'YYYY-MM-DD')
+  WHEN REGEXP_LIKE(TRIM({a}.HOLD_DATETIME), '^[0-9]{{4}}/[0-9]{{2}}/[0-9]{{2}}$') THEN
+    TO_DATE(TRIM({a}.HOLD_DATETIME), 'YYYY/MM/DD')
+  WHEN REGEXP_LIKE(TRIM({a}.HOLD_DATETIME), '^[0-9]{{14}}') THEN
+    TO_DATE(SUBSTR(TRIM({a}.HOLD_DATETIME), 1, 14), 'YYYYMMDDHH24MISS')
+  ELSE CAST(NULL AS DATE)
+END
+""".strip()
 
 
 def connect():
@@ -379,6 +413,200 @@ def query_product_hold_cnt(
         """,
         {
             'rt': RECORD_TYPE_FT,
+            'rid': int(record_id),
+            'pid': product_id,
+            'hold_dttm': hold_dttm,
+            'start_dttm': hold_dttm - timedelta(days=days),
+        },
+    )
+    row = fetch_one_dict(cursor)
+    return _to_int(row.get('N') if row else None, 0) or 0
+
+
+def query_legacy_labeled_holds(
+    cursor,
+    limit: Optional[int] = None,
+    max_lag_days: Optional[int] = None,
+) -> list[dict]:
+    """HOLD_INFO ⋈ 同 wafer 且处置不早于 hold 的第一条 HISTORY_DISPOSITION。"""
+    # 别名勿用 raw：Oracle 保留字，复杂表达式里会 ORA-00936
+    dttm = _legacy_hold_dttm_sql('hi')
+    lag_filter = ''
+    params: dict[str, Any] = {'ft_like': LEGACY_FT_PRODUCT_LIKE}
+    if max_lag_days is not None:
+        lag_filter = 'AND d.DISPOSE_TIME < h2.HOLD_DTTM + :lag_days'
+        params['lag_days'] = int(max_lag_days)
+    sql = f"""
+        SELECT * FROM (
+            SELECT
+                h.ID,
+                h.WAFER_ID,
+                h.PRODUCT_ID,
+                h.EQUIP_ID,
+                h.HOLD_DATETIME,
+                h.HOLD_REASON,
+                h.SECOND_CODE,
+                h.ROUTE_ID,
+                h.GRADE_NUM,
+                h.HOLD_DTTM,
+                f.ENG_DISPOSE AS LABEL_DISPOSE,
+                f.DISPOSE_TIME AS LABEL_DTTM
+            FROM (
+                SELECT
+                    hi.ID, hi.WAFER_ID, hi.PRODUCT_ID, hi.EQUIP_ID,
+                    hi.HOLD_DATETIME, hi.HOLD_REASON, hi.SECOND_CODE,
+                    hi.ROUTE_ID, hi.GRADE_NUM,
+                    {dttm} AS HOLD_DTTM
+                FROM HOLD_INFO hi
+                WHERE hi.PRODUCT_ID LIKE :ft_like
+            ) h
+            JOIN (
+                SELECT
+                    h2.ID AS HOLD_ID,
+                    d.ENG_DISPOSE,
+                    d.DISPOSE_TIME,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY h2.ID
+                        ORDER BY d.DISPOSE_TIME, d.ID
+                    ) AS rn
+                FROM (
+                    SELECT
+                        hi.ID, hi.WAFER_ID, {dttm} AS HOLD_DTTM
+                    FROM HOLD_INFO hi
+                    WHERE hi.PRODUCT_ID LIKE :ft_like
+                ) h2
+                JOIN HISTORY_DISPOSITION d
+                  ON d.WAFER_ID = h2.WAFER_ID
+                 AND d.DISPOSE_TIME >= h2.HOLD_DTTM
+                WHERE h2.HOLD_DTTM IS NOT NULL
+                  {lag_filter}
+            ) f ON f.HOLD_ID = h.ID AND f.rn = 1
+            WHERE h.HOLD_DTTM IS NOT NULL
+            ORDER BY h.HOLD_DTTM ASC NULLS LAST, h.ID ASC
+        ) q
+    """
+    if limit is not None:
+        sql += " WHERE ROWNUM <= :lim"
+        params['lim'] = int(limit)
+    cursor.execute(sql, params)
+    return rows_as_dicts(cursor)
+
+
+def _legacy_first_disp_rate_sql(extra_where: str) -> str:
+    dttm = _legacy_hold_dttm_sql('hi')
+    return f"""
+        SELECT
+            COUNT(*) AS N,
+            SUM(CASE WHEN ENG_DISPOSE = {LEGACY_RELEASE_ENG_DISPOSE} THEN 1 ELSE 0 END) AS N_REL
+        FROM (
+            SELECT
+                d.ENG_DISPOSE,
+                ROW_NUMBER() OVER (
+                    PARTITION BY h.ID
+                    ORDER BY d.DISPOSE_TIME, d.ID
+                ) AS rn
+            FROM (
+                SELECT
+                    hi.ID, hi.WAFER_ID, hi.PRODUCT_ID, hi.ROUTE_ID, hi.HOLD_REASON,
+                    {dttm} AS HOLD_DTTM
+                FROM HOLD_INFO hi
+                WHERE hi.PRODUCT_ID LIKE :ft_like
+            ) h
+            JOIN HISTORY_DISPOSITION d
+              ON d.WAFER_ID = h.WAFER_ID
+             AND d.DISPOSE_TIME >= h.HOLD_DTTM
+            WHERE h.HOLD_DTTM IS NOT NULL
+              AND h.HOLD_DTTM < :hold_dttm
+              AND h.HOLD_DTTM >= :start_dttm
+              AND h.ID <> :rid
+              {extra_where}
+        )
+        WHERE rn = 1
+    """
+
+
+def query_legacy_release_rate(
+    cursor,
+    hold_dttm: datetime,
+    record_id: int,
+    days: int,
+    extra_where: str = '',
+    extra_params: Optional[dict] = None,
+) -> Optional[float]:
+    params = {
+        'ft_like': LEGACY_FT_PRODUCT_LIKE,
+        'hold_dttm': hold_dttm,
+        'start_dttm': hold_dttm - timedelta(days=days),
+        'rid': int(record_id),
+    }
+    if extra_params:
+        params.update(extra_params)
+    cursor.execute(_legacy_first_disp_rate_sql(extra_where), params)
+    row = fetch_one_dict(cursor)
+    if not row:
+        return None
+    n = _to_int(row.get('N'), 0) or 0
+    if n <= 0:
+        return None
+    n_rel = _to_int(row.get('N_REL'), 0) or 0
+    return round(n_rel / n, 6)
+
+
+def query_legacy_wafer_prior_hold_cnt(
+    cursor,
+    record_id: int,
+    wafer_ids: list[str],
+    hold_dttm: Optional[datetime],
+) -> int:
+    ids = [w for w in wafer_ids if w]
+    if not ids:
+        return 0
+    binds = {f'w{i}': w for i, w in enumerate(ids)}
+    in_clause = ', '.join(f':w{i}' for i in range(len(ids)))
+    dttm = _legacy_hold_dttm_sql('h')
+    params: dict[str, Any] = dict(binds)
+    params['rid'] = int(record_id)
+    params['ft_like'] = LEGACY_FT_PRODUCT_LIKE
+    time_filter = f'AND ({dttm}) IS NOT NULL'
+    if hold_dttm is not None:
+        time_filter += f' AND ({dttm}) < :hold_dttm'
+        params['hold_dttm'] = hold_dttm
+    cursor.execute(
+        f"""
+        SELECT COUNT(*) AS N
+        FROM HOLD_INFO h
+        WHERE h.PRODUCT_ID LIKE :ft_like
+          AND h.ID <> :rid
+          AND h.WAFER_ID IN ({in_clause})
+          {time_filter}
+        """,
+        params,
+    )
+    row = fetch_one_dict(cursor)
+    return _to_int(row.get('N') if row else None, 0) or 0
+
+
+def query_legacy_product_hold_cnt(
+    cursor,
+    record_id: int,
+    product_id: str,
+    hold_dttm: datetime,
+    days: int = 7,
+) -> int:
+    dttm = _legacy_hold_dttm_sql('h')
+    cursor.execute(
+        f"""
+        SELECT COUNT(*) AS N
+        FROM HOLD_INFO h
+        WHERE h.PRODUCT_ID LIKE :ft_like
+          AND h.ID <> :rid
+          AND h.PRODUCT_ID = :pid
+          AND ({dttm}) IS NOT NULL
+          AND ({dttm}) < :hold_dttm
+          AND ({dttm}) >= :start_dttm
+        """,
+        {
+            'ft_like': LEGACY_FT_PRODUCT_LIKE,
             'rid': int(record_id),
             'pid': product_id,
             'hold_dttm': hold_dttm,
