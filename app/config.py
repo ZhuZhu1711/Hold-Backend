@@ -28,6 +28,16 @@ class Config:
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
 
+    # Raw data CSV ingest（独立进程 app/backend_schedule/FT_RAW_DATA_sche.py，不挂 Web）
+    RAW_DATA_FTP_HOST = '172.18.107.206'
+    RAW_DATA_FTP_USER = 'ft'
+    RAW_DATA_FTP_PASSWD = 'FTabc@123'
+    RAW_DATA_FTP_TIMEOUT = 60
+    RAW_DATA_REMOTE_DIR = '/RAW_DATA/'
+    RAW_DATA_BAK_DIR = '/RAW_DATA_BAK'
+    RAW_DATA_LOCAL_DIR = 'RAW_DATA'
+    RAW_DATA_INTERVAL_MINUTES = 60
+
     # Hold info 合并为 hold_record 的定时任务配置
     def _argv_is_debug_mode():
         for i, a in enumerate(sys.argv):
