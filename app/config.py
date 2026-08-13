@@ -28,6 +28,16 @@ class Config:
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
 
+    # Raw data CSV ingest（独立进程 app/backend_schedule/FT_RAW_DATA_sche.py，不挂 Web）
+    RAW_DATA_FTP_HOST = '172.18.107.206'
+    RAW_DATA_FTP_USER = 'ft'
+    RAW_DATA_FTP_PASSWD = 'FTabc@123'
+    RAW_DATA_FTP_TIMEOUT = 60
+    RAW_DATA_REMOTE_DIR = '/RAW_DATA/'
+    RAW_DATA_BAK_DIR = '/RAW_DATA_BAK'
+    RAW_DATA_LOCAL_DIR = 'RAW_DATA'
+    RAW_DATA_INTERVAL_MINUTES = 60
+
     # Hold info 合并为 hold_record 的定时任务配置
     def _argv_is_debug_mode():
         for i, a in enumerate(sys.argv):
@@ -60,6 +70,17 @@ class Config:
     SYSTEM_USER_ID = 1
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
+
+    # FT 可放行概率静默打分（独立调度，不改处置/UI）
+    HOLD_PREDICT_ENABLED = True
+    HOLD_PREDICT_INTERVAL_MINUTES = 15
+    HOLD_PREDICT_WAIT_HOURS = 24
+    HOLD_PREDICT_BATCH_SIZE = 40
+    HOLD_PREDICT_LABEL_BATCH_SIZE = 200
+    HOLD_PREDICT_MODEL_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'app', 'hold_predict', 'artifacts', 'model_v1.joblib',
+    )
 
     HOLD_MERGE_HOLD_CODES = [
         '023', '024', '027',             # 良率

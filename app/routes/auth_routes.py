@@ -5,11 +5,13 @@ from app.utils.auth_decorators import (
     ROLE_ROOT,
     ROLE_ENGINEER,
     ROLE_PRODUCTION,
+    ROLE_QUALITY,
     home_endpoint_for_role,
     current_role_name,
 )
 
-_LOGIN_ALLOWED_ROLES = (ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
+_LOGIN_ALLOWED_ROLES = (ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION, ROLE_QUALITY)
+_LOGIN_ROLE_DENIED_MSG = '权限不足：仅超级管理员、产品工程师、生产或质量部可登录后台'
 
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/')
@@ -70,7 +72,7 @@ def login_page():
 
         if user:
             if user.ROLE not in _LOGIN_ALLOWED_ROLES:
-                flash('权限不足：仅超级管理员、产品工程师或生产可登录后台', 'danger')
+                flash(_LOGIN_ROLE_DENIED_MSG, 'danger')
             else:
                 _establish_session(
                     user.ID, user.NAME, user.EMPLOYEE_NO, user.ROLE, remember=remember
@@ -111,7 +113,7 @@ def api_login():
     if role not in _LOGIN_ALLOWED_ROLES:
         return jsonify({
             'code': 403,
-            'msg': '权限不足：仅超级管理员、产品工程师或生产可登录后台',
+            'msg': _LOGIN_ROLE_DENIED_MSG,
         }), 403
 
     _establish_session(
@@ -145,6 +147,8 @@ def dashboard():
             return redirect(url_for('engineer.dashboard'))
         if session.get('role') == ROLE_PRODUCTION:
             return redirect(url_for('production.dashboard'))
+        if session.get('role') == ROLE_QUALITY:
+            return redirect(url_for('quality.dashboard'))
         return redirect(url_for('auth.login_page'))
 
     return render_template(
