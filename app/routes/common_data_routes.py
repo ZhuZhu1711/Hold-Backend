@@ -3,7 +3,8 @@
 产品类: 请求gross_die...
 """
 from flask import Blueprint, request, jsonify
-from app.controllers.common_data_ctrl import get_gross_die_value
+from app.controllers.common_data_ctrl import get_gross_die_value, get_ftp_status
+from app.utils.auth_decorators import login_required
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 from app import db
@@ -29,6 +30,20 @@ def get_latest_version():
             'msg': f'查询失败: {str(e)}',
             'data': None
         }), 500
+
+
+@common_data_bp.route('/ftp/status', methods=['GET'])
+@login_required
+def ftp_status():
+    """
+    数据分析用 testlog FTP 探活。
+    登录后可调；FTP 挂了仍返回 200，data.available=false。
+    """
+    success, msg, data = get_ftp_status()
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    return jsonify({'code': 500, 'msg': msg, 'data': None}), 500
+
 
 @common_data_bp.route('/product/gross_die', methods=['GET'])
 def get_gross_die():

@@ -882,6 +882,7 @@ def query_circulations(
     page=1,
     page_size=20,
     limit=None,
+    max_page_size=200,
 ):
     """
     流转记录查询（全量可读，不按角色/型号归属过滤，分页）。
@@ -893,9 +894,9 @@ def query_circulations(
 
         record_table = _record_table()
         if limit is not None and (page is None or str(page) in ('', '1')):
-            page, page_size, offset = _parse_page(1, limit)
+            page, page_size, offset = _parse_page(1, limit, max_page_size=max_page_size)
         else:
-            page, page_size, offset = _parse_page(page, page_size)
+            page, page_size, offset = _parse_page(page, page_size, max_page_size=max_page_size)
 
         where_sql = " WHERE 1 = 1"
         params = {'offset': offset, 'page_size': page_size}
@@ -992,6 +993,69 @@ def query_circulations(
         from app.controllers.hold_report_ctrl import _page_payload
         db.session.rollback()
         return False, f'查询失败: {e}', _page_payload([], 0, 1, 20)
+
+
+CIRCULATION_EXPORT_HEADERS = [
+    '流转ID',
+    'Record ID',
+    '型号',
+    'Lot',
+    'Wafer',
+    '站点',
+    '行为',
+    '经办人',
+    '当前owner',
+    '处置时间',
+    '处置详情',
+    '工程备注',
+    '手输备注',
+]
+
+
+def circulation_export_row(item):
+    return [
+        item.get('ID'),
+        item.get('HOLD_RECORD_ID'),
+        item.get('PRODUCT_ID') or '',
+        item.get('LOT_ID') or '',
+        item.get('WAFER_ID') or '',
+        item.get('STATION') or '',
+        item.get('DISPOSE_LABEL') or item.get('DISPOSE') or '',
+        item.get('DISPOSED_OWNER_NAME') or item.get('DISPOSED_OWNER_ID') or '',
+        item.get('NEXT_OWNER_NAME') or item.get('NEXT_OWNER_ID') or '',
+        item.get('DISPOSE_DTTM') or '',
+        item.get('DISPOSE_DETAIL') or '',
+        item.get('DISPOSE_NOTE') or '',
+        item.get('DISPOSE_MANUAL_NOTE') or '',
+    ]
+
+
+def export_circulations_xlsx(
+    hold_record_id=None,
+    product_id='',
+    wafer_id='',
+    lot_id='',
+    dispose=None,
+    keyword='',
+):
+    """导出流转记录为 xlsx（筛选条件与列表一致，最多 5000 行）。"""
+    from app.utils.excel_export import EXPORT_MAX_ROWS, from_page_payload
+
+    success, msg, payload = query_circulations(
+        hold_record_id=hold_record_id,
+        product_id=product_id,
+        wafer_id=wafer_id,
+        lot_id=lot_id,
+        dispose=dispose,
+        keyword=keyword,
+        page=1,
+        page_size=EXPORT_MAX_ROWS,
+        max_page_size=EXPORT_MAX_ROWS,
+    )
+    return from_page_payload(
+        success, msg, payload,
+        CIRCULATION_EXPORT_HEADERS, circulation_export_row, 'Hold流转',
+    )
 
 
 def get_pending_records(

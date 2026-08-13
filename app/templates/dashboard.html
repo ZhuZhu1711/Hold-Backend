@@ -28,6 +28,7 @@
 
     <main class="main">
         <div class="card">
+            {% include '_ftp_status.html' %}
             <h1>你好，{{ user_name }}</h1>
             <p>您已成功登录到管理后台。当前角色：<strong>{{ role_name }}</strong>。</p>
             <p>可从左侧菜单进入 Hold 报表、用户、产品与缺陷管理模块。</p>

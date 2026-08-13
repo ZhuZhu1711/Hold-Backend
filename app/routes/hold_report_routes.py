@@ -5,6 +5,7 @@ from flask import Blueprint, render_template, request, jsonify, session, Respons
 from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl, hold_info_export_ctrl
 from app.controllers.defect_code_ctrl import query_bincode_defect
 from app.utils.auth_decorators import root_required, login_required, current_role_name
+from app.utils.excel_export import stamp_filename, xlsx_or_error
 
 hold_report_bp = Blueprint('hold_report', __name__, url_prefix='/admin/hold')
 
@@ -96,6 +97,25 @@ def api_holding_records():
         })
     status = 400 if ('无效' in msg or '须为' in msg) else 500
     return jsonify({'code': status, 'msg': msg, 'data': [], 'total': 0}), status
+
+
+@hold_report_bp.route('/api/holding_records/export', methods=['GET'])
+@root_required
+def api_holding_records_export():
+    """
+    导出在线 Hold Record 为 xlsx（筛选条件与列表一致，最多 5000 行）。
+    Query: product_id, station, keyword, record_type(0/1/2)
+    """
+    success, msg, content = hold_report_ctrl.export_holding_records_xlsx(
+        product_id=request.args.get('product_id', '').strip(),
+        station=request.args.get('station', '').strip(),
+        keyword=request.args.get('keyword', '').strip(),
+        record_type=request.args.get('record_type', '').strip() or None,
+    )
+    return xlsx_or_error(
+        success, msg, content, stamp_filename('holding_records'),
+        bad_keys=('无效', '须为'),
+    )
 
 
 @hold_report_bp.route('/api/fvi_defect_details', methods=['GET'])
@@ -226,6 +246,26 @@ def api_hold_history():
     bad_request_keys = ('请指定', '必须', '无效', '须为', '不存在')
     status = 400 if any(k in msg for k in bad_request_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@hold_report_bp.route('/api/history/export', methods=['GET'])
+@root_required
+def api_hold_history_export():
+    """
+    导出 Hold 历史数量为 xlsx（与柱状图同一筛选）。
+    Query: product_id, period_type, year, month, week
+    """
+    success, msg, content = hold_report_ctrl.export_hold_history_xlsx(
+        product_id=request.args.get('product_id', '').strip(),
+        period_type=request.args.get('period_type', 'month').strip(),
+        year=request.args.get('year'),
+        month=request.args.get('month'),
+        week=request.args.get('week'),
+    )
+    return xlsx_or_error(
+        success, msg, content, stamp_filename('hold_history'),
+        bad_keys=('请指定', '必须', '无效', '须为', '不存在'),
+    )
 
 
 @hold_report_bp.route('/api/products', methods=['GET'])

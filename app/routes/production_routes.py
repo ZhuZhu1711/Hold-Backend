@@ -1,12 +1,11 @@
 """
 生产工作台：生产节点 Hold 查看/处置、导出 xlsx、Hold 流转查询。
 """
-from datetime import datetime
-
-from flask import Blueprint, render_template, request, jsonify, session, Response
+from flask import Blueprint, render_template, request, jsonify, session
 
 from app.controllers import production_ctrl, dispose_ctrl
 from app.utils.auth_decorators import production_required, current_role_name
+from app.utils.excel_export import stamp_filename, xlsx_or_error
 
 production_bp = Blueprint('production', __name__, url_prefix='/prod')
 
@@ -101,18 +100,9 @@ def api_holding_records_export():
         keyword=request.args.get('keyword', '').strip(),
         record_type=request.args.get('record_type'),
     )
-    if not success:
-        status = 400 if ('无效' in msg or '须为' in msg) else 500
-        return jsonify({'code': status, 'msg': msg, 'data': None}), status
-
-    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'production_holds_{stamp}.xlsx'
-    return Response(
-        content,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={
-            'Content-Disposition': f'attachment; filename="{filename}"',
-        },
+    return xlsx_or_error(
+        success, msg, content, stamp_filename('production_holds'),
+        bad_keys=('无效', '须为'),
     )
 
 

@@ -1,6 +1,12 @@
 from app import db
 from app.models import User
-from werkzeug.security import generate_password_hash
+from app.controllers.auth_ctrl import normalize_login_password
+from app.utils.auth_decorators import ROLE_NAMES
+
+ALLOWED_ROLES = set(ROLE_NAMES.keys())
+EMPLOYEE_NO_MAX = 20
+NAME_MAX = 20
+
 
 def login(employee_no, password_input):
     """
@@ -46,15 +52,14 @@ def login_logic(employee_no, password_input):
 
 def create_user(employee_no, name, password, role=1):
     """
-    创建用户逻辑
+    创建用户逻辑。密码按登录约定存 MD5 hex。
     """
     if User.query.filter_by(EMPLOYEE_NO=employee_no).first():
         return False, "用户已存在"
-    
-    hashed_pwd = generate_password_hash(password)
-    new_user = User(EMPLOYEE_NO=employee_no, NAME=name, PASSWORD=hashed_pwd, ROLE=role)
-    
+
+    new_user = User(EMPLOYEE_NO=employee_no, NAME=name, ROLE=role)
     try:
+        new_user.set_password(password)
         db.session.add(new_user)
         db.session.commit()
         return True, "创建成功"
@@ -106,28 +111,45 @@ def get_all_users(search="", sort_by="employee_no", order="asc"):
   
 def add_user(data):
     """
-    新增用户逻辑
+    新增用户。密码按登录约定存 MD5 hex（兼容明文或已 MD5 的 hex）。
     """
+    data = data or {}
+    employee_no = str(data.get('employee_no') or '').strip()
+    name = str(data.get('name') or '').strip()
+    password = data.get('password')
+    role_raw = data.get('role', 1)
+
+    if not employee_no:
+        return False, '请填写工号'
+    if len(employee_no) > EMPLOYEE_NO_MAX:
+        return False, f'工号最长 {EMPLOYEE_NO_MAX} 个字符'
+    if not name:
+        return False, '请填写姓名'
+    if len(name) > NAME_MAX:
+        return False, f'姓名最长 {NAME_MAX} 个字符'
+    if not normalize_login_password(password):
+        return False, '请填写密码'
     try:
-        # 1. 检查工号是否已存在
-        existing_user = User.query.filter_by(EMPLOYEE_NO=data['employee_no']).first()
+        role = int(role_raw)
+    except (TypeError, ValueError):
+        return False, '角色无效'
+    if role not in ALLOWED_ROLES:
+        return False, '角色无效，须为超级管理员 / 产品工程师 / 质量部 / 生产'
+
+    try:
+        existing_user = User.query.filter_by(EMPLOYEE_NO=employee_no).first()
         if existing_user:
-            return False, "工号已存在"
+            return False, '工号已存在'
 
-        # 2. 创建新用户对象
         new_user = User()
-        new_user.EMPLOYEE_NO = data['employee_no']
-        new_user.NAME = data['name']
-        new_user.ROLE = data.get('role', 1) # 默认为普通用户
-        
-        # 3. 使用模型自带的方法设置加密密码
-        new_user.set_password(data['password'])
+        new_user.EMPLOYEE_NO = employee_no
+        new_user.NAME = name
+        new_user.ROLE = role
+        new_user.set_password(password)
 
-        # 4. 保存到数据库
         db.session.add(new_user)
         db.session.commit()
-        
-        return True, "用户添加成功"
+        return True, '用户添加成功'
     except Exception as e:
         db.session.rollback()
         return False, str(e)

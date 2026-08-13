@@ -1,11 +1,12 @@
 from flask import Blueprint, render_template, request, jsonify, session
 from app.controllers import user_ctrl
-from app.utils.auth_decorators import current_role_name
+from app.utils.auth_decorators import current_role_name, root_required
 
 user_bp = Blueprint('user', __name__, url_prefix='/admin/users')
 
 # --- 页面路由 ---
 @user_bp.route('')
+@root_required
 def user_list_page():
     """
     用户管理页面
@@ -19,6 +20,7 @@ def user_list_page():
 
 # --- 数据接口路由 ---
 @user_bp.route('/api', methods=['GET'])
+@root_required
 def get_users():
     """
     获取用户列表数据（支持搜索和排序）
@@ -46,6 +48,7 @@ def get_users():
         return jsonify({'code': 500, 'msg': msg, 'data': []})
 
 @user_bp.route('/api', methods=['POST'])
+@root_required
 def create_user():
     """
     新增用户
@@ -66,6 +69,7 @@ def create_user():
         return jsonify({'code': 400, 'msg': msg}), 400
 
 @user_bp.route('/api/<int:user_id>', methods=['DELETE'])
+@root_required
 def delete_user(user_id):
     """
     删除用户

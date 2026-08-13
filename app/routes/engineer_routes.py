@@ -10,6 +10,7 @@ from flask import Blueprint, render_template, request, jsonify, session
 
 from app.controllers import engineer_ctrl, dispose_ctrl
 from app.utils.auth_decorators import engineer_required, current_role_name
+from app.utils.excel_export import stamp_filename, xlsx_or_error
 
 engineer_bp = Blueprint('engineer', __name__, url_prefix='/eng')
 
@@ -178,6 +179,30 @@ def api_holding_records():
         })
     status = 400 if ('无效' in msg or '须为' in msg) else 500
     return jsonify({'code': status, 'msg': msg, 'data': [], 'total': 0}), status
+
+
+@engineer_bp.route('/api/holding_records/export', methods=['GET'])
+@engineer_required
+def api_holding_records_export():
+    """
+    导出所属型号在线 Hold 为 xlsx（筛选条件与列表一致，最多 5000 行）。
+    Query: product_id, station, keyword, record_type, pending_only
+    """
+    pending_only = request.args.get('pending_only', '').strip().lower() in (
+        '1', 'true', 'yes', 'y',
+    )
+    success, msg, content = engineer_ctrl.export_owned_holding_records_xlsx(
+        eng_user_id=_eng_id(),
+        product_id=request.args.get('product_id', '').strip(),
+        station=request.args.get('station', '').strip(),
+        keyword=request.args.get('keyword', '').strip(),
+        record_type=request.args.get('record_type', '').strip() or None,
+        pending_only=pending_only,
+    )
+    return xlsx_or_error(
+        success, msg, content, stamp_filename('engineer_holds'),
+        bad_keys=('无效', '须为'),
+    )
 
 
 @engineer_bp.route('/api/dispose_actions', methods=['GET'])

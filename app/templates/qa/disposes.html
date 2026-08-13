@@ -36,6 +36,8 @@
         .btn:hover { background: #4a148c; }
         .btn-ghost { background: #e9ecef; color: #333; }
         .btn-ghost:hover { background: #dee2e6; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
         .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
         .pager {
             display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -141,6 +143,7 @@
                 </label>
                 <button class="btn" onclick="loadData()">查询</button>
                 <button class="btn btn-ghost" onclick="resetFilters()">重置</button>
+                <button class="btn btn-success" onclick="exportXlsx()">导出 xlsx</button>
             </div>
             <div class="meta" id="meta">加载中...</div>
             <div style="overflow:auto; max-height:70vh;">
@@ -336,6 +339,18 @@
             } catch (e) {
                 document.getElementById('meta').textContent = '请求失败: ' + e;
             }
+        }
+
+        function exportXlsx() {
+            const params = new URLSearchParams({
+                start_dttm: document.getElementById('start_dttm').value.trim(),
+                end_dttm: document.getElementById('end_dttm').value.trim(),
+                product_id: document.getElementById('product_id').value.trim(),
+                dispose: document.getElementById('dispose').value,
+                record_type: document.getElementById('record_type').value,
+                route: document.getElementById('route').value.trim(),
+            });
+            window.location.href = '/qa/api/disposes/export?' + params.toString();
         }
 
         function closeDrawer() {

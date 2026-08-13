@@ -1,14 +1,9 @@
 """
 生产角色：查看/处置当前节点在生产 OP 的在线 Hold，以及导出。
 """
-from io import BytesIO
-
-from openpyxl import Workbook
-
 from app.config import Config
 from app.controllers import hold_report_ctrl, dispose_ctrl
-
-EXPORT_MAX_ROWS = 5000
+from app.utils.excel_export import EXPORT_MAX_ROWS, from_page_payload
 
 
 def _production_op_id():
@@ -102,6 +97,49 @@ def get_production_dispose_record(hold_record_id):
     return True, '获取成功', record
 
 
+PRODUCTION_HOLDING_EXPORT_HEADERS = [
+    'Record ID',
+    '处置单类型',
+    '型号',
+    '站点',
+    '设备',
+    'Lot',
+    'Wafer',
+    'Hold Code',
+    'Hold 原因',
+    '工程师处置',
+    '处置详情',
+    '工程备注',
+    '手输备注',
+    '处置人',
+    '处置时间',
+    'Hold 时间',
+    '等级/数量',
+]
+
+
+def production_holding_export_row(item):
+    return [
+        item.get('ID'),
+        item.get('RECORD_TYPE_NAME') or '',
+        item.get('PRODUCT_ID') or '',
+        item.get('STATION') or '',
+        item.get('EQUIP_ID') or '',
+        item.get('LOT_ID') or '',
+        item.get('WAFER_ID') or '',
+        item.get('HOLD_CODE') or '',
+        item.get('HOLD_REASON') or '',
+        item.get('LAST_DISPOSE_LABEL') or '',
+        item.get('LAST_DISPOSE_DETAIL') or '',
+        item.get('LAST_DISPOSE_NOTE') or '',
+        item.get('LAST_DISPOSE_MANUAL_NOTE') or '',
+        item.get('LAST_DISPOSED_OWNER_NAME') or item.get('LAST_DISPOSED_OWNER_ID') or '',
+        item.get('LAST_DISPOSE_DTTM') or '',
+        item.get('HOLD_DTTM') or '',
+        item.get('GRADE_NUM_DISPLAY') or '',
+    ]
+
+
 def export_production_holding_records_xlsx(
     product_id='',
     station='',
@@ -120,63 +158,9 @@ def export_production_holding_records_xlsx(
         page=1,
         page_size=EXPORT_MAX_ROWS,
         current_owner_id=_production_op_id(),
+        max_page_size=EXPORT_MAX_ROWS,
     )
-    if not success:
-        return False, msg, None
-
-    items = (payload or {}).get('items') or []
-    total = int((payload or {}).get('total') or 0)
-    truncated = total > len(items)
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = '生产节点Hold'
-    headers = [
-        'Record ID',
-        '处置单类型',
-        '型号',
-        '站点',
-        '设备',
-        'Lot',
-        'Wafer',
-        'Hold Code',
-        'Hold 原因',
-        '工程师处置',
-        '处置详情',
-        '工程备注',
-        '手输备注',
-        '处置人',
-        '处置时间',
-        'Hold 时间',
-        '等级/数量',
-    ]
-    ws.append(headers)
-
-    for item in items:
-        ws.append([
-            item.get('ID'),
-            item.get('RECORD_TYPE_NAME') or '',
-            item.get('PRODUCT_ID') or '',
-            item.get('STATION') or '',
-            item.get('EQUIP_ID') or '',
-            item.get('LOT_ID') or '',
-            item.get('WAFER_ID') or '',
-            item.get('HOLD_CODE') or '',
-            item.get('HOLD_REASON') or '',
-            item.get('LAST_DISPOSE_LABEL') or '',
-            item.get('LAST_DISPOSE_DETAIL') or '',
-            item.get('LAST_DISPOSE_NOTE') or '',
-            item.get('LAST_DISPOSE_MANUAL_NOTE') or '',
-            item.get('LAST_DISPOSED_OWNER_NAME') or item.get('LAST_DISPOSED_OWNER_ID') or '',
-            item.get('LAST_DISPOSE_DTTM') or '',
-            item.get('HOLD_DTTM') or '',
-            item.get('GRADE_NUM_DISPLAY') or '',
-        ])
-
-    bio = BytesIO()
-    wb.save(bio)
-    bio.seek(0)
-    note = msg
-    if truncated:
-        note = f'{msg}（共 {total} 条，已导出前 {len(items)} 条）'
-    return True, note, bio.getvalue()
+    return from_page_payload(
+        success, msg, payload,
+        PRODUCTION_HOLDING_EXPORT_HEADERS, production_holding_export_row, '生产节点Hold',
+    )

@@ -187,6 +187,7 @@
                     仅我的待办
                 </label>
                 <button class="btn" onclick="loadData()">查询</button>
+                <button class="btn btn-success" onclick="exportXlsx()">导出 xlsx</button>
             </div>
             <div class="meta" id="meta">加载中...</div>
             <div style="overflow:auto; max-height:70vh;">
@@ -803,6 +804,21 @@
             } catch (e) {
                 document.getElementById('meta').textContent = '请求失败: ' + e;
             }
+        }
+
+        function exportXlsx() {
+            const params = new URLSearchParams({
+                station: document.getElementById('station').value.trim(),
+                keyword: document.getElementById('keyword').value.trim(),
+            });
+            const productId = document.getElementById('product_id').value;
+            const recordType = document.getElementById('record_type').value;
+            if (productId) params.set('product_id', productId);
+            if (recordType !== '') params.set('record_type', recordType);
+            if (document.getElementById('pending_only').checked) {
+                params.set('pending_only', '1');
+            }
+            window.location.href = '/eng/api/holding_records/export?' + params.toString();
         }
 
         document.addEventListener('DOMContentLoaded', async () => {

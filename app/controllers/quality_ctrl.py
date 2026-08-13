@@ -75,13 +75,14 @@ def query_quality_disposes(
     route='',
     page=1,
     page_size=20,
+    max_page_size=200,
 ):
     """
     已处置物料列表（分页）。
     时间按 CIRCULATION_HISTORY.DISPOSE_DTTM；ROUTE 匹配 FT_HOLD_RECORD.ROUTE_ID。
     """
     try:
-        page, page_size, offset = _parse_page(page, page_size)
+        page, page_size, offset = _parse_page(page, page_size, max_page_size=max_page_size)
         record_table = _record_table()
 
         start_norm = normalize_dttm(start_dttm, is_end=False) if start_dttm else None
@@ -160,6 +161,71 @@ def query_quality_disposes(
     except Exception as e:
         db.session.rollback()
         return False, f'查询失败: {e}', _page_payload([], 0, 1, 20)
+
+
+QUALITY_EXPORT_HEADERS = [
+    '处置时间',
+    '型号',
+    'Record类型',
+    'ROUTE',
+    '处置',
+    'Lot',
+    'Wafer',
+    '站点',
+    'Hold Code',
+    '处置人',
+    '处置详情',
+    '工程备注',
+    '手输备注',
+    'Record ID',
+]
+
+
+def quality_export_row(item):
+    return [
+        item.get('DISPOSE_DTTM') or '',
+        item.get('PRODUCT_ID') or '',
+        item.get('RECORD_TYPE_NAME') or item.get('RECORD_TYPE') or '',
+        item.get('ROUTE_ID') or '',
+        item.get('DISPOSE_LABEL') or item.get('DISPOSE') or '',
+        item.get('LOT_ID') or '',
+        item.get('WAFER_ID') or '',
+        item.get('STATION') or '',
+        item.get('HOLD_CODE') or '',
+        item.get('DISPOSED_OWNER_NAME') or item.get('DISPOSED_OWNER_ID') or '',
+        item.get('DISPOSE_DETAIL') or '',
+        item.get('DISPOSE_NOTE') or '',
+        item.get('DISPOSE_MANUAL_NOTE') or '',
+        item.get('HOLD_RECORD_ID'),
+    ]
+
+
+def export_quality_disposes_xlsx(
+    start_dttm='',
+    end_dttm='',
+    product_id='',
+    dispose=None,
+    record_type=None,
+    route='',
+):
+    """导出质量部已处置物料为 xlsx（筛选条件与列表一致，最多 5000 行）。"""
+    from app.utils.excel_export import EXPORT_MAX_ROWS, from_page_payload
+
+    success, msg, payload = query_quality_disposes(
+        start_dttm=start_dttm,
+        end_dttm=end_dttm,
+        product_id=product_id,
+        dispose=dispose,
+        record_type=record_type,
+        route=route,
+        page=1,
+        page_size=EXPORT_MAX_ROWS,
+        max_page_size=EXPORT_MAX_ROWS,
+    )
+    return from_page_payload(
+        success, msg, payload,
+        QUALITY_EXPORT_HEADERS, quality_export_row, '物料处置',
+    )
 
 
 def get_quality_product_options(keyword=''):

@@ -16,6 +16,7 @@ from app.utils.auth_decorators import (
     is_production,
     current_role_name,
 )
+from app.utils.excel_export import stamp_filename, xlsx_or_error
 
 _CIRCULATION_ROLES = (ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
 
@@ -204,6 +205,27 @@ def api_query_circulations():
         })
     status = 400 if ('无效' in msg) else 500
     return jsonify({'code': status, 'msg': msg, 'data': [], 'total': 0}), status
+
+
+@dispose_bp.route('/api/circulations/export', methods=['GET'])
+@role_required(*_CIRCULATION_ROLES)
+def api_query_circulations_export():
+    """
+    导出流转记录为 xlsx（筛选条件与列表一致，最多 5000 行）。
+    Query: hold_record_id, product_id, wafer_id, lot_id, dispose, keyword
+    """
+    success, msg, content = dispose_ctrl.export_circulations_xlsx(
+        hold_record_id=request.args.get('hold_record_id'),
+        product_id=request.args.get('product_id', '').strip(),
+        wafer_id=request.args.get('wafer_id', '').strip(),
+        lot_id=request.args.get('lot_id', '').strip(),
+        dispose=request.args.get('dispose'),
+        keyword=request.args.get('keyword', '').strip(),
+    )
+    return xlsx_or_error(
+        success, msg, content, stamp_filename('hold_circulations'),
+        bad_keys=('无效',),
+    )
 
 
 @dispose_bp.route('/api/records/<int:record_id>/circulations', methods=['GET'])

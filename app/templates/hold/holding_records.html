@@ -24,6 +24,8 @@
             background: #007bff; color: #fff; font-size: 14px;
         }
         .btn:hover { background: #0069d9; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
         .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
         .pager {
             display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -134,6 +136,7 @@
                 <input id="station" placeholder="站点 STATION" />
                 <input id="keyword" placeholder="Wafer / Lot / Code / Reason" />
                 <button class="btn" onclick="loadData()">查询</button>
+                <button class="btn btn-success" onclick="exportXlsx()">导出 xlsx</button>
             </div>
             <div class="meta" id="meta">加载中...</div>
             <div style="overflow:auto; max-height:70vh;">
@@ -685,6 +688,17 @@
             } catch (e) {
                 document.getElementById('meta').textContent = '请求失败: ' + e;
             }
+        }
+
+        function exportXlsx() {
+            const params = new URLSearchParams({
+                product_id: document.getElementById('product_id').value.trim(),
+                station: document.getElementById('station').value.trim(),
+                keyword: document.getElementById('keyword').value.trim(),
+            });
+            const recordType = document.getElementById('record_type').value;
+            if (recordType !== '') params.set('record_type', recordType);
+            window.location.href = '/admin/hold/api/holding_records/export?' + params.toString();
         }
         document.addEventListener('DOMContentLoaded', () => loadData(true));
         document.querySelectorAll('.filters input').forEach(el => {

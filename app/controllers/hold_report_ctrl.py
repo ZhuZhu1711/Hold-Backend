@@ -124,6 +124,7 @@ def get_holding_records(
     product_ids=None,
     current_owner_id=None,
     limit=None,
+    max_page_size=200,
 ):
     """
     查询当前仍在 hold 的 hold_record 列表（分页）。
@@ -139,9 +140,9 @@ def get_holding_records(
         info_table, record_table, link_col = _table_names()
         if limit is not None and (page is None or str(page) in ('', '1')):
             # 旧调用：limit 当作 page_size，固定第 1 页
-            page, page_size, offset = _parse_page(1, limit)
+            page, page_size, offset = _parse_page(1, limit, max_page_size=max_page_size)
         else:
-            page, page_size, offset = _parse_page(page, page_size)
+            page, page_size, offset = _parse_page(page, page_size, max_page_size=max_page_size)
 
         where_sql = " WHERE 1 = 1"
         params = {'offset': offset, 'page_size': page_size}
@@ -293,6 +294,69 @@ def get_holding_records(
     except Exception as e:
         db.session.rollback()
         return False, f'查询失败: {e}', _page_payload([], 0, 1, 20)
+
+
+HOLDING_EXPORT_HEADERS = [
+    'Record ID',
+    '处置单类型',
+    '型号',
+    '站点',
+    '设备',
+    'Lot',
+    'Wafer',
+    'Hold Code',
+    'Hold 原因',
+    '等级/数量',
+    '当前负责人',
+    'Hold 时间',
+    '状态',
+]
+
+
+def holding_export_row(item):
+    return [
+        item.get('ID'),
+        item.get('RECORD_TYPE_NAME') or '',
+        item.get('PRODUCT_ID') or '',
+        item.get('STATION') or '',
+        item.get('EQUIP_ID') or '',
+        item.get('LOT_ID') or '',
+        item.get('WAFER_ID') or '',
+        item.get('HOLD_CODE') or '',
+        item.get('HOLD_REASON') or '',
+        item.get('GRADE_NUM_DISPLAY') or item.get('GRADE_NUM') or '',
+        item.get('CURRENT_OWNER_NAME') or item.get('CURRENT_OWNER_ID') or '',
+        item.get('HOLD_DTTM') or '',
+        '已关闭' if item.get('IS_CLOSED') else 'Holding',
+    ]
+
+
+def export_holding_records_xlsx(
+    product_id='',
+    station='',
+    keyword='',
+    record_type=None,
+    owner_eng_id=None,
+    current_owner_id=None,
+):
+    """导出在线 Hold Record 为 xlsx（筛选条件与列表一致，最多 5000 行）。"""
+    from app.utils.excel_export import EXPORT_MAX_ROWS, from_page_payload
+
+    success, msg, payload = get_holding_records(
+        product_id=product_id,
+        station=station,
+        keyword=keyword,
+        record_type=record_type,
+        page=1,
+        page_size=EXPORT_MAX_ROWS,
+        owner_eng_id=owner_eng_id,
+        current_owner_id=current_owner_id,
+        max_page_size=EXPORT_MAX_ROWS,
+    )
+    return from_page_payload(
+        success, msg, payload,
+        HOLDING_EXPORT_HEADERS, holding_export_row, 'Holding Record',
+    )
 
 
 def get_hold_count_by_wafer(wafer_id):
@@ -474,6 +538,41 @@ def get_hold_history(product_id, period_type, year, month=None, week=None):
     except Exception as e:
         db.session.rollback()
         return False, f'查询失败: {e}', None
+
+
+def hold_history_table(data):
+    """把历史柱状图数据转成表头 + 行（含合计行）。"""
+    data = data or {}
+    series = data.get('series') or []
+    labels = data.get('labels') or []
+    headers = ['日期'] + [s.get('name') or '' for s in series] + ['合计']
+    rows = []
+    for i, label in enumerate(labels):
+        vals = []
+        for s in series:
+            values = s.get('values') or []
+            vals.append(values[i] if i < len(values) else 0)
+        rows.append([label] + vals + [sum(vals)])
+    rows.append(['合计'] + [s.get('total') or 0 for s in series] + [data.get('total') or 0])
+    return headers, rows
+
+
+def export_hold_history_xlsx(product_id, period_type, year, month=None, week=None):
+    """导出 Hold 历史数量为 xlsx（与柱状图同一筛选）。"""
+    from app.utils.excel_export import build_xlsx
+
+    success, msg, data = get_hold_history(
+        product_id=product_id,
+        period_type=period_type,
+        year=year,
+        month=month,
+        week=week,
+    )
+    if not success:
+        return False, msg, None
+    headers, rows = hold_history_table(data)
+    title = f"Hold历史_{(data or {}).get('period_label') or 'data'}"
+    return True, msg, build_xlsx(title, headers, rows)
 
 
 def get_fvi_defect_details(lot_id, line_type='FT'):

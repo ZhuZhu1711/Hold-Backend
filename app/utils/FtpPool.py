@@ -3,11 +3,28 @@ import logging
 from queue import Queue, Empty
 import time
 
+from app.config import Config
+
 logger = logging.getLogger(__name__)
+
+FTP_DOWN_IMPACT = (
+    'FTP 不可用，数据分析（bysite / testlog）可能受影响；Hold 流转不受影响。'
+)
 
 
 class FtpUnavailableError(ConnectionError):
     """FTP 不可用：仅影响依赖 testlog 下载的数据分析，不影响 Hold 流转。"""
+
+
+def build_ftp_status_payload(host, available, latency_ms=None):
+    """探活结果（不含账号密码）。"""
+    ok = bool(available)
+    return {
+        'available': ok,
+        'host': host or '',
+        'latency_ms': latency_ms,
+        'impact': None if ok else FTP_DOWN_IMPACT,
+    }
 
 
 class RobustFtpPool:
@@ -67,6 +84,35 @@ class RobustFtpPool:
             + (f' ({last_err})' if last_err else '')
         )
 
+    def check_status(self, timeout=None):
+        """
+        独立探活：连上、登录、NOOP 后断开，不占用连接池。
+        始终返回 payload，不抛给调用方。
+        """
+        wait = timeout if timeout is not None else min(int(self.timeout or 8), 8)
+        started = time.perf_counter()
+        ftp = None
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(self.host, timeout=wait)
+            ftp.login(self.user, self.passwd)
+            ftp.voidcmd('NOOP')
+            available = True
+        except Exception as e:
+            available = False
+            logger.warning('FTP health check failed (%s): %s', self.host, e)
+        finally:
+            if ftp is not None:
+                try:
+                    ftp.quit()
+                except Exception:
+                    try:
+                        ftp.close()
+                    except Exception:
+                        pass
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return build_ftp_status_payload(self.host, available, latency_ms)
+
     def return_conn(self, conn):
         """归还连接；池满或无效则关闭。"""
         if conn is None:
@@ -94,7 +140,8 @@ class RobustFtpPool:
 
 # 仅构造空池，启动时不连接 FTP
 testlog_ftp_pool = RobustFtpPool(
-    '172.18.200.250',
-    'share',
-    'abc@123',
+    getattr(Config, 'TESTLOG_FTP_HOST', '172.18.200.250'),
+    getattr(Config, 'TESTLOG_FTP_USER', 'share'),
+    getattr(Config, 'TESTLOG_FTP_PASSWD', ''),
+    timeout=getattr(Config, 'TESTLOG_FTP_TIMEOUT', 8),
 )

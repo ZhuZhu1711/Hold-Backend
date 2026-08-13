@@ -1,0 +1,36 @@
+<style>
+        .ftp-banner {
+            margin: 0 0 16px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .ftp-banner.checking { background: #eef2f7; color: #555; }
+        .ftp-banner.ok { background: #d4edda; color: #155724; }
+        .ftp-banner.bad { background: #f8d7da; color: #721c24; }
+</style>
+<div id="ftpStatus" class="ftp-banner checking">正在检查 FTP 可用性…</div>
+<script>
+        (function () {
+            const el = document.getElementById('ftpStatus');
+            if (!el) return;
+            fetch('/api/common_data/ftp/status', { credentials: 'same-origin' })
+                .then(r => r.json())
+                .then(json => {
+                    const data = (json && json.data) || {};
+                    if (data.available) {
+                        el.className = 'ftp-banner ok';
+                        const host = data.host ? '（' + data.host + '）' : '';
+                        el.textContent = 'FTP 可用' + host + '，数据分析正常';
+                    } else {
+                        el.className = 'ftp-banner bad';
+                        el.textContent = data.impact || json.msg || 'FTP 不可用，数据分析可能受影响';
+                    }
+                })
+                .catch(() => {
+                    el.className = 'ftp-banner bad';
+                    el.textContent = '无法检查 FTP 状态，数据分析可能受影响';
+                });
+        })();
+</script>

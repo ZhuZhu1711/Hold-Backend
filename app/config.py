@@ -28,6 +28,12 @@ class Config:
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
 
+    # 数据分析用 testlog FTP（bysite / testlog 下载）
+    TESTLOG_FTP_HOST = '172.18.200.250'
+    TESTLOG_FTP_USER = 'share'
+    TESTLOG_FTP_PASSWD = 'abc@123'
+    TESTLOG_FTP_TIMEOUT = 8
+
     # Raw data CSV ingest（独立进程 app/backend_schedule/FT_RAW_DATA_sche.py，不挂 Web）
     RAW_DATA_FTP_HOST = '172.18.107.206'
     RAW_DATA_FTP_USER = 'ft'

@@ -5,6 +5,7 @@ from flask import Blueprint, render_template, request, jsonify, session
 
 from app.controllers import quality_ctrl
 from app.utils.auth_decorators import quality_required, current_role_name
+from app.utils.excel_export import stamp_filename, xlsx_or_error
 
 quality_bp = Blueprint('quality', __name__, url_prefix='/qa')
 
@@ -67,6 +68,27 @@ def api_quality_disposes():
         })
     status = 400 if any(k in msg for k in ('无效', '须为', '仅支持', '不能晚于')) else 500
     return jsonify({'code': status, 'msg': msg, 'data': [], 'total': 0}), status
+
+
+@quality_bp.route('/api/disposes/export', methods=['GET'])
+@quality_required
+def api_quality_disposes_export():
+    """
+    导出已处置物料为 xlsx（筛选条件与列表一致，最多 5000 行）。
+    Query: start_dttm, end_dttm, product_id, dispose, record_type, route
+    """
+    success, msg, content = quality_ctrl.export_quality_disposes_xlsx(
+        start_dttm=request.args.get('start_dttm', '').strip(),
+        end_dttm=request.args.get('end_dttm', '').strip(),
+        product_id=request.args.get('product_id', '').strip(),
+        dispose=request.args.get('dispose'),
+        record_type=request.args.get('record_type'),
+        route=request.args.get('route', '').strip(),
+    )
+    return xlsx_or_error(
+        success, msg, content, stamp_filename('quality_disposes'),
+        bad_keys=('无效', '须为', '仅支持', '不能晚于'),
+    )
 
 
 @quality_bp.route('/api/products', methods=['GET'])

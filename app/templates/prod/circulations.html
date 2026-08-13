@@ -35,6 +35,8 @@
         .btn:hover { background: #0069d9; }
         .btn-ghost { background: #e9ecef; color: #333; }
         .btn-ghost:hover { background: #dee2e6; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
         .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
         .pager {
             display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -136,6 +138,7 @@
                 <input id="keyword" placeholder="关键字 / 备注" />
                 <button class="btn" onclick="loadData()">查询</button>
                 <button class="btn btn-ghost" onclick="resetFilters()">重置</button>
+                <button class="btn btn-success" onclick="exportXlsx()">导出 xlsx</button>
             </div>
             <div class="meta" id="meta">加载中...</div>
             <div style="overflow:auto; max-height:70vh;">
@@ -297,6 +300,18 @@
             } catch (e) {
                 document.getElementById('meta').textContent = '请求失败: ' + e;
             }
+        }
+
+        function exportXlsx() {
+            const params = new URLSearchParams({
+                hold_record_id: document.getElementById('hold_record_id').value.trim(),
+                product_id: document.getElementById('product_id').value.trim(),
+                wafer_id: document.getElementById('wafer_id').value.trim(),
+                lot_id: document.getElementById('lot_id').value.trim(),
+                dispose: document.getElementById('dispose').value,
+                keyword: document.getElementById('keyword').value.trim(),
+            });
+            window.location.href = '/admin/hold/api/circulations/export?' + params.toString();
         }
 
         function closeDrawer() {

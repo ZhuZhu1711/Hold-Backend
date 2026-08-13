@@ -24,6 +24,8 @@
             background: #007bff; color: #fff; font-size: 14px;
         }
         .btn:hover { background: #0069d9; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
         .meta { margin-bottom: 12px; color: #555; font-size: 13px; }
         .chart-wrap { position: relative; height: 420px; }
         .hint { color: #888; font-size: 12px; margin-top: 8px; }
@@ -47,6 +49,7 @@
                 <input id="month" type="number" min="1" max="12" placeholder="月份 1-12" style="width:110px;" />
                 <input id="week" type="number" min="1" max="53" placeholder="ISO周 1-53" style="width:120px; display:none;" />
                 <button class="btn" onclick="loadChart()">查询</button>
+                <button class="btn btn-success" onclick="exportXlsx()">导出 xlsx</button>
             </div>
             <div class="meta" id="meta">请选择条件后查询</div>
             <div class="chart-wrap">
@@ -169,6 +172,23 @@
             } catch (e) {
                 document.getElementById('meta').textContent = '请求失败: ' + e;
             }
+        }
+
+        function exportXlsx() {
+            const product_id = document.getElementById('product_id').value.trim();
+            if (!product_id) {
+                document.getElementById('meta').textContent = '请先选择型号';
+                return;
+            }
+            const period_type = document.getElementById('period_type').value;
+            const params = new URLSearchParams({
+                product_id,
+                period_type,
+                year: document.getElementById('year').value,
+            });
+            if (period_type === 'month') params.set('month', document.getElementById('month').value);
+            else params.set('week', document.getElementById('week').value);
+            window.location.href = '/admin/hold/api/history/export?' + params.toString();
         }
 
         document.addEventListener('DOMContentLoaded', async () => {

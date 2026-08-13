@@ -232,6 +232,7 @@ def get_owned_holding_records(
     page=1,
     page_size=20,
     pending_only=False,
+    max_page_size=200,
 ):
     """
     查看所属型号的在线 Hold Record（分页）。
@@ -248,6 +249,7 @@ def get_owned_holding_records(
         page_size=page_size,
         owner_eng_id=eng_user_id,
         current_owner_id=eng_user_id if pending_only else None,
+        max_page_size=max_page_size,
     )
     if not success:
         return success, msg, payload
@@ -270,6 +272,43 @@ def get_owned_holding_records(
         )
     payload['items'] = items
     return True, msg, payload
+
+
+ENGINEER_HOLDING_EXPORT_HEADERS = list(hold_report_ctrl.HOLDING_EXPORT_HEADERS) + ['是否可处置']
+
+
+def engineer_holding_export_row(item):
+    return hold_report_ctrl.holding_export_row(item) + [
+        '是' if item.get('CAN_DISPOSE') else '否',
+    ]
+
+
+def export_owned_holding_records_xlsx(
+    eng_user_id,
+    product_id='',
+    station='',
+    keyword='',
+    record_type=None,
+    pending_only=False,
+):
+    """导出所属型号在线 Hold 为 xlsx（筛选条件与列表一致，最多 5000 行）。"""
+    from app.utils.excel_export import EXPORT_MAX_ROWS, from_page_payload
+
+    success, msg, payload = get_owned_holding_records(
+        eng_user_id=eng_user_id,
+        product_id=product_id,
+        station=station,
+        keyword=keyword,
+        record_type=record_type,
+        page=1,
+        page_size=EXPORT_MAX_ROWS,
+        pending_only=pending_only,
+        max_page_size=EXPORT_MAX_ROWS,
+    )
+    return from_page_payload(
+        success, msg, payload,
+        ENGINEER_HOLDING_EXPORT_HEADERS, engineer_holding_export_row, '工程师Hold',
+    )
 
 
 def get_owned_dispose_record(eng_user_id, hold_record_id):

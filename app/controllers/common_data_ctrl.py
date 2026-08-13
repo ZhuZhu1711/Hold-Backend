@@ -36,3 +36,21 @@ def get_gross_die_value(product_id: str):
         return False, f"Database error: {str(e)}"
     except Exception as e:
         return False, f"Unknown Error: {e}"
+
+
+def get_ftp_status():
+    """探活数据分析用 testlog FTP。成功返回 (True, msg, payload)。"""
+    from app.utils.FtpPool import FTP_DOWN_IMPACT, testlog_ftp_pool
+
+    try:
+        data = testlog_ftp_pool.check_status()
+    except Exception as e:
+        data = {
+            'available': False,
+            'host': getattr(testlog_ftp_pool, 'host', ''),
+            'latency_ms': None,
+            'impact': FTP_DOWN_IMPACT,
+        }
+        return True, f'FTP 探活异常: {e}', data
+    msg = 'FTP 可用' if data.get('available') else 'FTP 不可用'
+    return True, msg, data
