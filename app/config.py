@@ -71,6 +71,17 @@ class Config:
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
 
+    # FT 可放行概率静默打分（独立调度，不改处置/UI）
+    HOLD_PREDICT_ENABLED = True
+    HOLD_PREDICT_INTERVAL_MINUTES = 15
+    HOLD_PREDICT_WAIT_HOURS = 24
+    HOLD_PREDICT_BATCH_SIZE = 40
+    HOLD_PREDICT_LABEL_BATCH_SIZE = 200
+    HOLD_PREDICT_MODEL_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'app', 'hold_predict', 'artifacts', 'model_v1.joblib',
+    )
+
     HOLD_MERGE_HOLD_CODES = [
         '023', '024', '027',             # 良率
         '025',                           # 缺陷率

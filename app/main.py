@@ -17,10 +17,12 @@ if project_root_path not in sys.path:
 # 应用初始化
 # ==========================================
 from app import create_app, db
+from app.config import Config
 # 直接从 routes 包中导入所有蓝图
 from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
 from app.backend_schedule.FT_HOLD_MERGE_sche import HoldMergeScheduler
+from app.backend_schedule.FT_HOLD_PREDICT_sche import HoldPredictScheduler
 
 app = create_app()
 
@@ -64,6 +66,9 @@ if __name__ == '__main__':
         task_scheduler.start()
         hold_merge_scheduler = HoldMergeScheduler()
         hold_merge_scheduler.start()
+        if getattr(Config, 'HOLD_PREDICT_ENABLED', True):
+            hold_predict_scheduler = HoldPredictScheduler()
+            hold_predict_scheduler.start()
         serve(app, host='0.0.0.0', port=50001)
     else:
         app.run(host='0.0.0.0', debug=True, port=50001)
