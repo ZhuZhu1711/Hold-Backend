@@ -13,6 +13,9 @@ from app.hold_predict.db import (
     query_bsl_map,
     query_latest_test_wafer,
     query_latest_testlog_path,
+    query_legacy_product_hold_cnt,
+    query_legacy_release_rate,
+    query_legacy_wafer_prior_hold_cnt,
     query_product_gross,
     query_product_hold_cnt,
     query_release_rate,
@@ -200,11 +203,72 @@ def fetch_bysite_matrix(cursor, wafer_ids: list[str], hold_dttm, skip_ftp: bool 
     return merge_site_bin_matrices(payloads), 'ok'
 
 
+def _fill_prior_features(
+    cursor,
+    feats: dict,
+    *,
+    hold_dttm,
+    record_id: int,
+    product_id: str,
+    primary: str,
+    is_eng: int,
+    route_missing: int,
+    wafer_ids: list[str],
+    prior_source: str,
+) -> None:
+    if prior_source == 'legacy':
+        rate_fn = query_legacy_release_rate
+        wafer_fn = query_legacy_wafer_prior_hold_cnt
+        product_fn = query_legacy_product_hold_cnt
+        product_extra = 'AND h.PRODUCT_ID = :pid'
+        holdcode_extra = "AND REGEXP_SUBSTR(h.HOLD_REASON, '023|024|025|027') = :code"
+        route_eng_extra = "AND UPPER(NVL(h.ROUTE_ID, '')) LIKE '%ENG%'"
+        route_non_extra = "AND UPPER(NVL(h.ROUTE_ID, '')) NOT LIKE '%ENG%'"
+    else:
+        rate_fn = query_release_rate
+        wafer_fn = query_wafer_prior_hold_cnt
+        product_fn = query_product_hold_cnt
+        product_extra = 'AND r.PRODUCT_ID = :pid'
+        holdcode_extra = "AND REGEXP_SUBSTR(r.HOLD_CODE, '[^@]+', 1, 1) = :code"
+        route_eng_extra = "AND UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%'"
+        route_non_extra = "AND UPPER(NVL(r.ROUTE_ID, '')) NOT LIKE '%ENG%'"
+
+    if isinstance(hold_dttm, datetime):
+        feats['product_release_rate_30d'] = rate_fn(
+            cursor, hold_dttm, record_id, 30,
+            extra_where=product_extra,
+            extra_params={'pid': product_id},
+        )
+        feats['holdcode_release_rate_30d'] = rate_fn(
+            cursor, hold_dttm, record_id, 30,
+            extra_where=holdcode_extra,
+            extra_params={'code': primary},
+        ) if primary else None
+        if route_missing:
+            feats['route_eng_release_rate_30d'] = None
+        else:
+            extra = route_eng_extra if is_eng else route_non_extra
+            feats['route_eng_release_rate_30d'] = rate_fn(
+                cursor, hold_dttm, record_id, 30, extra_where=extra,
+            )
+        feats['wafer_prior_hold_cnt'] = wafer_fn(
+            cursor, record_id, wafer_ids, hold_dttm,
+        )
+        feats['product_hold_cnt_7d'] = product_fn(
+            cursor, record_id, product_id, hold_dttm, days=7,
+        )
+    else:
+        feats['wafer_prior_hold_cnt'] = wafer_fn(
+            cursor, record_id, wafer_ids, None,
+        )
+
+
 def extract_features(
     cursor,
     record: dict,
     *,
     skip_bysite: bool = False,
+    prior_source: str = 'record',
 ) -> dict:
     feats = empty_features()
     hold_dttm = record.get('HOLD_DTTM')
@@ -343,37 +407,19 @@ def extract_features(
 
     record_id = int(record['ID'])
     product_id = str(record.get('PRODUCT_ID') or '')
-    if isinstance(hold_dttm, datetime):
-        feats['product_release_rate_30d'] = query_release_rate(
-            cursor, hold_dttm, record_id, 30,
-            extra_where='AND r.PRODUCT_ID = :pid',
-            extra_params={'pid': product_id},
-        )
-        feats['holdcode_release_rate_30d'] = query_release_rate(
-            cursor, hold_dttm, record_id, 30,
-            extra_where="AND REGEXP_SUBSTR(r.HOLD_CODE, '[^@]+', 1, 1) = :code",
-            extra_params={'code': primary},
-        ) if primary else None
-        if route_missing:
-            feats['route_eng_release_rate_30d'] = None
-        else:
-            if is_eng:
-                extra = "AND UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%'"
-            else:
-                extra = "AND UPPER(NVL(r.ROUTE_ID, '')) NOT LIKE '%ENG%'"
-            feats['route_eng_release_rate_30d'] = query_release_rate(
-                cursor, hold_dttm, record_id, 30, extra_where=extra,
-            )
-        feats['wafer_prior_hold_cnt'] = query_wafer_prior_hold_cnt(
-            cursor, record_id, wafer_ids, hold_dttm,
-        )
-        feats['product_hold_cnt_7d'] = query_product_hold_cnt(
-            cursor, record_id, product_id, hold_dttm, days=7,
-        )
-    else:
-        feats['wafer_prior_hold_cnt'] = query_wafer_prior_hold_cnt(
-            cursor, record_id, wafer_ids, None,
-        )
+    source = record.get('_prior_source') or prior_source or 'record'
+    _fill_prior_features(
+        cursor,
+        feats,
+        hold_dttm=hold_dttm,
+        record_id=record_id,
+        product_id=product_id,
+        primary=primary,
+        is_eng=is_eng,
+        route_missing=route_missing,
+        wafer_ids=wafer_ids,
+        prior_source=source,
+    )
 
     feats['_feature_version'] = FEATURE_VERSION
     feats['_hold_code_primary'] = primary

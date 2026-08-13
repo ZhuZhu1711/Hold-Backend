@@ -3,6 +3,9 @@
   python app/hold_predict/train.py --limit 800 --skip-bysite
   python app/hold_predict/train.py --source table --model-version untrained
   python app/hold_predict/train.py --algo lgb --skip-bysite
+
+前身 HOLD_INFO 训练（--source legacy/mixed）代码保留但默认关闭，
+需同时传 --enable-legacy-source 才会执行。
 """
 from __future__ import annotations
 
@@ -18,9 +21,15 @@ project_root_path = os.path.dirname(os.path.dirname(os.path.dirname(current_file
 if project_root_path not in sys.path:
     sys.path.insert(0, project_root_path)
 
-from app.hold_predict.db import connect, query_labeled_ft_records, query_labeled_predict_rows
+from app.hold_predict.db import connect, query_labeled_ft_records, query_labeled_predict_rows, query_legacy_labeled_holds
 from app.hold_predict.eval import format_report, sklearn_metrics, stratified_report
 from app.hold_predict.features import extract_features
+from app.hold_predict.legacy import (
+    HOLD_CODE_WARN_RATE,
+    LEGACY_TRAIN_ENABLED,
+    summarize_legacy_records,
+    to_pseudo_record,
+)
 from app.hold_predict.predict import fill_vector
 from app.hold_predict.schema import FEATURE_COLUMNS, FEATURE_VERSION
 
@@ -140,33 +149,93 @@ def _predict_p(estimator, x):
     return [float(v) for v in proba[:, idx]]
 
 
+def _extract_record_samples(cursor, records, skip_bysite, prior_source) -> list[dict]:
+    samples = []
+    for i, rec in enumerate(records, start=1):
+        try:
+            feats = extract_features(
+                cursor, rec, skip_bysite=skip_bysite, prior_source=prior_source,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('特征失败 id=%s: %s', rec.get('ID'), exc)
+            continue
+        if prior_source == 'legacy':
+            y = int(rec.get('LABEL_Y') or 0)
+            dispose = rec.get('LABEL_DISPOSE')
+            try:
+                dispose = int(dispose) if dispose is not None else 0
+            except (TypeError, ValueError):
+                dispose = 0
+        else:
+            dispose = rec.get('LABEL_DISPOSE')
+            y = 1 if int(dispose) == 1 else 0
+            dispose = int(dispose)
+        samples.append({
+            'id': rec.get('ID'),
+            'hold_dttm': rec.get('HOLD_DTTM'),
+            'y': y,
+            'dispose': dispose,
+            'features': feats,
+            'prior_source': prior_source,
+        })
+        if i % 20 == 0:
+            logger.info('已抽取 %s / %s (%s)', i, len(records), prior_source)
+    return samples
+
+
 def load_samples_from_db(limit, skip_bysite) -> list[dict]:
     conn = connect()
     try:
         with conn.cursor() as cursor:
             records = query_labeled_ft_records(cursor, limit=limit)
             logger.info('载入已标注 FT 单 %s 条', len(records))
-            samples = []
-            for i, rec in enumerate(records, start=1):
-                try:
-                    feats = extract_features(cursor, rec, skip_bysite=skip_bysite)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning('特征失败 id=%s: %s', rec.get('ID'), exc)
-                    continue
-                dispose = rec.get('LABEL_DISPOSE')
-                y = 1 if int(dispose) == 1 else 0
-                samples.append({
-                    'id': rec.get('ID'),
-                    'hold_dttm': rec.get('HOLD_DTTM'),
-                    'y': y,
-                    'dispose': int(dispose),
-                    'features': feats,
-                })
-                if i % 20 == 0:
-                    logger.info('已抽取 %s / %s', i, len(records))
+            return _extract_record_samples(cursor, records, skip_bysite, 'record')
+    finally:
+        conn.close()
+
+
+def load_samples_from_legacy(limit, skip_bysite, max_lag_days=None) -> list[dict]:
+    conn = connect()
+    try:
+        with conn.cursor() as cursor:
+            rows = query_legacy_labeled_holds(cursor, limit=limit, max_lag_days=max_lag_days)
+            records = [to_pseudo_record(row) for row in rows]
+            stats = summarize_legacy_records(records)
+            logger.info(
+                '载入前身匹配样本 %s 条 放行 %s hold码覆盖 %.1f%% (%s/%s)',
+                stats['n'],
+                stats['release_n'],
+                stats['hold_code_rate'] * 100,
+                stats['hold_code_n'],
+                stats['n'],
+            )
+            if stats['n'] and stats['hold_code_rate'] < HOLD_CODE_WARN_RATE:
+                logger.warning(
+                    'Hold 码覆盖率 %.1f%% < %.0f%%，模型将弱化 hold 码特征',
+                    stats['hold_code_rate'] * 100,
+                    HOLD_CODE_WARN_RATE * 100,
+                )
+            tw_hit = 0
+            samples = _extract_record_samples(cursor, records, skip_bysite, 'legacy')
+            for sample in samples:
+                if int(sample['features'].get('missing_test_wafer') or 1) == 0:
+                    tw_hit += 1
+            if samples:
+                logger.info(
+                    '前身特征抽取完成 %s 条 TEST_WAFER 命中 %.1f%%',
+                    len(samples),
+                    100.0 * tw_hit / len(samples),
+                )
             return samples
     finally:
         conn.close()
+
+
+def load_samples_from_mixed(limit, skip_bysite, max_lag_days=None) -> list[dict]:
+    legacy = load_samples_from_legacy(limit, skip_bysite, max_lag_days=max_lag_days)
+    current = load_samples_from_db(limit, skip_bysite)
+    logger.info('混合样本 前身 %s + 现网 %s', len(legacy), len(current))
+    return legacy + current
 
 
 def load_samples_from_table(model_version) -> list[dict]:
@@ -193,16 +262,36 @@ def load_samples_from_table(model_version) -> list[dict]:
 
 def main():
     parser = argparse.ArgumentParser(description='训练 FT 可放行概率模型')
-    parser.add_argument('--source', choices=['db', 'table'], default='db')
+    parser.add_argument('--source', choices=['db', 'table', 'legacy', 'mixed'], default='db')
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument('--skip-bysite', action='store_true')
     parser.add_argument('--algo', choices=['lr', 'lgb'], default='lr')
     parser.add_argument('--model-version', default=None, help='--source table 时筛选 MODEL_VERSION')
     parser.add_argument(
+        '--max-dispose-lag-days',
+        type=int,
+        default=None,
+        help='legacy/mixed：处置须在 hold 后 N 天内，默认不限制',
+    )
+    parser.add_argument(
+        '--enable-legacy-source',
+        action='store_true',
+        help='解锁 --source legacy/mixed（默认关闭，前身表训练不启用）',
+    )
+    parser.add_argument(
         '--out',
         default=os.path.join(project_root_path, 'app', 'hold_predict', 'artifacts', 'model_v1.joblib'),
     )
     args = parser.parse_args()
+
+    if args.source in ('legacy', 'mixed') and not (
+        LEGACY_TRAIN_ENABLED or args.enable_legacy_source
+    ):
+        logger.error(
+            '前身表训练已关闭（LEGACY_TRAIN_ENABLED=False）。'
+            '代码保留；若要跑需同时传 --enable-legacy-source'
+        )
+        sys.exit(3)
 
     try:
         import sklearn  # noqa: F401
@@ -213,6 +302,14 @@ def main():
 
     if args.source == 'table':
         samples = load_samples_from_table(args.model_version)
+    elif args.source == 'legacy':
+        samples = load_samples_from_legacy(
+            args.limit, args.skip_bysite, max_lag_days=args.max_dispose_lag_days,
+        )
+    elif args.source == 'mixed':
+        samples = load_samples_from_mixed(
+            args.limit, args.skip_bysite, max_lag_days=args.max_dispose_lag_days,
+        )
     else:
         samples = load_samples_from_db(args.limit, args.skip_bysite)
 
