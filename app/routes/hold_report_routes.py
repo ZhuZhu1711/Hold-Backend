@@ -1,6 +1,8 @@
-from flask import Blueprint, render_template, request, jsonify, session
+from datetime import datetime
 
-from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl
+from flask import Blueprint, render_template, request, jsonify, session, Response
+
+from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl, hold_info_export_ctrl
 from app.controllers.defect_code_ctrl import query_bincode_defect
 from app.utils.auth_decorators import root_required, login_required, current_role_name
 
@@ -39,6 +41,17 @@ def merge_failed_page():
     """Merge 失败 hold_info 处理页（root）"""
     return render_template(
         'hold/merge_failed.html',
+        user_name=session.get('user_name'),
+        role_name=current_role_name(),
+    )
+
+
+@hold_report_bp.route('/export')
+@root_required
+def hold_info_export_page():
+    """FT_HOLD_RECORD 按型号+时间导出 FT ATE Hold Lot（root）"""
+    return render_template(
+        'hold/export.html',
         user_name=session.get('user_name'),
         role_name=current_role_name(),
     )
@@ -224,6 +237,57 @@ def api_hold_products():
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
     return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
+
+
+def _safe_filename(text):
+    return ''.join(ch if ch.isalnum() or ch in '-_.' else '_' for ch in (text or ''))[:40]
+
+
+def _export_query_args():
+    return {
+        'product_id': request.args.get('product_id', '').strip(),
+        'lot_id': request.args.get('lot_id', '').strip(),
+        'start_dttm': request.args.get('start_dttm', '').strip(),
+        'end_dttm': request.args.get('end_dttm', '').strip(),
+        'sub_customer': request.args.get('sub_customer', '').strip(),
+        'package_type': request.args.get('package_type', '').strip(),
+        'factory': request.args.get('factory', '').strip(),
+        'area': request.args.get('area', '').strip(),
+    }
+
+
+@hold_report_bp.route('/api/hold_info_export', methods=['GET'])
+@root_required
+def api_hold_info_export_preview():
+    """预览 FT_HOLD_RECORD 导出结果（最多 100 条）。"""
+    success, msg, data = hold_info_export_ctrl.preview_hold_info_export(**_export_query_args())
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if any(k in msg for k in ('请指定', '不能早于', '无效')) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@hold_report_bp.route('/api/hold_info_export/xlsx', methods=['GET'])
+@root_required
+def api_hold_info_export_xlsx():
+    """导出 FT_HOLD_RECORD 为 FT ATE Hold Lot xlsx（最多 5000 条）。"""
+    args = _export_query_args()
+    success, msg, content = hold_info_export_ctrl.export_hold_info_xlsx(**args)
+    if not success:
+        status = 400 if any(k in msg for k in ('请指定', '不能早于', '无效')) else 500
+        return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+    product = _safe_filename(args.get('product_id') or 'hold')
+    lot = _safe_filename(args.get('lot_id') or '')
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'hold_info_{product}_{lot}_{stamp}.xlsx' if lot else f'hold_info_{product}_{stamp}.xlsx'
+    return Response(
+        content,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+        },
+    )
 
 
 def _merge_fail_operator():

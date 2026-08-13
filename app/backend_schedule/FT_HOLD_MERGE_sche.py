@@ -20,12 +20,14 @@ from typing import List, Optional, Tuple
 
 from app.config import Config
 from app.utils.database_util import (
+    auto_close_hold_records,
     build_merged_wafer_display,
     insert_hold_record_and_link,
     is_fragmented_merged_lot,
     mark_hold_infos_dirty,
     normalize_lot_id,
     query_online_hold_info,
+    query_released_unclosed_hold_records,
 )
 
 # 处置单划分（见 dispose_api.md）：
@@ -560,8 +562,47 @@ class HoldMergeScheduler(threading.Thread):
                 f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"
                 f"跳过 {len(skipped_ids)}"
             )
+
+            self._run_auto_close()
         except Exception as e:
             self.logger.error(f"Hold 合并定时任务执行出错: {e}", exc_info=True)
+
+    def _run_auto_close(self):
+        """MES 已解 hold（全部关联 info HOLDING≠0）但 record 未关闭 → 系统自动关闭。"""
+        enabled = getattr(self.config, 'HOLD_AUTO_CLOSE_ENABLED', True)
+        if not enabled:
+            self.logger.info("自动关闭已禁用（HOLD_AUTO_CLOSE_ENABLED=False），跳过")
+            return
+
+        batch_size = getattr(self.config, 'HOLD_AUTO_CLOSE_BATCH_SIZE', 200)
+        system_user_id = getattr(self.config, 'SYSTEM_USER_ID', 1)
+
+        self.logger.info(
+            f">>> Hold 自动关闭开始（batch_size={batch_size}, "
+            f"actor_user_id={system_user_id}）..."
+        )
+        record_ids = query_released_unclosed_hold_records(
+            info_table=self.hold_info_table,
+            record_table=self.hold_record_table,
+            limit=batch_size,
+        )
+        if record_ids is None:
+            self.logger.error("查询待自动关闭 hold_record 失败")
+            return
+
+        self.logger.info(f"待自动关闭 hold_record {len(record_ids)} 条")
+        if not record_ids:
+            self.logger.info("<<< Hold 自动关闭完毕：无待关闭记录")
+            return
+
+        close_ok, close_fail = auto_close_hold_records(
+            record_ids,
+            record_table=self.hold_record_table,
+            actor_user_id=system_user_id,
+        )
+        self.logger.info(
+            f"<<< Hold 自动关闭完毕：成功 {close_ok}，失败 {close_fail}"
+        )
 
     def run(self):
         self.logger.info(
@@ -569,6 +610,12 @@ class HoldMergeScheduler(threading.Thread):
             f"源表={self.hold_info_table}，"
             f"RECORD_TYPE 按 dispose_api.md 处置单划分判定"
         )
+        # 启动时立即跑一轮，再按间隔调度
+        self._run_job()
+        if self._stop_event.is_set():
+            self.logger.info("Hold 合并调度器线程已退出")
+            return
+
         # 使用独立 Scheduler，避免与其他定时任务共用全局 schedule 冲突
         sch = schedule.Scheduler()
         sch.every(self.interval_minutes).minutes.do(self._run_job)

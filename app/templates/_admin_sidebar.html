@@ -1,0 +1,78 @@
+{% set menu = active_menu|default('') %}
+<style>
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; min-height: 100vh; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active > a { background: #007bff; color: #fff; }
+        .nav-links .nav-group summary {
+            display: block; padding: 14px 20px; color: #cfd8dc; cursor: pointer;
+            list-style: none; user-select: none;
+        }
+        .nav-links .nav-group summary::-webkit-details-marker { display: none; }
+        .nav-links .nav-group summary::marker { content: ''; }
+        .nav-links .nav-group summary:hover { background: #495057; color: #fff; }
+        .nav-links .nav-group summary::after {
+            content: '▸'; float: right; font-size: 12px; color: #adb5bd;
+        }
+        .nav-links .nav-group details[open] > summary::after { content: '▾'; }
+        .nav-links .nav-group.has-active > details > summary { color: #fff; }
+        .nav-sub { list-style: none; background: #2c3136; }
+        .nav-sub li a { padding: 12px 20px 12px 36px; font-size: 14px; }
+        .nav-sub li.active a { background: #007bff; color: #fff; }
+</style>
+<nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>后台管理系统</h2>
+            <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
+        </div>
+        <ul class="nav-links">
+            <li class="{% if menu == 'dashboard' %}active{% endif %}">
+                <a href="/dashboard">仪表盘</a>
+            </li>
+            <li class="nav-group {% if menu in ['holding', 'history', 'circulations', 'merge_failed', 'export'] %}has-active{% endif %}">
+                <details {% if menu in ['holding', 'history', 'circulations', 'merge_failed', 'export'] %}open{% endif %}>
+                    <summary>Hold 报表</summary>
+                    <ul class="nav-sub">
+                        <li class="{% if menu == 'holding' %}active{% endif %}">
+                            <a href="/admin/hold/holding">Holding Record</a>
+                        </li>
+                        <li class="{% if menu == 'history' %}active{% endif %}">
+                            <a href="/admin/hold/history">Hold 历史</a>
+                        </li>
+                        <li class="{% if menu == 'circulations' %}active{% endif %}">
+                            <a href="/admin/hold/circulations">Hold 流转</a>
+                        </li>
+                        <li class="{% if menu == 'merge_failed' %}active{% endif %}">
+                            <a href="/admin/hold/merge_failed">Merge 失败</a>
+                        </li>
+                        <li class="{% if menu == 'export' %}active{% endif %}">
+                            <a href="/admin/hold/export">Hold Info 导出</a>
+                        </li>
+                    </ul>
+                </details>
+            </li>
+            <li class="nav-group {% if menu in ['users', 'products', 'defects'] %}has-active{% endif %}">
+                <details {% if menu in ['users', 'products', 'defects'] %}open{% endif %}>
+                    <summary>系统管理</summary>
+                    <ul class="nav-sub">
+                        <li class="{% if menu == 'users' %}active{% endif %}">
+                            <a href="/admin/users">用户管理</a>
+                        </li>
+                        <li class="{% if menu == 'products' %}active{% endif %}">
+                            <a href="/admin/products">产品管理</a>
+                        </li>
+                        <li class="{% if menu == 'defects' %}active{% endif %}">
+                            <a href="/admin/defects">缺陷管理</a>
+                        </li>
+                    </ul>
+                </details>
+            </li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+</nav>

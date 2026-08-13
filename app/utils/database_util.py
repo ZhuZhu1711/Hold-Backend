@@ -206,6 +206,186 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
         connection.close()
 
 
+DISPOSE_CLOSE = 99
+_AUTO_CLOSE_DETAIL = 'MES已解hold，系统自动关闭'
+
+
+def query_released_unclosed_hold_records(
+    info_table: str = 'FT_HOLD_INFO_TEST',
+    record_table: str = 'FT_HOLD_RECORD',
+    limit: int = 200,
+):
+    """
+    查询「关联 hold_info 已全部解 hold（无 HOLDING=0），但 record 尚未关闭」的 hold_record ID。
+    从 STATUS<>99 的 record 侧驱动，避免扫全表历史 HOLDING=1。
+    成功返回 list[int]；失败返回 None。
+    """
+    info_tbl = (info_table or '').upper()
+    record_tbl = (record_table or '').upper()
+    if info_tbl not in _ALLOWED_HOLD_INFO_TABLES:
+        logger.error(f"非法 hold_info 表名: {info_table}")
+        return None
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return None
+
+    try:
+        limit_n = max(1, int(limit or 200))
+    except (TypeError, ValueError):
+        limit_n = 200
+
+    sql = f"""
+        SELECT r.ID
+        FROM {record_tbl} r
+        WHERE NVL(r.STATUS, 0) <> :closed
+          AND EXISTS (
+              SELECT 1 FROM {info_tbl} i
+              WHERE i.HOLD_RECORD_ID = r.ID
+                AND i.HOLDING = 1
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM {info_tbl} i
+              WHERE i.HOLD_RECORD_ID = r.ID
+                AND NVL(i.HOLDING, 1) = 0
+          )
+          AND ROWNUM <= :lim
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, {'closed': DISPOSE_CLOSE, 'lim': limit_n})
+            rows = cursor.fetchall()
+            return [int(row[0]) for row in rows if row and row[0] is not None]
+    except Exception as e:
+        logger.error(f"查询待自动关闭 hold_record 失败: {e}", exc_info=True)
+        return None
+    finally:
+        connection.close()
+
+
+def auto_close_hold_records(
+    record_ids,
+    record_table: str = 'FT_HOLD_RECORD',
+    actor_user_id: int = 1,
+):
+    """
+    系统/root 自动关闭 hold_record：插入 CIRCULATION_HISTORY(DISPOSE=99)，
+    回写 STATUS=99 / LAST_CIRCULATION_ID。
+    同一 connection 内逐条处理；单条失败记日志并继续。
+    返回 (ok_count, fail_count)；无待处理返回 (0, 0)。
+    """
+    record_tbl = (record_table or '').upper()
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return -1, -1
+
+    ids = []
+    seen = set()
+    for raw in record_ids or []:
+        try:
+            rid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if rid <= 0 or rid in seen:
+            continue
+        seen.add(rid)
+        ids.append(rid)
+    if not ids:
+        return 0, 0
+
+    try:
+        actor_id = int(actor_user_id)
+    except (TypeError, ValueError):
+        actor_id = 1
+
+    insert_circ_sql = """
+        INSERT INTO CIRCULATION_HISTORY (
+            ID,
+            HOLD_RECORD_ID,
+            DISPOSED_OWNER_ID,
+            DISPOSE,
+            NEXT_OWNER_ID,
+            DISPOSE_SOURCE,
+            DISPOSE_DTTM,
+            DISPOSE_TYPE,
+            DISPOSE_DETAIL
+        ) VALUES (
+            :circ_id,
+            :hold_record_id,
+            :disposed_owner_id,
+            :dispose,
+            NULL,
+            :dispose_source,
+            SYSDATE,
+            :dispose_type,
+            :dispose_detail
+        )
+    """
+    update_record_sql = f"""
+        UPDATE {record_tbl}
+        SET LAST_CIRCULATION_ID = :circ_id,
+            STATUS = :status
+        WHERE ID = :rid
+          AND NVL(STATUS, 0) <> :closed
+    """
+
+    ok, fail = 0, 0
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            for rid in ids:
+                try:
+                    circ_id = _next_positive_seq(cursor, 'SEQ_CIRCULATION')
+                    cursor.execute(
+                        insert_circ_sql,
+                        {
+                            'circ_id': circ_id,
+                            'hold_record_id': rid,
+                            'disposed_owner_id': actor_id,
+                            'dispose': DISPOSE_CLOSE,
+                            'dispose_source': 'SYS',
+                            'dispose_type': DISPOSE_CLOSE,
+                            'dispose_detail': _AUTO_CLOSE_DETAIL,
+                        },
+                    )
+                    cursor.execute(
+                        update_record_sql,
+                        {
+                            'circ_id': circ_id,
+                            'status': DISPOSE_CLOSE,
+                            'rid': rid,
+                            'closed': DISPOSE_CLOSE,
+                        },
+                    )
+                    if (cursor.rowcount or 0) <= 0:
+                        connection.rollback()
+                        logger.info(
+                            f"自动关闭跳过 hold_record id={rid}（已关闭或不存在）"
+                        )
+                        continue
+                    connection.commit()
+                    ok += 1
+                    logger.info(
+                        f"自动关闭成功 hold_record id={rid}, "
+                        f"circulation_id={circ_id}, disposed_owner_id={actor_id}"
+                    )
+                except Exception as e:
+                    connection.rollback()
+                    fail += 1
+                    logger.error(
+                        f"自动关闭失败 hold_record id={rid}: {e}",
+                        exc_info=True,
+                    )
+        return ok, fail
+    except Exception as e:
+        connection.rollback()
+        logger.error(f"自动关闭 hold_record 连接级失败: {e}", exc_info=True)
+        return ok, fail + (len(ids) - ok - fail)
+    finally:
+        connection.close()
+
+
 def mark_hold_infos_dirty(
     source_info_ids,
     info_table: str = 'FT_HOLD_INFO_TEST',

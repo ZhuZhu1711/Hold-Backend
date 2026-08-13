@@ -8,16 +8,6 @@
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
-        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; }
-        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
-        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
-        .sidebar-header p { font-size: 12px; color: #adb5bd; }
-        .nav-links { list-style: none; padding-top: 16px; }
-        .nav-links li a {
-            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
-        }
-        .nav-links li a:hover { background: #495057; color: #fff; }
-        .nav-links li.active a { background: #007bff; color: #fff; }
         .main { flex: 1; padding: 24px; overflow: auto; }
         .card {
             background: #fff; border-radius: 8px; padding: 20px;
@@ -125,23 +115,8 @@
     </style>
 </head>
 <body>
-    <nav class="sidebar">
-        <div class="sidebar-header">
-            <h2>后台管理系统</h2>
-            <p>{{ user_name }} · {{ role_name }}</p>
-        </div>
-        <ul class="nav-links">
-            <li><a href="/dashboard">仪表盘</a></li>
-            <li class="active"><a href="/admin/hold/holding">Holding Record</a></li>
-            <li><a href="/admin/hold/history">Hold 历史</a></li>
-            <li><a href="/admin/hold/circulations">Hold 流转</a></li>
-            <li><a href="/admin/hold/merge_failed">Merge 失败</a></li>
-            <li><a href="/admin/users">用户管理</a></li>
-            <li><a href="/admin/products">产品管理</a></li>
-            <li><a href="/admin/defects">缺陷管理</a></li>
-            <li><a href="/logout">退出</a></li>
-        </ul>
-    </nav>
+    {% set active_menu = 'holding' %}
+    {% include '_admin_sidebar.html' %}
 
     <main class="main">
         <div class="card">
