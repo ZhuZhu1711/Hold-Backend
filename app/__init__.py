@@ -1,3 +1,6 @@
+import os
+import sys
+
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from app.config import Config
@@ -6,9 +9,22 @@ from app.config import Config
 # 此时还没有绑定 app，只是一个全局对象
 db = SQLAlchemy()
 
+
+def _package_dir():
+    """Flask 模板/静态资源目录。PyInstaller 冻结后在 sys._MEIPASS/app。"""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, 'app')
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def create_app():
     # 2. 创建 Flask 应用实例
-    app = Flask(__name__)
+    pkg = _package_dir()
+    app = Flask(
+        __name__,
+        template_folder=os.path.join(pkg, 'templates'),
+        static_folder=os.path.join(pkg, 'static'),
+    )
     
     # 3. 配置数据库与 Session Cookie
     app.config['SQLALCHEMY_DATABASE_URI'] = Config.SQLALCHEMY_DATABASE_URI

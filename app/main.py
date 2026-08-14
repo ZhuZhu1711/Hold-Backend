@@ -1,15 +1,21 @@
 import sys
 import os
 import argparse
+from multiprocessing import freeze_support
 from cryptography import x509
 from cryptography.hazmat.primitives.kdf import pbkdf2
 from waitress import serve
 # ==========================================
 # 路径配置
 # ==========================================
-current_file_path = os.path.abspath(__file__)
-app_folder_path = os.path.dirname(current_file_path)
-project_root_path = os.path.dirname(app_folder_path)
+if getattr(sys, 'frozen', False):
+    # 冻结后日志、临时目录写到 exe 所在目录，而不是解包临时目录
+    os.chdir(os.path.dirname(os.path.abspath(sys.executable)))
+    project_root_path = sys._MEIPASS
+else:
+    current_file_path = os.path.abspath(__file__)
+    app_folder_path = os.path.dirname(current_file_path)
+    project_root_path = os.path.dirname(app_folder_path)
 if project_root_path not in sys.path:
     sys.path.insert(0, project_root_path)
 
@@ -46,6 +52,7 @@ app.register_blueprint(quality_bp)      # 质量部只读报表 (/qa/...)
 # 程序入口
 # ==========================================
 if __name__ == '__main__':
+    freeze_support()
     parser = argparse.ArgumentParser(description='启动 Flask 应用，可选 debug/release 模式。默认 release。')
     parser.add_argument('--mode', choices=['debug', 'release'], default='release', help='运行模式，debug 不启动后台任务调度，release 启动。')
     args = parser.parse_args()

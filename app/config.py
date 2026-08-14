@@ -83,8 +83,13 @@ class Config:
     HOLD_PREDICT_WAIT_HOURS = 24
     HOLD_PREDICT_BATCH_SIZE = 40
     HOLD_PREDICT_LABEL_BATCH_SIZE = 200
+    def _resource_root():
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            return sys._MEIPASS
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
     HOLD_PREDICT_MODEL_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        _resource_root(),
         'app', 'hold_predict', 'artifacts', 'model_v1.joblib',
     )
 

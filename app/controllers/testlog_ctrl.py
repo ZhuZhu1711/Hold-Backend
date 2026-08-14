@@ -144,55 +144,69 @@ def _download_and_parse_testlog(ftp_path: str):
                 pass
 
 
+def _read_csv_rows(log_fpath):
+    """读取 CSV 全部行。工厂 testlog 常见 GBK/GB18030，utf-8 会失败。"""
+    last_err = None
+    for encoding in ('utf-8-sig', 'gb18030', 'latin-1'):
+        try:
+            with open(log_fpath, mode='r', encoding=encoding, newline='') as file:
+                return list(csv.reader(file))
+        except UnicodeDecodeError as e:
+            last_err = e
+    if last_err is not None:
+        raise last_err
+    return []
+
+
 # 辅助函数
 def parse_CSV(log_fpath):
     try:
-        with open(log_fpath, mode='r', encoding='utf-8') as file:
-            fname = os.path.basename(log_fpath)
-            fname_without_ext = fname.rsplit('.', 1)[0]
-            reader = csv.reader(file)
-            # 去掉标题行
-            _ = next(reader)
-            data_list = list(reader)
-            if len(data_list) <= 0:
-                return
-            start_dttm = '/'
-            test_die = len(data_list)
-            fail_die = None
-            pass_die = None
-            end_dttm = fname_without_ext.split('_')[-1]
-            product_id = fname_without_ext.split('_')[2]
-            test_program = data_list[0][5]
-            wafer_id = data_list[0][6]
-            lot_id = wafer_id.split('-')[0]
-            equip_id = data_list[0][7]
-            step = data_list[0][8]
-            max_site = 0
-            
-            bysite = {}
-            for row in data_list:
-                site = int(row[1])
-                max_site = max(max_site, site)
-                code = int(row[2])
+        fname = os.path.basename(log_fpath)
+        fname_without_ext = fname.rsplit('.', 1)[0]
+        rows = _read_csv_rows(log_fpath)
+        if len(rows) <= 1:
+            return
+        # 去掉标题行
+        data_list = rows[1:]
+        if len(data_list) <= 0:
+            return
+        start_dttm = '/'
+        test_die = len(data_list)
+        fail_die = None
+        pass_die = None
+        end_dttm = fname_without_ext.split('_')[-1]
+        product_id = fname_without_ext.split('_')[2]
+        test_program = data_list[0][5]
+        wafer_id = data_list[0][6]
+        lot_id = wafer_id.split('-')[0]
+        equip_id = data_list[0][7]
+        step = data_list[0][8]
+        max_site = 0
 
-                code_dict = bysite.get(site, {})
-                exist_num = code_dict.get(code, 0)
-                code_dict[code] = exist_num + 1
-                bysite[site] = code_dict
-                
-            data = {
-                "test_die" : test_die,
-                "end_dttm" : end_dttm,
-                "product_id": product_id,
-                "test_program": test_program,
-                "wafer_id": wafer_id,
-                "lot_id": lot_id,
-                "equip_id": equip_id,
-                "step": step,
-                "bysite": bysite
-            }
-            return data
-        
+        bysite = {}
+        for row in data_list:
+            site = int(row[1])
+            max_site = max(max_site, site)
+            code = int(row[2])
+
+            code_dict = bysite.get(site, {})
+            exist_num = code_dict.get(code, 0)
+            code_dict[code] = exist_num + 1
+            bysite[site] = code_dict
+
+        data = {
+            "test_die" : test_die,
+            "end_dttm" : end_dttm,
+            "product_id": product_id,
+            "test_program": test_program,
+            "wafer_id": wafer_id,
+            "lot_id": lot_id,
+            "equip_id": equip_id,
+            "step": step,
+            "bysite": bysite
+        }
+        return data
+
     except Exception as e:
         traceback.print_exc()
         print(f"解析文件出错: {log_fpath}, 错误: {e}")
