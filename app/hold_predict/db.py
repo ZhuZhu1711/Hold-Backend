@@ -7,7 +7,14 @@ from typing import Any, Optional
 
 import oracledb
 
-from app.utils.database_util import DSN, PWD, USER
+from app.utils.database_util import (
+    DSN,
+    PWD,
+    USER,
+    resolve_circulation_table,
+    resolve_hold_predict_table,
+    resolve_hold_record_table,
+)
 
 ENGINEER_DISPOSES = (1, 2, 3, 5)
 RECORD_TYPE_FT = 0
@@ -47,6 +54,18 @@ END
 """.strip()
 
 
+def _record_table() -> str:
+    return resolve_hold_record_table()
+
+
+def _circ_table() -> str:
+    return resolve_circulation_table(record_table=_record_table())
+
+
+def _predict_table() -> str:
+    return resolve_hold_predict_table()
+
+
 def connect():
     return oracledb.connect(user=USER, password=PWD, dsn=DSN)
 
@@ -74,12 +93,12 @@ def _to_int(value, default=None):
 
 def query_ft_record(cursor, record_id: int) -> Optional[dict]:
     cursor.execute(
-        """
+        f"""
         SELECT
             ID, PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
             HOLD_CODE, SOURCE, SECOND_CODE, ROUTE_ID, GRADE_NUM,
             RECORD_TYPE, STATUS, HOLD_DTTM
-        FROM FT_HOLD_RECORD
+        FROM {_record_table()}
         WHERE ID = :id AND RECORD_TYPE = :rt
         """,
         {'id': record_id, 'rt': RECORD_TYPE_FT},
@@ -89,16 +108,16 @@ def query_ft_record(cursor, record_id: int) -> Optional[dict]:
 
 def query_pending_ft_records(cursor, model_version: str, batch_size: int) -> list[dict]:
     cursor.execute(
-        """
+        f"""
         SELECT * FROM (
             SELECT
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID, r.GRADE_NUM,
                 r.RECORD_TYPE, r.STATUS, r.HOLD_DTTM
-            FROM FT_HOLD_RECORD r
+            FROM {_record_table()} r
             WHERE r.RECORD_TYPE = :rt
               AND NOT EXISTS (
-                    SELECT 1 FROM FT_HOLD_PREDICT p
+                    SELECT 1 FROM {_predict_table()} p
                     WHERE p.HOLD_RECORD_ID = r.ID
                       AND p.MODEL_VERSION = :mv
               )
@@ -112,7 +131,7 @@ def query_pending_ft_records(cursor, model_version: str, batch_size: int) -> lis
 
 
 def query_labeled_ft_records(cursor, limit: Optional[int] = None) -> list[dict]:
-    sql = """
+    sql = f"""
         SELECT * FROM (
             SELECT
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
@@ -120,7 +139,7 @@ def query_labeled_ft_records(cursor, limit: Optional[int] = None) -> list[dict]:
                 r.RECORD_TYPE, r.STATUS, r.HOLD_DTTM,
                 f.DISPOSE AS LABEL_DISPOSE,
                 f.DISPOSE_DTTM AS LABEL_DTTM
-            FROM FT_HOLD_RECORD r
+            FROM {_record_table()} r
             JOIN (
                 SELECT
                     c.HOLD_RECORD_ID,
@@ -130,7 +149,7 @@ def query_labeled_ft_records(cursor, limit: Optional[int] = None) -> list[dict]:
                         PARTITION BY c.HOLD_RECORD_ID
                         ORDER BY c.DISPOSE_DTTM, c.ID
                     ) AS rn
-                FROM CIRCULATION_HISTORY c
+                FROM {_circ_table()} c
                 WHERE c.DISPOSE IN (1, 2, 3, 5)
             ) f ON f.HOLD_RECORD_ID = r.ID AND f.rn = 1
             WHERE r.RECORD_TYPE = :rt
@@ -321,8 +340,8 @@ def _first_eng_rate_sql(extra_where: str) -> str:
                     PARTITION BY r.ID
                     ORDER BY c.DISPOSE_DTTM, c.ID
                 ) AS rn
-            FROM FT_HOLD_RECORD r
-            JOIN CIRCULATION_HISTORY c ON c.HOLD_RECORD_ID = r.ID
+            FROM {_record_table()} r
+            JOIN {_circ_table()} c ON c.HOLD_RECORD_ID = r.ID
             WHERE r.RECORD_TYPE = :rt
               AND c.DISPOSE IN (1, 2, 3, 5)
               AND r.HOLD_DTTM < :hold_dttm
@@ -382,7 +401,7 @@ def query_wafer_prior_hold_cnt(
     cursor.execute(
         f"""
         SELECT COUNT(*) AS N
-        FROM FT_HOLD_RECORD
+        FROM {_record_table()}
         WHERE RECORD_TYPE = :rt
           AND ID <> :rid
           AND WAFER_ID IN ({in_clause})
@@ -402,9 +421,9 @@ def query_product_hold_cnt(
     days: int = 7,
 ) -> int:
     cursor.execute(
-        """
+        f"""
         SELECT COUNT(*) AS N
-        FROM FT_HOLD_RECORD
+        FROM {_record_table()}
         WHERE RECORD_TYPE = :rt
           AND ID <> :rid
           AND PRODUCT_ID = :pid
@@ -623,8 +642,8 @@ def insert_predict_row(cursor, connection, row: dict) -> int:
     try:
         ins.setinputsizes(features_json=oracledb.DB_TYPE_CLOB)
         ins.execute(
-            """
-            INSERT INTO FT_HOLD_PREDICT (
+            f"""
+            INSERT INTO {_predict_table()} (
                 HOLD_RECORD_ID, MODEL_VERSION, FEATURE_VERSION, P_RELEASE,
                 BYSITE_INDEX, ROUTE_IS_ENG, MISSING_BYSITE, MISSING_TEST_WAFER,
                 FEATURES_JSON, PREDICTED_AT, LABEL_DISPOSE, LABEL_Y, LABELED_AT
@@ -657,8 +676,8 @@ def insert_predict_row(cursor, connection, row: dict) -> int:
 
 def backfill_labels(cursor, connection, batch_size: int = 200) -> int:
     cursor.execute(
-        """
-        UPDATE FT_HOLD_PREDICT p
+        f"""
+        UPDATE {_predict_table()} p
         SET (
             LABEL_DISPOSE,
             LABEL_Y,
@@ -676,7 +695,7 @@ def backfill_labels(cursor, connection, batch_size: int = 200) -> int:
                         PARTITION BY c.HOLD_RECORD_ID
                         ORDER BY c.DISPOSE_DTTM, c.ID
                     ) AS rn
-                FROM CIRCULATION_HISTORY c
+                FROM {_circ_table()} c
                 WHERE c.DISPOSE IN (1, 2, 3, 5)
             ) f
             WHERE f.HOLD_RECORD_ID = p.HOLD_RECORD_ID
@@ -685,7 +704,7 @@ def backfill_labels(cursor, connection, batch_size: int = 200) -> int:
         WHERE p.LABEL_Y IS NULL
           AND EXISTS (
                 SELECT 1
-                FROM CIRCULATION_HISTORY c
+                FROM {_circ_table()} c
                 WHERE c.HOLD_RECORD_ID = p.HOLD_RECORD_ID
                   AND c.DISPOSE IN (1, 2, 3, 5)
           )
@@ -702,12 +721,12 @@ def query_labeled_predict_rows(
     cursor,
     model_version: Optional[str] = None,
 ) -> list[dict]:
-    sql = """
+    sql = f"""
         SELECT
             ID, HOLD_RECORD_ID, MODEL_VERSION, FEATURE_VERSION, P_RELEASE,
             BYSITE_INDEX, ROUTE_IS_ENG, MISSING_BYSITE, MISSING_TEST_WAFER,
             FEATURES_JSON, PREDICTED_AT, LABEL_DISPOSE, LABEL_Y, LABELED_AT
-        FROM FT_HOLD_PREDICT
+        FROM {_predict_table()}
         WHERE LABEL_Y IS NOT NULL
     """
     params: dict[str, Any] = {}

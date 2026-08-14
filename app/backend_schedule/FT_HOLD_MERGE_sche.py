@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 from app.config import Config
+from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
     auto_close_hold_records,
     build_merged_wafer_display,
@@ -566,6 +567,7 @@ class HoldMergeScheduler(threading.Thread):
             self._run_auto_close()
         except Exception as e:
             self.logger.error(f"Hold 合并定时任务执行出错: {e}", exc_info=True)
+            notify_severe_error('Hold 合并定时任务整轮失败', str(e), exc=e)
 
     def _run_auto_close(self):
         """MES 已解 hold（全部关联 info HOLDING≠0）但 record 未关闭 → 系统自动关闭。"""

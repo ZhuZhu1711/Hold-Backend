@@ -26,6 +26,7 @@ if project_root_path not in sys.path:
     sys.path.insert(0, project_root_path)
 
 from app.config import Config
+from app.utils.mail_alert import install_severe_error_hooks, notify_severe_error
 from app.hold_predict.db import (
     backfill_labels,
     connect,
@@ -147,9 +148,13 @@ class HoldPredictScheduler(threading.Thread):
         if not getattr(self.config, 'HOLD_PREDICT_ENABLED', True):
             logger.info('HOLD_PREDICT_ENABLED=False，跳过')
             return
-        logger.info('>>> Hold 可放行预测任务开始')
-        stats = run_once(self.config)
-        logger.info('>>> Hold 可放行预测任务结束 %s', stats)
+        try:
+            logger.info('>>> Hold 可放行预测任务开始')
+            stats = run_once(self.config)
+            logger.info('>>> Hold 可放行预测任务结束 %s', stats)
+        except Exception as exc:
+            logger.error('Hold 可放行预测任务执行出错: %s', exc, exc_info=True)
+            notify_severe_error('Hold 可放行预测任务整轮失败', str(exc), exc=exc)
 
     def run(self):
         schedule.every(self.interval_minutes).minutes.do(self._run_job)
@@ -165,6 +170,7 @@ def main():
     parser.add_argument('--mode', choices=['debug', 'release'], default='debug')
     parser.add_argument('--force', action='store_true', help='不等待 TEST_WAFER/bysite')
     args = parser.parse_args()
+    install_severe_error_hooks()
     cfg = Config()
     if args.mode == 'debug':
         stats = run_once(cfg, force=args.force)

@@ -13,6 +13,7 @@ from app.controllers.dispose_ctrl import (
     DISPOSE_LABELS,
     DISPOSE_RELEASE,
     DISPOSE_RETEST,
+    _circ_table,
     _record_table,
     _row_to_dict,
 )
@@ -124,7 +125,7 @@ def query_quality_disposes(
             params['route'] = f"%{str(route).strip()}%"
 
         from_sql = f"""
-            FROM CIRCULATION_HISTORY c
+            FROM {_circ_table()} c
             INNER JOIN {record_table} r
                 ON r.ID = c.HOLD_RECORD_ID
             LEFT JOIN USERS u1 ON u1.ID = c.DISPOSED_OWNER_ID
@@ -235,7 +236,7 @@ def get_quality_product_options(keyword=''):
         sql = f"""
             SELECT DISTINCT r.PRODUCT_ID
             FROM {record_table} r
-            INNER JOIN CIRCULATION_HISTORY c ON c.HOLD_RECORD_ID = r.ID
+            INNER JOIN {_circ_table()} c ON c.HOLD_RECORD_ID = r.ID
             WHERE r.PRODUCT_ID IS NOT NULL
               AND c.DISPOSE IN (1, 2, 3)
         """
@@ -258,7 +259,7 @@ def get_quality_route_options(keyword=''):
         sql = f"""
             SELECT DISTINCT r.ROUTE_ID
             FROM {record_table} r
-            INNER JOIN CIRCULATION_HISTORY c ON c.HOLD_RECORD_ID = r.ID
+            INNER JOIN {_circ_table()} c ON c.HOLD_RECORD_ID = r.ID
             WHERE r.ROUTE_ID IS NOT NULL
               AND c.DISPOSE IN (1, 2, 3)
         """
@@ -305,13 +306,13 @@ def get_quality_record_detail(hold_record_id):
         record['RECORD_TYPE_NAME'] = RECORD_TYPE_LABELS.get(rt_key, '-')
 
         circ_rows = db.session.execute(
-            text("""
+            text(f"""
                 SELECT
                     c.ID, c.HOLD_RECORD_ID, c.DISPOSED_OWNER_ID, c.DISPOSE,
                     c.DISPOSE_SOURCE, c.DISPOSE_DTTM,
                     c.DISPOSE_DETAIL, c.DISPOSE_NOTE, c.DISPOSE_MANUAL_NOTE,
                     u1.NAME AS DISPOSED_OWNER_NAME
-                FROM CIRCULATION_HISTORY c
+                FROM {_circ_table()} c
                 LEFT JOIN USERS u1 ON u1.ID = c.DISPOSED_OWNER_ID
                 WHERE c.HOLD_RECORD_ID = :rid
                   AND c.DISPOSE IN (1, 2, 3)

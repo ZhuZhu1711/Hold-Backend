@@ -8,6 +8,7 @@ from app.models.product import ProductInfo
 from app.models.defect_code import DefectCode
 from app.models.eng_notes import EngNote
 from app.controllers import hold_report_ctrl, dispose_ctrl
+from app.controllers.dispose_ctrl import _record_table
 from app.utils.database_util import query_mes_engineering_notes
 
 NOTE_TYPE_MES = 'MES'
@@ -376,9 +377,9 @@ def get_owned_fvi_defect_details(eng_user_id, lot_id, line_type='FT'):
     try:
         owned = (
             db.session.execute(
-                text("""
+                text(f"""
                     SELECT COUNT(*) AS CNT
-                    FROM FT_HOLD_RECORD r
+                    FROM {_record_table()} r
                     WHERE (
                         r.LOT_ID = :lot_id
                         OR r.LOT_ID LIKE :lot_id_prefix
