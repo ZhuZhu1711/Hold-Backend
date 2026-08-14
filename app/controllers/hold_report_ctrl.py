@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
+from app.config import Config
 from app.utils.database_util import (
     resolve_circulation_table,
     resolve_hold_record_table,
