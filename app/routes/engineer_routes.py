@@ -235,7 +235,8 @@ def api_dispose():
                       WLT 可省略，由 wafer_actions 汇总；若传入须与汇总一致
       dispose_detail  (可选，规则化详情；一般由服务端生成；WLT 为直白中文按片描述)
       dispose_note    (可选，工程备注文本，最长 1024)
-      dispose_manual_note (可选，手输备注，最长 1024)
+      dispose_manual_note (可选，手输备注，最长 1024；可靠性分析之后的放行/降级必填)
+      confirm_interval (可选，距可靠性分析不足30分钟时须为 true)
       downgrades      (非 WLT 降级：[{from, to}, ...]，服务端生成 DISPOSE_DETAIL)
       retest_grades   (非 WLT 重测等级列表)
       retest_code     (旧版 WLT 单 code，已由 wafer_actions 取代)
@@ -252,6 +253,7 @@ def api_dispose():
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
     wafer_actions = data.get('wafer_actions')
+    confirm_interval = data.get('confirm_interval')
 
     if hold_record_id is None:
         return jsonify({'code': 400, 'msg': 'hold_record_id 必填', 'data': None}), 400
@@ -274,14 +276,17 @@ def api_dispose():
         retest_grades=retest_grades,
         retest_code=retest_code,
         wafer_actions=wafer_actions,
+        confirm_interval=confirm_interval,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
+    if dispose_ctrl.is_interval_confirm_result(success, result):
+        return jsonify({'code': 409, 'msg': msg, 'data': result}), 409
 
     bad_keys = (
         '不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持',
         '无当前', '非工程师', '降级', '重测', '互斥', '至少', '不能', '须',
-        '缺少', '未知', '重复', 'wafer', '不一致', '提供',
+        '缺少', '未知', '重复', 'wafer', '不一致', '提供', '可靠性',
     )
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status

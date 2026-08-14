@@ -21,7 +21,7 @@ logger.addHandler(file_handler)
 
 class TaskQueueConsumer(threading.Thread):
     def __init__(self, config: Config, q: Queue):
-        super().__init__()
+        super().__init__(daemon=True)
         self._q = q
         self._config = config
         self.logger = logger

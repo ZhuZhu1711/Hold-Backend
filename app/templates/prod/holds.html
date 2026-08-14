@@ -72,6 +72,7 @@
         .d-3 { background: #17a2b8; }
         .d-5 { background: #6610f2; }
         .d-other { background: #007bff; }
+        .badge-sample { background: #6f42c1; }
         .detail { max-width: 220px; word-break: break-word; color: #555; }
     </style>
 </head>
@@ -92,7 +93,7 @@
     <main class="main">
         <div class="card">
             <h1>生产节点 Hold Record</h1>
-            <p class="sub">仅显示当前流转节点在生产、仍在线 hold 的记录；可查看工程师处置结论、执行生产处置（分析返回/回退/关闭），并导出 xlsx。</p>
+            <p class="sub">显示当前流转节点在生产，以及可靠性分析后待留样的在线 Hold；可查看工程师处置意见、执行留样完成 / 回退 / 关闭，并导出 xlsx。</p>
 
             <div class="tabs" id="tabs">
                 <button type="button" class="tab active" data-type="0" onclick="switchTab(0)">FT异常反馈单</button>
@@ -295,18 +296,26 @@
                 const pages = json.pages || 1;
                 const size = json.page_size || pageSize;
                 document.getElementById('meta').textContent =
-                    `共 ${total} 条 · 第 ${page}/${pages} 页（当前节点：生产）`;
+                    `共 ${total} 条 · 第 ${page}/${pages} 页（生产节点 + 待留样）`;
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="13" class="empty">暂无生产节点 Hold</td></tr>';
+                        '<tr><td colspan="13" class="empty">暂无生产待办 Hold</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => {
                     const can = !!r.CAN_DISPOSE;
-                    const action = can
-                        ? `<a class="btn btn-success" style="padding:4px 10px;font-size:12px;" href="/prod/dispose/${esc(r.ID)}">处置</a>`
-                        : `<span class="badge badge-muted">不可处置</span>`;
+                    const sample = !!r.CAN_SAMPLE_DONE;
+                    const pending = !!r.PENDING_SAMPLE_RETAIN;
+                    let action = '<span class="badge badge-muted">不可处置</span>';
+                    if (can) {
+                        action = `<a class="btn btn-success" style="padding:4px 10px;font-size:12px;" href="/prod/dispose/${esc(r.ID)}">处置</a>`;
+                    } else if (sample) {
+                        action = `<button type="button" class="btn btn-success" style="padding:4px 10px;font-size:12px;" onclick="sampleDone(${Number(r.ID)})">留样完成</button>`;
+                    }
+                    const sampleBadge = pending
+                        ? ' <span class="badge badge-sample">待留样</span>'
+                        : '';
                     return `
                     <tr>
                         <td>${esc(r.PRODUCT_ID)}</td>
@@ -315,7 +324,7 @@
                         <td>${esc(r.WAFER_ID || '-')}</td>
                         <td>${esc(r.HOLD_CODE || '-')}</td>
                         <td class="reason">${formatReason(r.HOLD_REASON)}</td>
-                        <td>${disposeBadge(r.LAST_DISPOSE, r.LAST_DISPOSE_LABEL)}</td>
+                        <td>${disposeBadge(r.LAST_DISPOSE, r.LAST_DISPOSE_LABEL)}${sampleBadge}</td>
                         <td class="detail">${renderDisposeDetail(r.LAST_DISPOSE_DETAIL || '-')}</td>
                         <td class="detail">${esc(r.LAST_DISPOSE_NOTE || '-')}</td>
                         <td class="detail">${esc(r.LAST_DISPOSE_MANUAL_NOTE || '-')}</td>
@@ -332,6 +341,30 @@
         function exportXlsx() {
             const params = buildQuery(false);
             window.location.href = '/prod/api/holding_records/export?' + params.toString();
+        }
+
+        async function sampleDone(recordId) {
+            if (!window.confirm('确认留样完成？该记录将从生产待办中去掉，不影响工程师继续处置。')) {
+                return;
+            }
+            try {
+                const resp = await fetch('/prod/api/dispose', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        hold_record_id: recordId,
+                        dispose: 65,
+                    }),
+                });
+                const json = await resp.json();
+                if (json.code !== 200) {
+                    alert(json.msg || '留样完成失败');
+                    return;
+                }
+                loadData(false);
+            } catch (e) {
+                alert('请求失败: ' + e);
+            }
         }
 
         document.addEventListener('DOMContentLoaded', () => {

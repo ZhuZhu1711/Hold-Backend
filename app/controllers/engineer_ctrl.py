@@ -7,7 +7,7 @@ from app import db
 from app.models.product import ProductInfo
 from app.models.defect_code import DefectCode
 from app.models.eng_notes import EngNote
-from app.controllers import hold_report_ctrl
+from app.controllers import hold_report_ctrl, dispose_ctrl
 from app.utils.database_util import query_mes_engineering_notes
 
 NOTE_TYPE_MES = 'MES'
@@ -270,6 +270,7 @@ def get_owned_holding_records(
             and owner == eng_id
             and not item.get('IS_CLOSED')
         )
+    dispose_ctrl.attach_reliability_followup_many(items)
     payload['items'] = items
     return True, msg, payload
 
@@ -316,7 +317,6 @@ def get_owned_dispose_record(eng_user_id, hold_record_id):
     加载工程师处置页所需的 hold_record。
     须为所属型号；附带 CAN_DISPOSE / GRADE 解析结果 / WAFERS（WLT 按片用）。
     """
-    from app.controllers import dispose_ctrl
     from app.controllers.hold_report_ctrl import RECORD_TYPE_LABELS
 
     try:
@@ -355,6 +355,7 @@ def get_owned_dispose_record(eng_user_id, hold_record_id):
         and int(current_owner_id) == eng_id
         and not record['IS_CLOSED']
     )
+    dispose_ctrl.attach_reliability_followup(record)
     return True, '获取成功', record
 
 

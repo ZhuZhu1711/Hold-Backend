@@ -1,6 +1,8 @@
 import sys
 import os
 import argparse
+import signal
+import threading
 from multiprocessing import freeze_support
 from cryptography import x509
 from cryptography.hazmat.primitives.kdf import pbkdf2
@@ -51,6 +53,38 @@ app.register_blueprint(quality_bp)      # 质量部只读报表 (/qa/...)
 # ==========================================
 # 程序入口
 # ==========================================
+def _install_interrupt_handlers(stop_event):
+    """让 Ctrl+C / Ctrl+Break / SIGTERM 能打断 Windows 上阻塞的 serve 循环。"""
+    def _handle(signum, frame):
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _handle)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, _handle)
+    if hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, _handle)
+
+
+def _wait_until_stop(stop_event, server_thread):
+    try:
+        while not stop_event.is_set() and server_thread.is_alive():
+            if stop_event.wait(0.5):
+                break
+    except KeyboardInterrupt:
+        stop_event.set()
+
+
+def _shutdown(schedulers):
+    print('\n正在退出...')
+    for sched in schedulers:
+        try:
+            sched.stop()
+        except Exception:
+            pass
+    # Waitress / FTP 等阻塞调用在 Windows 上经常无法干净 join
+    os._exit(0)
+
+
 if __name__ == '__main__':
     freeze_support()
     parser = argparse.ArgumentParser(description='启动 Flask 应用，可选 debug/release 模式。默认 release。')
@@ -67,16 +101,39 @@ if __name__ == '__main__':
         methods = ','.join(sorted([m for m in rule.methods if m not in ('HEAD', 'OPTIONS')]))
         print(f"{methods:7} {rule.rule} -> {rule.endpoint}")
     print("======================\n")
-    
+    print("按 Ctrl+C 结束运行\n")
+
+    stop_event = threading.Event()
+    _install_interrupt_handlers(stop_event)
+    schedulers = []
+
     if not is_debug_mode:
-        task_scheduler = FlaskTaskScheduler()    # 启动后台线程
+        task_scheduler = FlaskTaskScheduler()
         task_scheduler.start()
+        schedulers.append(task_scheduler)
         hold_merge_scheduler = HoldMergeScheduler()
         hold_merge_scheduler.start()
+        schedulers.append(hold_merge_scheduler)
         if getattr(Config, 'HOLD_PREDICT_ENABLED', True):
             hold_predict_scheduler = HoldPredictScheduler()
             hold_predict_scheduler.start()
-        serve(app, host='0.0.0.0', port=50001)
+            schedulers.append(hold_predict_scheduler)
+        server = threading.Thread(
+            target=lambda: serve(app, host='0.0.0.0', port=50001),
+            name='waitress',
+            daemon=True,
+        )
     else:
-        app.run(host='0.0.0.0', debug=True, port=50001)
-    
+        # 关闭 reloader，避免父子双进程导致 Ctrl+C 杀不干净
+        server = threading.Thread(
+            target=lambda: app.run(
+                host='0.0.0.0', debug=True, port=50001, use_reloader=False,
+            ),
+            name='flask-debug',
+            daemon=True,
+        )
+
+    server.start()
+    _wait_until_stop(stop_event, server)
+    _shutdown(schedulers)
+ 

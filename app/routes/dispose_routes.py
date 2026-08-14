@@ -77,6 +77,7 @@ def api_dispose():
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
     wafer_actions = data.get('wafer_actions')
+    confirm_interval = data.get('confirm_interval')
 
     if hold_record_id is None:
         return jsonify({'code': 400, 'msg': 'hold_record_id 必填', 'data': None}), 400
@@ -102,6 +103,7 @@ def api_dispose():
             retest_grades=retest_grades,
             retest_code=retest_code,
             wafer_actions=wafer_actions,
+            confirm_interval=confirm_interval,
         )
     else:
         success, msg, result = dispose_ctrl.dispose_engineer_record(
@@ -116,14 +118,17 @@ def api_dispose():
             retest_grades=retest_grades,
             retest_code=retest_code,
             wafer_actions=wafer_actions,
+            confirm_interval=confirm_interval,
         )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
+    if dispose_ctrl.is_interval_confirm_result(success, result):
+        return jsonify({'code': 409, 'msg': msg, 'data': result}), 409
 
     bad_keys = (
         '不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持',
         '无当前', '非工程师', '降级', '重测', '互斥', '至少', '不能', '须',
-        '缺少', '未知', '重复', 'wafer', '不一致', '提供',
+        '缺少', '未知', '重复', 'wafer', '不一致', '提供', '可靠性',
     )
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
@@ -138,7 +143,7 @@ def api_production_dispose():
 
     Body JSON:
       hold_record_id  (必填)
-      dispose         (必填：66 分析返回 / 8 回退 / 99 关闭；6 兼容)
+      dispose         (必填：65 留样完成 / 8 回退 / 99 关闭)
       dispose_detail  (可选，兼容旧字段；自由备注请用 dispose_manual_note)
       dispose_manual_note (可选，手输备注，最长 1024)
 
@@ -165,7 +170,10 @@ def api_production_dispose():
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': result})
 
-    bad_keys = ('不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持', '无当前', '非生产', '关闭', '分析')
+    bad_keys = (
+        '不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持',
+        '无当前', '非生产', '关闭', '分析', '留样', '无需',
+    )
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 

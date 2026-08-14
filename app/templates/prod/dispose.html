@@ -95,7 +95,7 @@
     <main class="main">
         <div class="card">
             <h1>生产处置</h1>
-            <p class="sub">按 dispose_api：分析(返回) / 回退 / 关闭。确认后流转离开生产节点或关闭记录。</p>
+            <p class="sub">生产处置：留样完成（不改变当前负责人）/ 回退 / 关闭。</p>
             <div id="loadErr" class="err" style="display:none;"></div>
             <div id="content" class="empty">加载中...</div>
         </div>
@@ -104,7 +104,7 @@
     <script src="{{ url_for('static', filename='js/dispose_detail_view.js') }}"></script>
     <script>
         const RECORD_ID = {{ record_id|int }};
-        const DISPOSE_ANALYZE_RETURN = 66;
+        const DISPOSE_SAMPLE_DONE = 65;
         const DISPOSE_ROLLBACK = 8;
         const DISPOSE_CLOSE = 99;
 
@@ -120,7 +120,9 @@
 
         function selectedDispose() {
             const el = document.querySelector('input[name=dispose]:checked');
-            return el ? Number(el.value) : DISPOSE_ANALYZE_RETURN;
+            if (el) return Number(el.value);
+            if (record && record.CAN_SAMPLE_DONE && !record.CAN_DISPOSE) return DISPOSE_SAMPLE_DONE;
+            return DISPOSE_ROLLBACK;
         }
 
         function engDisposeBadge() {
@@ -132,17 +134,30 @@
 
         function render() {
             const can = !!(record && record.CAN_DISPOSE);
-            const canAnalyzeReturn = !!(record && record.CAN_ANALYZE_RETURN);
+            const canSample = !!(record && record.CAN_SAMPLE_DONE);
+            const canAny = can || canSample;
             const statusBadge = record.IS_CLOSED
                 ? '<span class="badge badge-muted">已关闭</span>'
-                : (can ? '<span class="badge">待生产处置</span>' : '<span class="badge badge-muted">不可处置</span>');
+                : (canSample && !can
+                    ? '<span class="badge">待留样</span>'
+                    : (can ? '<span class="badge">待生产处置</span>' : '<span class="badge badge-muted">不可处置</span>'));
 
-            const defaultDispose = canAnalyzeReturn ? DISPOSE_ANALYZE_RETURN : DISPOSE_ROLLBACK;
-            const analyzeReturnLabel = canAnalyzeReturn
-                ? `<label><input type="radio" name="dispose" value="${DISPOSE_ANALYZE_RETURN}" ${defaultDispose === DISPOSE_ANALYZE_RETURN ? 'checked' : ''} ${can ? '' : 'disabled'} /> 分析(返回)</label>`
-                : `<label title="仅工程师已执行「分析」后可用" style="opacity:.55;cursor:not-allowed;">
-                    <input type="radio" name="dispose" value="${DISPOSE_ANALYZE_RETURN}" disabled /> 分析(返回)
-                   </label>`;
+            const radios = [];
+            if (canSample) {
+                radios.push(`<label><input type="radio" name="dispose" value="${DISPOSE_SAMPLE_DONE}" ${can ? '' : 'checked'} ${canAny ? '' : 'disabled'} /> 留样完成</label>`);
+            }
+            if (can) {
+                radios.push(`<label><input type="radio" name="dispose" value="${DISPOSE_ROLLBACK}" ${canSample ? '' : 'checked'} /> 回退</label>`);
+                radios.push(`<label><input type="radio" name="dispose" value="${DISPOSE_CLOSE}" /> 关闭</label>`);
+            }
+            const actionHtml = radios.length
+                ? radios.join('')
+                : '<p class="hint">当前无可执行的生产动作。</p>';
+            const hint = canSample && can
+                ? '留样完成只从生产待办去掉该单，不影响工程师继续处置；回退交回工程师；关闭结束流转。'
+                : (canSample
+                    ? '留样完成后该记录从生产待办消失，工程师可继续放行/降级。'
+                    : '回退交回工程师；关闭结束流转。');
 
             document.getElementById('content').innerHTML = `
                 <div class="summary">
@@ -160,21 +175,19 @@
 
                 <div class="section-title">处置方式</div>
                 <div class="action-list">
-                    ${analyzeReturnLabel}
-                    <label><input type="radio" name="dispose" value="${DISPOSE_ROLLBACK}" ${defaultDispose === DISPOSE_ROLLBACK ? 'checked' : ''} ${can ? '' : 'disabled'} /> 回退</label>
-                    <label><input type="radio" name="dispose" value="${DISPOSE_CLOSE}" ${can ? '' : 'disabled'} /> 关闭</label>
+                    ${actionHtml}
                 </div>
-                <p class="hint">分析(返回)仅在工程师已执行「分析」后可选；回退交回工程师；关闭结束流转。</p>
+                <p class="hint">${hint}</p>
 
                 <div class="form-row" style="margin-top:14px;">
                     <label>手输备注（可选）</label>
-                    <textarea id="dispose_manual_note" maxlength="1024" placeholder="任意处置均可填写" ${can ? '' : 'disabled'}></textarea>
+                    <textarea id="dispose_manual_note" maxlength="1024" placeholder="任意处置均可填写" ${canAny ? '' : 'disabled'}></textarea>
                 </div>
 
                 <div id="submitErr" class="err"></div>
                 <div class="page-actions">
                     <button type="button" class="btn btn-ghost" id="cancelBtn">取消</button>
-                    <button type="button" class="btn ${defaultDispose === DISPOSE_CLOSE ? 'btn-danger' : 'btn-success'}" id="confirmBtn" ${can ? '' : 'disabled'}>确认</button>
+                    <button type="button" class="btn btn-success" id="confirmBtn" ${canAny ? '' : 'disabled'}>确认</button>
                 </div>
             `;
 
@@ -194,20 +207,26 @@
         async function submitDispose() {
             const errEl = document.getElementById('submitErr');
             errEl.textContent = '';
-            if (!record || !record.CAN_DISPOSE) {
+            const can = !!(record && record.CAN_DISPOSE);
+            const canSample = !!(record && record.CAN_SAMPLE_DONE);
+            if (!can && !canSample) {
                 errEl.textContent = '当前不可处置';
                 return;
             }
             const dispose = selectedDispose();
-            if (
-                (dispose === DISPOSE_ANALYZE_RETURN)
-                && !record.CAN_ANALYZE_RETURN
-            ) {
-                errEl.textContent = '分析(返回)仅在工程师已执行「分析」后可用';
+            if (dispose === DISPOSE_SAMPLE_DONE && !canSample) {
+                errEl.textContent = '当前无需留样完成';
+                return;
+            }
+            if ((dispose === DISPOSE_ROLLBACK || dispose === DISPOSE_CLOSE) && !can) {
+                errEl.textContent = '仅当前节点在生产时可回退或关闭';
                 return;
             }
             if (dispose === DISPOSE_CLOSE) {
                 if (!window.confirm('确认关闭该 Hold Record？关闭后不可继续流转。')) return;
+            }
+            if (dispose === DISPOSE_SAMPLE_DONE) {
+                if (!window.confirm('确认留样完成？该记录将从生产待办中去掉，不影响工程师继续处置。')) return;
             }
             const detail = (document.getElementById('dispose_manual_note').value || '').trim();
             const body = {

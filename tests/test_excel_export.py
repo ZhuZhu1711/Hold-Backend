@@ -126,7 +126,12 @@ class RowMapperTest(unittest.TestCase):
         })
         self.assertEqual(row[0], 5)
         self.assertEqual(row[9], '放行')
-        self.assertEqual(row[-1], 'F:2')
+        self.assertEqual(row[-2], 'F:2')
+        self.assertEqual(row[-1], '否')
+        self.assertEqual(
+            production_holding_export_row({'PENDING_SAMPLE_RETAIN': True})[-1],
+            '是',
+        )
 
 
 class HistoryTableTest(unittest.TestCase):

@@ -5,16 +5,19 @@
 | 放行 | 1 | 181 | ~ |
 | 降级 | 2 | 181 | ~ |
 | 重测 | 3 | 181 | ~ |
-| 分析 | 5 |  | ~ |
+| 可靠性分析 | 5 | 操作工程师 | ~ |
 | 转交 | 7 | PRODUCT_INFO.PRO_ENG_ID | ~ |
 
 
 ## 生产处置
 | 行为 | DISPOSE | NEXT_OWNER_ID | DISPOSED_OWNER_ID |
 | ----- | ----- | ----- | ----- |
-| 分析(返回) | 66 | ~ | 181 |
+| 留样完成 | 65 | 当前负责人（不改节点） | 181 |
 | 回退 | 8 | ~ | 181 |
 | 关闭 | 99 |  | 181 |
+
+> `6` / `66` 分析(返回) 已废弃，不可再发起；历史记录仍按原标签展示。
+> 留样完成只写 `CIRCULATION_HISTORY`，**不回写** `LAST_CIRCULATION_ID` / `STATUS`。
 
 # 系统行为
 | 行为 | DISPOSE | NEXT_OWNER_ID | DISPOSED_OWNER_ID |

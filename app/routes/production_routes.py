@@ -43,7 +43,7 @@ def holds_page():
 @production_bp.route('/dispose/<int:record_id>')
 @production_required
 def dispose_page(record_id):
-    """生产处置页：分析返回 / 回退 / 关闭。"""
+    """生产处置页：留样完成 / 回退 / 关闭。"""
     return render_template('prod/dispose.html', **_page_ctx(record_id=record_id))
 
 
@@ -62,7 +62,7 @@ def circulations_page():
 @production_required
 def api_holding_records():
     """
-    当前节点在生产的在线 Hold 列表。
+    当前节点在生产，或待留样的在线 Hold 列表。
     Query: record_type(0/1/2), product_id, station, keyword, page, page_size
     """
     success, msg, payload = production_ctrl.get_production_holding_records(
@@ -109,11 +109,11 @@ def api_holding_records_export():
 @production_bp.route('/api/records/<int:record_id>', methods=['GET'])
 @production_required
 def api_dispose_record(record_id):
-    """生产处置页：加载 record 摘要（须当前节点在生产）。"""
+    """生产处置页：加载 record 摘要（生产节点或待留样）。"""
     success, msg, data = production_ctrl.get_production_dispose_record(record_id)
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
-    status = 404 if '不存在' in msg else (400 if ('无效' in msg or '不在生产' in msg) else 500)
+    status = 404 if '不存在' in msg else (400 if ('无效' in msg or '不在生产' in msg or '无需留样' in msg) else 500)
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
@@ -122,7 +122,7 @@ def api_dispose_record(record_id):
 def api_dispose_actions():
     """生产可发起的处置行为（dispose_api.md「生产处置」）。"""
     success, msg, data = dispose_ctrl.list_dispose_actions(group='production')
-    # UI 主推 66/8/99；6 为兼容项仍会出现在列表中
+    # UI 主推 65/8/99
     return jsonify({'code': 200, 'msg': msg, 'data': data})
 
 
@@ -133,7 +133,7 @@ def api_dispose():
     生产处置（dispose_api.md「生产处置」）。
     Body JSON:
       hold_record_id  (必填)
-      dispose         (必填：66 分析返回 / 8 回退 / 99 关闭；6 兼容)
+      dispose         (必填：65 留样完成 / 8 回退 / 99 关闭)
       dispose_detail  (可选，兼容旧字段)
       dispose_manual_note (可选，手输备注)
     """
@@ -160,7 +160,7 @@ def api_dispose():
 
     bad_keys = (
         '不存在', '无效', '必填', '不可', '仅', '已关闭', '最长', '不支持',
-        '无当前', '非生产', '关闭', '分析',
+        '无当前', '非生产', '关闭', '分析', '留样', '无需',
     )
     status = 400 if any(k in msg for k in bad_keys) else 500
     return jsonify({'code': status, 'msg': msg, 'data': None}), status

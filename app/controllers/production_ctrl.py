@@ -1,5 +1,5 @@
 """
-生产角色：查看/处置当前节点在生产 OP 的在线 Hold，以及导出。
+生产角色：查看/处置当前节点在生产 OP 的在线 Hold，以及待留样记录。
 """
 from app.config import Config
 from app.controllers import hold_report_ctrl, dispose_ctrl
@@ -17,12 +17,14 @@ def get_production_holding_records(
     record_type=None,
     page=1,
     page_size=20,
+    max_page_size=200,
 ):
     """
-    当前流转节点在生产 OP、仍在线 hold 的 record 列表。
+    生产待办：当前节点在生产 OP，或待留样（可靠性分析后尚未留样完成）。
     record_type：0=FT / 1=FVI / 2=WLT。
-    每条附带 CAN_DISPOSE（未关闭即可，列表已限定生产节点）。
+    每条附带 CAN_DISPOSE（节点在生产且未关闭）、CAN_SAMPLE_DONE / PENDING_SAMPLE_RETAIN。
     """
+    prod_op = _production_op_id()
     success, msg, payload = hold_report_ctrl.get_holding_records(
         product_id=product_id,
         station=station,
@@ -30,14 +32,24 @@ def get_production_holding_records(
         record_type=record_type,
         page=page,
         page_size=page_size,
-        current_owner_id=_production_op_id(),
+        current_owner_id=prod_op,
+        include_pending_sample=True,
+        max_page_size=max_page_size,
     )
     if not success:
         return success, msg, payload
 
     items = payload.get('items') or []
+    dispose_ctrl.attach_reliability_followup_many(items)
     for item in items:
-        item['CAN_DISPOSE'] = not bool(item.get('IS_CLOSED'))
+        try:
+            owner = int(item['CURRENT_OWNER_ID']) if item.get('CURRENT_OWNER_ID') is not None else None
+        except (TypeError, ValueError):
+            owner = None
+        at_production = owner == prod_op
+        closed = bool(item.get('IS_CLOSED'))
+        item['CAN_DISPOSE'] = bool(at_production and not closed)
+        item['CAN_SAMPLE_DONE'] = bool(item.get('PENDING_SAMPLE_RETAIN') and not closed)
     payload['items'] = items
     return True, msg, payload
 
@@ -45,7 +57,7 @@ def get_production_holding_records(
 def get_production_dispose_record(hold_record_id):
     """
     加载生产处置页所需的 hold_record。
-    须当前节点为生产 OP；附带 CAN_DISPOSE。
+    允许：当前节点为生产 OP，或待留样。
     """
     from app.controllers.hold_report_ctrl import RECORD_TYPE_LABELS
 
@@ -83,17 +95,19 @@ def get_production_dispose_record(hold_record_id):
         status_val = 0
     record['IS_CLOSED'] = status_val == dispose_ctrl.DISPOSE_CLOSE
 
+    dispose_ctrl.attach_reliability_followup(record)
+
     prod_op = _production_op_id()
     at_production = (
         current_owner_id is not None and int(current_owner_id) == prod_op
     )
     record['CAN_DISPOSE'] = bool(at_production and not record['IS_CLOSED'])
-    record['CAN_ANALYZE_RETURN'] = bool(
-        record['CAN_DISPOSE']
-        and dispose_ctrl._last_dispose_was_analyze(last_circ)
+    record['CAN_SAMPLE_DONE'] = bool(
+        record.get('PENDING_SAMPLE_RETAIN') and not record['IS_CLOSED']
     )
-    if not at_production and not record['IS_CLOSED']:
-        return False, '该记录当前节点不在生产', None
+    record['CAN_ANALYZE_RETURN'] = False
+    if not at_production and not record['CAN_SAMPLE_DONE'] and not record['IS_CLOSED']:
+        return False, '该记录当前不在生产待办且无需留样', None
     return True, '获取成功', record
 
 
@@ -115,6 +129,7 @@ PRODUCTION_HOLDING_EXPORT_HEADERS = [
     '处置时间',
     'Hold 时间',
     '等级/数量',
+    '待留样',
 ]
 
 
@@ -137,6 +152,7 @@ def production_holding_export_row(item):
         item.get('LAST_DISPOSE_DTTM') or '',
         item.get('HOLD_DTTM') or '',
         item.get('GRADE_NUM_DISPLAY') or '',
+        '是' if item.get('PENDING_SAMPLE_RETAIN') else '否',
     ]
 
 
@@ -147,17 +163,16 @@ def export_production_holding_records_xlsx(
     record_type=None,
 ):
     """
-    导出与列表相同筛选条件的生产节点 Hold 为 xlsx。
+    导出与列表相同筛选条件的生产待办 Hold 为 xlsx。
     成功返回 (True, msg, bytes)；失败返回 (False, msg, None)。
     """
-    success, msg, payload = hold_report_ctrl.get_holding_records(
+    success, msg, payload = get_production_holding_records(
         product_id=product_id,
         station=station,
         keyword=keyword,
         record_type=record_type,
         page=1,
         page_size=EXPORT_MAX_ROWS,
-        current_owner_id=_production_op_id(),
         max_page_size=EXPORT_MAX_ROWS,
     )
     return from_page_payload(

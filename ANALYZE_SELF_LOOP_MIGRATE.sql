@@ -1,0 +1,43 @@
+-- 可靠性分析(5) 改为工程师自循环后的存量修复。
+-- 将「最新流转为可靠性分析、当前节点仍在生产 OP」的单据交回型号工程师。
+-- 生产仍可在待留样列表看到这些单，直到点「留样完成」(65)。
+-- 已走过分析(返回) 6/66 的单据不受影响。
+--
+-- 请按环境确认生产 OP：默认 181（与 Config.PRODUCTION_OP_ID 一致）。
+-- 缺省工程师回退为系统用户 1（与 Config.SYSTEM_USER_ID 一致）。
+
+-- 预览
+SELECT
+    r.ID AS HOLD_RECORD_ID,
+    r.PRODUCT_ID,
+    r.STATUS,
+    c.ID AS CIRCULATION_ID,
+    c.NEXT_OWNER_ID AS OLD_NEXT_OWNER_ID,
+    NVL(p.PRO_ENG_ID, 1) AS NEW_NEXT_OWNER_ID
+FROM FT_HOLD_RECORD r
+INNER JOIN CIRCULATION_HISTORY c
+    ON c.ID = r.LAST_CIRCULATION_ID
+LEFT JOIN PRODUCT_INFO p
+    ON p.PRODUCT_ID = r.PRODUCT_ID
+WHERE NVL(r.STATUS, 0) = 5
+  AND c.DISPOSE = 5
+  AND c.NEXT_OWNER_ID = 181;
+
+-- 执行
+UPDATE CIRCULATION_HISTORY c
+SET c.NEXT_OWNER_ID = NVL((
+    SELECT p.PRO_ENG_ID
+    FROM FT_HOLD_RECORD r
+    LEFT JOIN PRODUCT_INFO p ON p.PRODUCT_ID = r.PRODUCT_ID
+    WHERE r.ID = c.HOLD_RECORD_ID
+), 1)
+WHERE c.DISPOSE = 5
+  AND c.NEXT_OWNER_ID = 181
+  AND EXISTS (
+      SELECT 1
+      FROM FT_HOLD_RECORD r
+      WHERE r.LAST_CIRCULATION_ID = c.ID
+        AND NVL(r.STATUS, 0) = 5
+  );
+
+COMMIT;

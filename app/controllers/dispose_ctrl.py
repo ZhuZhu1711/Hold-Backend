@@ -8,6 +8,7 @@ Hold Record 处置流转业务逻辑。
   - 1 → SYSTEM_USER_ID（系统）
 
 同一事务内：插入 CIRCULATION_HISTORY + 回写 LAST_CIRCULATION_ID / STATUS。
+可靠性分析(5) 下一节点仍是操作工程师；生产「留样完成」(65) 只写流转、不改当前节点。
 
 DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不含备注）：
   降级: DG:HA>F;FB>F
@@ -16,7 +17,7 @@ DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不�
   WLT 按片（直白中文，片间 ;）：#02，降级，降main拆批;#03，重测，整片重测;#04，重测，重测A夹具，@1@361
 工程师处置仅为意见，不改写 FT_HOLD_RECORD.GRADE_NUM。
 DISPOSE_NOTE：工程师处置时选择的工程备注文本
-DISPOSE_MANUAL_NOTE：任意处置时可选手输备注（工程师/生产）
+DISPOSE_MANUAL_NOTE：任意处置可选手输备注；可靠性分析之后的放行/降级必须手输
 """
 import re
 from datetime import date, datetime
@@ -38,17 +39,20 @@ DISPOSE_CREATE = 0
 DISPOSE_RELEASE = 1          # 放行
 DISPOSE_DOWNGRADE = 2        # 降级
 DISPOSE_RETEST = 3           # 重测
-DISPOSE_ANALYZE = 5          # 可靠性分析
-DISPOSE_ANALYZE_RETURN = 6   # 分析(返回) — 生产侧
+DISPOSE_ANALYZE = 5          # 可靠性分析（下一节点仍是工程师）
+DISPOSE_ANALYZE_RETURN = 6   # 分析(返回) — 已废弃，仅历史展示
 DISPOSE_TRANSFER = 7         # 转交
 DISPOSE_ROLLBACK = 8         # 回退
-DISPOSE_PROD_ANALYZE_RETURN = 66  # 分析(返回) — 生产
+DISPOSE_SAMPLE_DONE = 65     # 留样完成 — 生产侧，不改当前节点
+DISPOSE_PROD_ANALYZE_RETURN = 66  # 分析(返回) — 已废弃，仅历史展示
 DISPOSE_CLOSE = 99           # 关闭
 
 DISPOSE_DETAIL_MAX_LEN = 4000
 DISPOSE_NOTE_MAX_LEN = 1024
 DISPOSE_MANUAL_NOTE_MAX_LEN = 1024
 RECORD_TYPE_WLT = 2
+ANALYZE_INTERVAL_MINUTES = 30
+INTERVAL_CONFIRM_MSG = '距上次可靠性分析不足30分钟，确认后请再次提交'
 
 # WLT 降级 / 重测子类型（API 入参）
 DG_MODE_MAIN_SPLIT = 'main_split'
@@ -77,6 +81,7 @@ DISPOSE_LABELS = {
     DISPOSE_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_TRANSFER: '转交',
     DISPOSE_ROLLBACK: '回退',
+    DISPOSE_SAMPLE_DONE: '留样完成',
     DISPOSE_PROD_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_CLOSE: '关闭',
 }
@@ -91,13 +96,33 @@ ENGINEER_DISPOSES = {
     # DISPOSE_TRANSFER,  # TODO: 转交方案确定后再开放
 }
 
-# 生产可发起（当前节点应为生产 OP；见 dispose_api.md「生产处置」）
-# 6 保留兼容旧客户端；UI 以 66/8/99 为准
+# 工程师流转码（用于「最新一次工程师处置」；忽略生产侧 8/65/6/66）
+ENGINEER_FLOW_DISPOSES = {
+    DISPOSE_RELEASE,
+    DISPOSE_DOWNGRADE,
+    DISPOSE_RETEST,
+    DISPOSE_ANALYZE,
+    DISPOSE_TRANSFER,
+}
+
+# 生产可发起。留样完成(65) 不要求当前节点在生产；回退/关闭仍须在生产节点。
+# 6/66 分析(返回)已废弃，不再可发起（标签保留供历史展示）。
 PRODUCTION_DISPOSES = {
-    DISPOSE_ANALYZE_RETURN,
-    DISPOSE_PROD_ANALYZE_RETURN,
+    DISPOSE_SAMPLE_DONE,
     DISPOSE_ROLLBACK,
     DISPOSE_CLOSE,
+}
+
+# 历史「分析返回」视为已留样，避免存量单再进待留样
+SAMPLE_DONE_EQUIV_DISPOSES = {
+    DISPOSE_SAMPLE_DONE,
+    DISPOSE_ANALYZE_RETURN,
+    DISPOSE_PROD_ANALYZE_RETURN,
+}
+
+AFTER_ANALYZE_ALLOWED = {
+    DISPOSE_RELEASE,
+    DISPOSE_DOWNGRADE,
 }
 
 # 系统/root 可发起
@@ -561,6 +586,190 @@ def normalize_dispose_manual_note(dispose_manual_note):
     return True, note
 
 
+def _truthy_flag(value) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, (int, float)) and int(value) == 1:
+        return True
+    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'y')
+
+
+def is_interval_confirm_result(success, result) -> bool:
+    return (not success) and isinstance(result, dict) and bool(result.get('need_interval_confirm'))
+
+
+def _id_chunks(ids, size=400):
+    uniq = []
+    seen = set()
+    for raw in ids or []:
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if val in seen:
+            continue
+        seen.add(val)
+        uniq.append(val)
+    for i in range(0, len(uniq), size):
+        yield uniq[i:i + size]
+
+
+def _in_clause(ids, prefix):
+    placeholders = []
+    params = {}
+    for i, val in enumerate(ids):
+        key = f'{prefix}{i}'
+        placeholders.append(f':{key}')
+        params[key] = int(val)
+    return ', '.join(placeholders), params
+
+
+def _query_latest_engineer_circs(record_ids):
+    """最新一次工程师处置（1/2/3/5/7）。返回 {record_id: dict}。"""
+    result = {}
+    flow_codes = tuple(sorted(ENGINEER_FLOW_DISPOSES))
+    for chunk in _id_chunks(record_ids):
+        in_sql, params = _in_clause(chunk, 'rid')
+        params['analyze'] = DISPOSE_ANALYZE
+        params['minutes'] = ANALYZE_INTERVAL_MINUTES
+        for i, code in enumerate(flow_codes):
+            params[f'fc{i}'] = code
+        flow_in = ', '.join(f':fc{i}' for i in range(len(flow_codes)))
+        rows = db.session.execute(
+            text(f"""
+                SELECT HOLD_RECORD_ID, DISPOSE, DISPOSE_DTTM,
+                       CASE
+                         WHEN DISPOSE = :analyze
+                          AND DISPOSE_DTTM >= SYSDATE - (:minutes / 1440)
+                         THEN 1 ELSE 0
+                       END AS INTERVAL_WARN
+                FROM (
+                    SELECT
+                        HOLD_RECORD_ID, DISPOSE, DISPOSE_DTTM,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY HOLD_RECORD_ID ORDER BY ID DESC
+                        ) AS RN
+                    FROM CIRCULATION_HISTORY
+                    WHERE HOLD_RECORD_ID IN ({in_sql})
+                      AND DISPOSE IN ({flow_in})
+                )
+                WHERE RN = 1
+            """),
+            params,
+        ).fetchall()
+        for row in rows:
+            item = _row_to_dict(row)
+            try:
+                rid = int(item.get('HOLD_RECORD_ID'))
+            except (TypeError, ValueError):
+                continue
+            result[rid] = item
+    return result
+
+
+def _query_pending_sample_ids(record_ids):
+    """有可靠性分析且尚未留样完成（含旧 6/66 视为已留样）的 record id 集合。"""
+    pending = set()
+    equiv = tuple(sorted(SAMPLE_DONE_EQUIV_DISPOSES))
+    for chunk in _id_chunks(record_ids):
+        in_sql, params = _in_clause(chunk, 'rid')
+        params['analyze'] = DISPOSE_ANALYZE
+        params['closed'] = DISPOSE_CLOSE
+        for i, code in enumerate(equiv):
+            params[f'eq{i}'] = code
+        equiv_in = ', '.join(f':eq{i}' for i in range(len(equiv)))
+        rows = db.session.execute(
+            text(f"""
+                SELECT r.ID
+                FROM {_record_table()} r
+                WHERE r.ID IN ({in_sql})
+                  AND NVL(r.STATUS, 0) != :closed
+                  AND EXISTS (
+                      SELECT 1 FROM CIRCULATION_HISTORY h
+                      WHERE h.HOLD_RECORD_ID = r.ID AND h.DISPOSE = :analyze
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM CIRCULATION_HISTORY h
+                      WHERE h.HOLD_RECORD_ID = r.ID
+                        AND h.DISPOSE IN ({equiv_in})
+                  )
+            """),
+            params,
+        ).fetchall()
+        for row in rows:
+            try:
+                pending.add(int(row[0]))
+            except (TypeError, ValueError):
+                continue
+    return pending
+
+
+def pending_sample_where_sql(record_alias='r'):
+    """待留样 SQL 片段（需绑定 :analyze :closed :sample_done :analyze_return :prod_analyze_return）。"""
+    return f"""
+        NVL({record_alias}.STATUS, 0) != :closed
+        AND EXISTS (
+            SELECT 1 FROM CIRCULATION_HISTORY h
+            WHERE h.HOLD_RECORD_ID = {record_alias}.ID AND h.DISPOSE = :analyze
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM CIRCULATION_HISTORY h
+            WHERE h.HOLD_RECORD_ID = {record_alias}.ID
+              AND h.DISPOSE IN (:sample_done, :analyze_return, :prod_analyze_return)
+        )
+    """
+
+
+def pending_sample_bind_params():
+    return {
+        'analyze': DISPOSE_ANALYZE,
+        'closed': DISPOSE_CLOSE,
+        'sample_done': DISPOSE_SAMPLE_DONE,
+        'analyze_return': DISPOSE_ANALYZE_RETURN,
+        'prod_analyze_return': DISPOSE_PROD_ANALYZE_RETURN,
+    }
+
+
+def attach_reliability_followup_many(records):
+    """为 record dict 列表附加分析后限制 / 待留样标志。"""
+    if not records:
+        return records
+    ids = [item.get('ID') for item in records]
+    latest_map = _query_latest_engineer_circs(ids)
+    pending_set = _query_pending_sample_ids(ids)
+    default_allowed = sorted(ENGINEER_DISPOSES)
+    after_allowed = sorted(AFTER_ANALYZE_ALLOWED)
+    for item in records:
+        try:
+            rid = int(item.get('ID'))
+        except (TypeError, ValueError):
+            continue
+        circ = latest_map.get(rid) or {}
+        try:
+            last_eng = int(circ.get('DISPOSE')) if circ.get('DISPOSE') is not None else None
+        except (TypeError, ValueError):
+            last_eng = None
+        after = last_eng == DISPOSE_ANALYZE
+        try:
+            interval_warn = int(circ.get('INTERVAL_WARN') or 0) == 1
+        except (TypeError, ValueError):
+            interval_warn = False
+        item['AFTER_RELIABILITY_ANALYZE'] = after
+        item['ALLOWED_DISPOSES'] = after_allowed if after else default_allowed
+        item['REQUIRE_MANUAL_NOTE'] = after
+        item['ANALYZE_INTERVAL_WARN'] = bool(after and interval_warn)
+        item['LAST_ANALYZE_DTTM'] = circ.get('DISPOSE_DTTM') if after else None
+        item['PENDING_SAMPLE_RETAIN'] = rid in pending_set
+    return records
+
+
+def attach_reliability_followup(record):
+    if not record:
+        return record
+    attach_reliability_followup_many([record])
+    return record
+
+
 def _is_structured_dispose_detail(raw):
     """是否为规则化处置详情（非自由备注）。"""
     if raw is None:
@@ -633,8 +842,12 @@ def _resolve_owners(dispose: int, product_id: str, actor_user_id: int):
             return pro_eng_id
         return int(actor_user_id)
 
+    if dispose == DISPOSE_ANALYZE:
+        eng = engineer_disposed()
+        return eng, eng
+
     if dispose in (
-        DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_ANALYZE,
+        DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST,
     ):
         return prod_op, engineer_disposed()
 
@@ -654,7 +867,7 @@ def _resolve_owners(dispose: int, product_id: str, actor_user_id: int):
 
 
 def _last_dispose_was_analyze(last_circ) -> bool:
-    """最近一次流转是否为工程师「分析」(5)。生产「分析(返回)」依赖此前置。"""
+    """最近一次流转是否为工程师「可靠性分析」(5)。"""
     if not last_circ:
         return False
     try:
@@ -672,11 +885,6 @@ def _actor_may_dispose(dispose: int, actor_user_id: int, actor_role, current_own
     if dispose not in USER_DISPOSES:
         return False, f'不支持的处置行为: {dispose}'
 
-    # 生产「分析(返回)」仅当前置流转为工程师「分析」(5) 时可用
-    if dispose in (DISPOSE_ANALYZE_RETURN, DISPOSE_PROD_ANALYZE_RETURN):
-        if not _last_dispose_was_analyze(last_circ):
-            return False, '分析(返回)仅在工程师已执行「分析」后可用'
-
     # 关闭：root 任意节点可关；生产仅当前节点在生产时可关
     if dispose == DISPOSE_CLOSE and not is_root and not (
         dispose in PRODUCTION_DISPOSES and (is_prod_role or int(actor_user_id) == prod_op)
@@ -684,6 +892,12 @@ def _actor_may_dispose(dispose: int, actor_user_id: int, actor_role, current_own
         return False, '关闭仅系统/管理员或生产可执行'
 
     if not is_root:
+        if dispose == DISPOSE_SAMPLE_DONE:
+            is_prod_actor = is_prod_role or int(actor_user_id) == prod_op
+            if not is_prod_actor:
+                return False, '仅生产可执行该处置'
+            return True, ''
+
         if current_owner_id is None:
             return False, '记录无当前负责人，无法处置'
 
@@ -745,6 +959,7 @@ def dispose_engineer_record(
     retest_grades=None,
     retest_code=None,
     wafer_actions=None,
+    confirm_interval=False,
 ):
     """工程师处置：仅允许 ENGINEER_DISPOSES。dispose_note 为工程备注。"""
     # WLT 按片：dispose 可由 wafer_actions 汇总，此处先占位，dispose_record 内再校验
@@ -770,7 +985,112 @@ def dispose_engineer_record(
         retest_grades=retest_grades,
         retest_code=retest_code,
         wafer_actions=wafer_actions,
+        confirm_interval=confirm_interval,
     )
+
+
+def dispose_sample_done(
+    hold_record_id,
+    actor_user_id,
+    actor_role,
+    dispose_manual_note=None,
+):
+    """
+    生产「留样完成」(65)：写入流转审计，不回写 LAST_CIRCULATION_ID / STATUS / 当前负责人。
+    """
+    try:
+        rid = int(hold_record_id)
+        actor_user_id = int(actor_user_id)
+    except (TypeError, ValueError):
+        return False, '参数无效', None
+
+    try:
+        record = _load_record(rid)
+        if not record:
+            return False, 'hold_record 不存在', None
+        if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
+            return False, '记录已关闭，无法继续处置', None
+
+        pending = _query_pending_sample_ids([rid])
+        if rid not in pending:
+            return False, '当前无需留样完成', None
+
+        last_circ = _load_circulation(record.get('LAST_CIRCULATION_ID'))
+        current_owner_id = last_circ.get('NEXT_OWNER_ID') if last_circ else None
+        ok, err = _actor_may_dispose(
+            DISPOSE_SAMPLE_DONE, actor_user_id, actor_role, current_owner_id,
+            last_circ=last_circ,
+        )
+        if not ok:
+            return False, err, None
+
+        ok_manual, manual_or_err = normalize_dispose_manual_note(dispose_manual_note)
+        if not ok_manual:
+            return False, manual_or_err, None
+        manual_note = manual_or_err
+
+        prod_op = _production_op_id()
+        circ_id = _next_positive_seq('SEQ_CIRCULATION')
+        db.session.execute(
+            text("""
+                INSERT INTO CIRCULATION_HISTORY (
+                    ID,
+                    HOLD_RECORD_ID,
+                    DISPOSED_OWNER_ID,
+                    DISPOSE,
+                    NEXT_OWNER_ID,
+                    DISPOSE_SOURCE,
+                    DISPOSE_DTTM,
+                    DISPOSE_TYPE,
+                    DISPOSE_DETAIL,
+                    DISPOSE_NOTE,
+                    DISPOSE_MANUAL_NOTE
+                ) VALUES (
+                    :circ_id,
+                    :hold_record_id,
+                    :disposed_owner_id,
+                    :dispose,
+                    :next_owner_id,
+                    :dispose_source,
+                    SYSDATE,
+                    :dispose_type,
+                    :dispose_detail,
+                    :dispose_note,
+                    :dispose_manual_note
+                )
+            """),
+            {
+                'circ_id': circ_id,
+                'hold_record_id': rid,
+                'disposed_owner_id': prod_op,
+                'dispose': DISPOSE_SAMPLE_DONE,
+                'next_owner_id': current_owner_id,
+                'dispose_source': 'SYS',
+                'dispose_type': DISPOSE_SAMPLE_DONE,
+                'dispose_detail': None,
+                'dispose_note': None,
+                'dispose_manual_note': manual_note,
+            },
+        )
+        db.session.commit()
+        return True, '留样完成', {
+            'hold_record_id': rid,
+            'circulation_id': circ_id,
+            'dispose': DISPOSE_SAMPLE_DONE,
+            'dispose_label': DISPOSE_LABELS.get(DISPOSE_SAMPLE_DONE),
+            'disposed_owner_id': prod_op,
+            'next_owner_id': current_owner_id,
+            'dispose_detail': None,
+            'dispose_note': None,
+            'dispose_manual_note': manual_note,
+            'status': record.get('STATUS'),
+        }
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return False, f'数据库写入异常: {e}', None
+    except Exception as e:
+        db.session.rollback()
+        return False, f'处置失败: {e}', None
 
 
 def dispose_production_record(
@@ -782,7 +1102,7 @@ def dispose_production_record(
     dispose_manual_note=None,
 ):
     """
-    生产处置：仅允许 PRODUCTION_DISPOSES（66 分析返回 / 8 回退 / 99 关闭；6 兼容）。
+    生产处置：仅允许 PRODUCTION_DISPOSES（65 留样完成 / 8 回退 / 99 关闭）。
     供生产工作台与外部生产系统调用。
     生产角色代操作时，流转表仍记 DISPOSED_OWNER_ID=生产 OP。
     """
@@ -807,6 +1127,14 @@ def dispose_production_record(
         if raw and not _is_structured_dispose_detail(raw):
             manual = dispose_detail
             dispose_detail = None
+
+    if dispose == DISPOSE_SAMPLE_DONE:
+        return dispose_sample_done(
+            hold_record_id=hold_record_id,
+            actor_user_id=effective_actor,
+            actor_role=effective_role,
+            dispose_manual_note=manual,
+        )
 
     return dispose_record(
         hold_record_id=hold_record_id,
@@ -1169,15 +1497,17 @@ def dispose_record(
     retest_grades=None,
     retest_code=None,
     wafer_actions=None,
+    confirm_interval=False,
 ):
     """
     对 hold_record 执行一次处置流转。
     成功返回 (True, msg, {circulation_id, next_owner_id, ...})
     DISPOSE_DETAIL：规则化详情（降级/重测等）。
     DISPOSE_NOTE：工程师工程备注。
-    DISPOSE_MANUAL_NOTE：手输备注（任意处置可选）。
+    DISPOSE_MANUAL_NOTE：手输备注（任意处置可选；可靠性分析之后的放行/降级必填）。
     工程师处置仅为意见：仅回写 LAST_CIRCULATION_ID / STATUS，不改 GRADE_NUM。
     WLT 可传 wafer_actions；此时 dispose 可省略，由各片汇总。
+    confirm_interval：距可靠性分析不足 30 分钟时须为 true 才能提交后续处置。
     """
     try:
         rid = int(hold_record_id)
@@ -1194,6 +1524,16 @@ def dispose_record(
     else:
         dispose = None
 
+    if dispose == DISPOSE_SAMPLE_DONE:
+        return dispose_sample_done(
+            hold_record_id=hold_record_id,
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            dispose_manual_note=dispose_manual_note,
+        )
+
+    confirm_interval = _truthy_flag(confirm_interval)
+
     try:
         record = _load_record(rid)
         if not record:
@@ -1201,6 +1541,26 @@ def dispose_record(
 
         if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
+
+        attach_reliability_followup(record)
+        after_analyze = bool(record.get('AFTER_RELIABILITY_ANALYZE'))
+        if after_analyze and wafer_actions is not None:
+            for action in wafer_actions:
+                if not isinstance(action, dict):
+                    continue
+                try:
+                    wafer_disp = int(action.get('dispose'))
+                except (TypeError, ValueError):
+                    continue
+                if wafer_disp not in AFTER_ANALYZE_ALLOWED:
+                    return False, '可靠性分析之后仅允许放行或降级', None
+        if (
+            after_analyze
+            and dispose is not None
+            and dispose in ENGINEER_DISPOSES
+            and dispose not in AFTER_ANALYZE_ALLOWED
+        ):
+            return False, '可靠性分析之后仅允许放行或降级', None
 
         try:
             record_type = (
@@ -1328,6 +1688,14 @@ def dispose_record(
                         detail = raw
                         if len(detail) > DISPOSE_DETAIL_MAX_LEN:
                             return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
+
+        if after_analyze and dispose in ENGINEER_DISPOSES:
+            if dispose not in AFTER_ANALYZE_ALLOWED:
+                return False, '可靠性分析之后仅允许放行或降级', None
+            if not manual_note:
+                return False, '可靠性分析之后须手输备注', None
+            if record.get('ANALYZE_INTERVAL_WARN') and not confirm_interval:
+                return False, INTERVAL_CONFIRM_MSG, {'need_interval_confirm': True}
 
         last_circ = _load_circulation(record.get('LAST_CIRCULATION_ID'))
         current_owner_id = last_circ.get('NEXT_OWNER_ID') if last_circ else None

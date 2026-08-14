@@ -60,7 +60,7 @@ class FtpListWorker(threading.Thread):
     _dir = None
     
     def __init__(self, remot_path_prefix: str, start_date: date, end_date: date, special: str, result_queue: Queue):
-        super().__init__()
+        super().__init__(daemon=True)
         self._remote_path_prefix = remot_path_prefix
         self._start_date = start_date
         self._end_date = end_date

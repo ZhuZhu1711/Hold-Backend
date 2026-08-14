@@ -31,6 +31,8 @@ from app.controllers.dispose_ctrl import (
     DISPOSE_CLOSE,
     format_grade_num_display,
     parse_grade_num,
+    pending_sample_where_sql,
+    pending_sample_bind_params,
 )
 from app.controllers.rawdata_ctrl import (
     get_latest_defect_bincodes_for_wafers,
@@ -123,6 +125,7 @@ def get_holding_records(
     owner_eng_id=None,
     product_ids=None,
     current_owner_id=None,
+    include_pending_sample=False,
     limit=None,
     max_page_size=200,
 ):
@@ -133,6 +136,7 @@ def get_holding_records(
     owner_eng_id：仅返回 PRODUCT_INFO.PRO_ENG_ID 等于该工程师的型号。
     product_ids：精确匹配型号列表（与 product_id 模糊可叠加）。
     current_owner_id：仅返回最新流转 NEXT_OWNER_ID 等于该用户的记录（待办）。
+    include_pending_sample：与 current_owner_id 联用时，额外并入「待留样」记录。
     limit：兼容旧参数，等价于 page_size（仅第 1 页）。
     成功返回 (True, msg, page_payload)。
     """
@@ -158,8 +162,19 @@ def get_holding_records(
             params['owner_eng_id'] = int(owner_eng_id)
 
         if current_owner_id is not None and str(current_owner_id).strip() != '':
-            where_sql += " AND c.NEXT_OWNER_ID = :current_owner_id"
             params['current_owner_id'] = int(current_owner_id)
+            if include_pending_sample:
+                params.update(pending_sample_bind_params())
+                where_sql += f"""
+                    AND (
+                        c.NEXT_OWNER_ID = :current_owner_id
+                        OR (
+                            {pending_sample_where_sql('r')}
+                        )
+                    )
+                """
+            else:
+                where_sql += " AND c.NEXT_OWNER_ID = :current_owner_id"
 
         exact_pids = [
             str(p).strip() for p in (product_ids or []) if p is not None and str(p).strip()
@@ -338,6 +353,7 @@ def export_holding_records_xlsx(
     record_type=None,
     owner_eng_id=None,
     current_owner_id=None,
+    include_pending_sample=False,
 ):
     """导出在线 Hold Record 为 xlsx（筛选条件与列表一致，最多 5000 行）。"""
     from app.utils.excel_export import EXPORT_MAX_ROWS, from_page_payload
@@ -351,6 +367,7 @@ def export_holding_records_xlsx(
         page_size=EXPORT_MAX_ROWS,
         owner_eng_id=owner_eng_id,
         current_owner_id=current_owner_id,
+        include_pending_sample=include_pending_sample,
         max_page_size=EXPORT_MAX_ROWS,
     )
     return from_page_payload(

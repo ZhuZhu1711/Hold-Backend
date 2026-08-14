@@ -172,6 +172,24 @@
             return Number(record && record.RECORD_TYPE) === RECORD_TYPE_WLT;
         }
 
+        function afterAnalyze() {
+            return !!record.AFTER_RELIABILITY_ANALYZE;
+        }
+
+        function allowedDisposes() {
+            const raw = record.ALLOWED_DISPOSES;
+            if (Array.isArray(raw) && raw.length) {
+                return raw.map(Number);
+            }
+            return afterAnalyze()
+                ? [DISPOSE_RELEASE, DISPOSE_DOWNGRADE]
+                : [DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_ANALYZE];
+        }
+
+        function disposeAllowed(code) {
+            return allowedDisposes().includes(Number(code));
+        }
+
         function selectedDispose() {
             const el = document.querySelector('input[name=dispose]:checked');
             return el ? Number(el.value) : DISPOSE_RELEASE;
@@ -302,6 +320,16 @@
 
         function waferBlockHtml(wafer, idx, can) {
             const dis = can ? '' : 'disabled';
+            const codes = [
+                [DISPOSE_RELEASE, '放行'],
+                [DISPOSE_DOWNGRADE, '降级'],
+                [DISPOSE_RETEST, '重测'],
+                [DISPOSE_ANALYZE, '可靠性分析'],
+            ].filter(([code]) => disposeAllowed(code));
+            const radios = codes.map(([code, label], i) => {
+                const checked = i === 0 ? 'checked' : '';
+                return `<label><input type="radio" name="wdispose_${idx}" value="${code}" ${checked} ${dis} /> ${label}</label>`;
+            }).join('');
             return `
             <div class="wafer-card" data-wafer="${esc(wafer)}" data-idx="${idx}">
                 <div class="wafer-card-h">
@@ -309,10 +337,7 @@
                     <span class="hint">须对本片下达处置</span>
                 </div>
                 <div class="action-list">
-                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_RELEASE}" checked ${dis} /> 放行</label>
-                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_DOWNGRADE}" ${dis} /> 降级</label>
-                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_RETEST}" ${dis} /> 重测</label>
-                    <label><input type="radio" name="wdispose_${idx}" value="${DISPOSE_ANALYZE}" ${dis} /> 可靠性分析</label>
+                    ${radios}
                 </div>
                 <div id="w_dg_${idx}" class="wafer-sub hidden">
                     <div class="mode-row">
@@ -366,13 +391,17 @@
                     </div>
                 </div>`;
 
+            const manualRequired = afterAnalyze();
             const manualPanel = `
                 <div id="panelManualNote" class="panel">
                     <div class="form-row">
-                        <label>手输备注（可选）</label>
-                        <textarea id="dispose_manual_note" maxlength="1024" placeholder="" ${can ? '' : 'disabled'}></textarea>
+                        <label>手输备注（${manualRequired ? '必填' : '可选'}）</label>
+                        <textarea id="dispose_manual_note" maxlength="1024" placeholder="${manualRequired ? '可靠性分析之后必须手输备注，防止误操作' : ''}" ${can ? '' : 'disabled'}></textarea>
                     </div>
                 </div>`;
+            const afterHint = afterAnalyze()
+                ? '<p class="hint" style="margin-bottom:12px;">上一节点为可靠性分析：仅可放行或降级；须手输备注。生产并行留样，无需等待。</p>'
+                : '';
 
             const actions = `
                 <div id="submitErr" class="err"></div>
@@ -395,6 +424,7 @@
                 }
                 document.getElementById('content').innerHTML = `
                     ${summaryHtml}
+                    ${afterHint}
                     <div class="section-title">按片处置（须一次性覆盖全部 ${wafers.length} 片）</div>
                     <p class="hint" style="margin-bottom:12px;">工程师意见不改写等级数量；各片可选择不同处置。</p>
                     <div id="waferList">
@@ -423,14 +453,22 @@
                         </label>`).join('')}</div>`
                     : '<div class="hint">无已有等级</div>';
 
+                const ftRadios = [
+                    [DISPOSE_RELEASE, '放行'],
+                    [DISPOSE_DOWNGRADE, '降级'],
+                    [DISPOSE_RETEST, '重测'],
+                    [DISPOSE_ANALYZE, '可靠性分析'],
+                ].filter(([code]) => disposeAllowed(code)).map(([code, label], i) => {
+                    const checked = i === 0 ? 'checked' : '';
+                    return `<label><input type="radio" name="dispose" value="${code}" ${checked} ${can ? '' : 'disabled'} /> ${label}</label>`;
+                }).join('');
+
                 document.getElementById('content').innerHTML = `
                     ${summaryHtml}
+                    ${afterHint}
                     <div class="section-title">处置方式</div>
                     <div class="action-list">
-                        <label><input type="radio" name="dispose" value="${DISPOSE_RELEASE}" checked ${can ? '' : 'disabled'} /> 放行</label>
-                        <label><input type="radio" name="dispose" value="${DISPOSE_DOWNGRADE}" ${can ? '' : 'disabled'} /> 降级</label>
-                        <label><input type="radio" name="dispose" value="${DISPOSE_RETEST}" ${can ? '' : 'disabled'} /> 重测</label>
-                        <label><input type="radio" name="dispose" value="${DISPOSE_ANALYZE}" ${can ? '' : 'disabled'} /> 可靠性分析</label>
+                        ${ftRadios}
                     </div>
                     ${engNotePanel}
                     <div id="panelDowngrade" class="panel hidden">
@@ -509,6 +547,11 @@
             const manual = (document.getElementById('dispose_manual_note').value || '').trim();
             body.dispose_manual_note = manual || null;
 
+            if (afterAnalyze() && !manual) {
+                errEl.textContent = '可靠性分析之后须手输备注';
+                return;
+            }
+
             if (isWlt()) {
                 const collected = collectWltWaferActions();
                 if (collected.error) {
@@ -545,8 +588,19 @@
                 }
             }
 
+            if (afterAnalyze() && record.ANALYZE_INTERVAL_WARN) {
+                if (!window.confirm('距上次可靠性分析不足30分钟，确认继续处置？')) {
+                    return;
+                }
+                body.confirm_interval = true;
+            }
+
             const btn = document.getElementById('confirmBtn');
             btn.disabled = true;
+            await postDispose(body, errEl, btn);
+        }
+
+        async function postDispose(body, errEl, btn) {
             try {
                 const resp = await fetch('/eng/api/dispose', {
                     method: 'POST',
@@ -554,6 +608,14 @@
                     body: JSON.stringify(body),
                 });
                 const json = await resp.json();
+                if (json.code === 409 && json.data && json.data.need_interval_confirm) {
+                    if (window.confirm(json.msg || '距上次可靠性分析不足30分钟，确认继续处置？')) {
+                        body.confirm_interval = true;
+                        return postDispose(body, errEl, btn);
+                    }
+                    errEl.textContent = json.msg || '已取消';
+                    return;
+                }
                 if (json.code !== 200) {
                     errEl.textContent = json.msg || '处置失败';
                     return;
