@@ -39,6 +39,9 @@ def create_app():
 
     # 4. 将 db 实例与 app 绑定
     db.init_app(app)
+
+    from app.utils.mail_alert import install_severe_error_hooks
+    install_severe_error_hooks()
     
     # 5. 导入模型
     # 必须在 db.init_app 之后，且使用 with app.app_context() 确保上下文存在

@@ -16,12 +16,10 @@ import oracledb
 from flask import current_app
 from openpyxl import Workbook, load_workbook
 
-from app.config import Config
 from app.utils.database_util import (
     USER, PWD, DSN, expand_display_wafer_ids, is_merged_wafer_id, logger,
+    resolve_hold_record_table,
 )
-
-_ALLOWED_HOLD_RECORD_TABLES = {'FT_HOLD_RECORD'}
 
 EXPORT_MAX_ROWS = 5000
 PREVIEW_MAX_ROWS = 100
@@ -52,10 +50,7 @@ def _connect():
 
 
 def _record_table():
-    name = (getattr(Config, 'HOLD_RECORD_TABLE', None) or 'FT_HOLD_RECORD').upper()
-    if name not in _ALLOWED_HOLD_RECORD_TABLES:
-        raise ValueError(f'非法 HOLD_RECORD 表名: {name}')
-    return name
+    return resolve_hold_record_table()
 
 
 def normalize_dttm(raw, is_end=False):

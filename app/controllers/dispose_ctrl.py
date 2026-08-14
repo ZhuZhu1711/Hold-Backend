@@ -19,6 +19,7 @@ DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不�
 DISPOSE_NOTE：工程师处置时选择的工程备注文本
 DISPOSE_MANUAL_NOTE：任意处置可选手输备注；可靠性分析之后的放行/降级必须手输
 """
+import logging
 import re
 from datetime import date, datetime
 
@@ -29,8 +30,12 @@ from app import db
 from app.config import Config
 from app.utils.auth_decorators import ROLE_ROOT, ROLE_PRODUCTION
 from app.utils.database_util import (
+    _ALLOWED_SEQS,
     expand_display_wafer_ids,
     format_wafer_id_display,
+    resolve_circulation_table,
+    resolve_hold_record_table,
+    seq_for_circulation,
 )
 
 
@@ -132,8 +137,6 @@ SYSTEM_DISPOSES = {
 
 USER_DISPOSES = ENGINEER_DISPOSES | PRODUCTION_DISPOSES | SYSTEM_DISPOSES
 
-_ALLOWED_HOLD_RECORD_TABLES = {'FT_HOLD_RECORD'}
-
 
 def _production_op_id():
     return int(getattr(Config, 'PRODUCTION_OP_ID', 181) or 181)
@@ -144,10 +147,15 @@ def _system_user_id():
 
 
 def _record_table():
-    name = (getattr(Config, 'HOLD_RECORD_TABLE', None) or 'FT_HOLD_RECORD').upper()
-    if name not in _ALLOWED_HOLD_RECORD_TABLES:
-        raise ValueError(f'非法 HOLD_RECORD 表名: {name}')
-    return name
+    return resolve_hold_record_table()
+
+
+def _circ_table():
+    return resolve_circulation_table(record_table=_record_table())
+
+
+def _circ_seq():
+    return seq_for_circulation(_circ_table())
 
 
 def _row_to_dict(row):
@@ -167,8 +175,7 @@ def _row_to_dict(row):
 
 
 def _next_positive_seq(seq_name: str) -> int:
-    allowed = {'SEQ_CIRCULATION'}
-    if seq_name not in allowed:
+    if seq_name not in _ALLOWED_SEQS:
         raise ValueError(f'非法序列名: {seq_name}')
     for _ in range(5):
         val = db.session.execute(text(f'SELECT {seq_name}.NEXTVAL FROM DUAL')).scalar()
@@ -649,7 +656,7 @@ def _query_latest_engineer_circs(record_ids):
                         ROW_NUMBER() OVER (
                             PARTITION BY HOLD_RECORD_ID ORDER BY ID DESC
                         ) AS RN
-                    FROM CIRCULATION_HISTORY
+                    FROM {_circ_table()}
                     WHERE HOLD_RECORD_ID IN ({in_sql})
                       AND DISPOSE IN ({flow_in})
                 )
@@ -685,11 +692,11 @@ def _query_pending_sample_ids(record_ids):
                 WHERE r.ID IN ({in_sql})
                   AND NVL(r.STATUS, 0) != :closed
                   AND EXISTS (
-                      SELECT 1 FROM CIRCULATION_HISTORY h
+                      SELECT 1 FROM {_circ_table()} h
                       WHERE h.HOLD_RECORD_ID = r.ID AND h.DISPOSE = :analyze
                   )
                   AND NOT EXISTS (
-                      SELECT 1 FROM CIRCULATION_HISTORY h
+                      SELECT 1 FROM {_circ_table()} h
                       WHERE h.HOLD_RECORD_ID = r.ID
                         AND h.DISPOSE IN ({equiv_in})
                   )
@@ -709,11 +716,11 @@ def pending_sample_where_sql(record_alias='r'):
     return f"""
         NVL({record_alias}.STATUS, 0) != :closed
         AND EXISTS (
-            SELECT 1 FROM CIRCULATION_HISTORY h
+            SELECT 1 FROM {_circ_table()} h
             WHERE h.HOLD_RECORD_ID = {record_alias}.ID AND h.DISPOSE = :analyze
         )
         AND NOT EXISTS (
-            SELECT 1 FROM CIRCULATION_HISTORY h
+            SELECT 1 FROM {_circ_table()} h
             WHERE h.HOLD_RECORD_ID = {record_alias}.ID
               AND h.DISPOSE IN (:sample_done, :analyze_return, :prod_analyze_return)
         )
@@ -813,12 +820,12 @@ def _load_circulation(circ_id):
     if not circ_id:
         return None
     row = db.session.execute(
-        text("""
+        text(f"""
             SELECT
                 ID, HOLD_RECORD_ID, DISPOSED_OWNER_ID, DISPOSE,
                 NEXT_OWNER_ID, DISPOSE_SOURCE, DISPOSE_DTTM,
                 DISPOSE_TYPE, DISPOSE_DETAIL, DISPOSE_NOTE, DISPOSE_MANUAL_NOTE
-            FROM CIRCULATION_HISTORY
+            FROM {_circ_table()}
             WHERE ID = :cid
         """),
         {'cid': int(circ_id)},
@@ -1030,10 +1037,10 @@ def dispose_sample_done(
         manual_note = manual_or_err
 
         prod_op = _production_op_id()
-        circ_id = _next_positive_seq('SEQ_CIRCULATION')
+        circ_id = _next_positive_seq(_circ_seq())
         db.session.execute(
-            text("""
-                INSERT INTO CIRCULATION_HISTORY (
+            text(f"""
+                INSERT INTO {_circ_table()} (
                     ID,
                     HOLD_RECORD_ID,
                     DISPOSED_OWNER_ID,
@@ -1172,14 +1179,14 @@ def get_circulations(hold_record_id):
             return False, 'hold_record 不存在', []
 
         rows = db.session.execute(
-            text("""
+            text(f"""
                 SELECT
                     c.ID, c.HOLD_RECORD_ID, c.DISPOSED_OWNER_ID, c.DISPOSE,
                     c.NEXT_OWNER_ID, c.DISPOSE_SOURCE, c.DISPOSE_DTTM,
                     c.DISPOSE_TYPE, c.DISPOSE_DETAIL, c.DISPOSE_NOTE, c.DISPOSE_MANUAL_NOTE,
                     u1.NAME AS DISPOSED_OWNER_NAME,
                     u2.NAME AS NEXT_OWNER_NAME
-                FROM CIRCULATION_HISTORY c
+                FROM {_circ_table()} c
                 LEFT JOIN USERS u1 ON u1.ID = c.DISPOSED_OWNER_ID
                 LEFT JOIN USERS u2 ON u2.ID = c.NEXT_OWNER_ID
                 WHERE c.HOLD_RECORD_ID = :rid
@@ -1270,7 +1277,7 @@ def query_circulations(
             params['keyword'] = f"%{str(keyword).strip()}%"
 
         from_sql = f"""
-            FROM CIRCULATION_HISTORY c
+            FROM {_circ_table()} c
             INNER JOIN {record_table} r
                 ON r.ID = c.HOLD_RECORD_ID
             LEFT JOIN USERS u1 ON u1.ID = c.DISPOSED_OWNER_ID
@@ -1436,7 +1443,7 @@ def get_pending_records(
 
         from_sql = f"""
             FROM {record_table} r
-            INNER JOIN CIRCULATION_HISTORY c
+            INNER JOIN {_circ_table()} c
                 ON c.ID = r.LAST_CIRCULATION_ID
             LEFT JOIN USERS u ON u.ID = c.NEXT_OWNER_ID
         """
@@ -1711,11 +1718,11 @@ def dispose_record(
         )
 
         record_table = _record_table()
-        circ_id = _next_positive_seq('SEQ_CIRCULATION')
+        circ_id = _next_positive_seq(_circ_seq())
 
         db.session.execute(
-            text("""
-                INSERT INTO CIRCULATION_HISTORY (
+            text(f"""
+                INSERT INTO {_circ_table()} (
                     ID,
                     HOLD_RECORD_ID,
                     DISPOSED_OWNER_ID,
@@ -1767,6 +1774,23 @@ def dispose_record(
         )
 
         db.session.commit()
+        try:
+            from app.utils.legacy_dispose_writeback import writeback_after_dispose
+            writeback_after_dispose(
+                record,
+                dispose=dispose,
+                actor_user_id=actor_user_id,
+                dispose_detail=detail,
+                dispose_note=note,
+                dispose_manual_note=manual_note,
+                wafer_actions=wafer_actions,
+                downgrades=downgrades,
+                retest_grades=retest_grades,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                'legacy_writeback: hook error', exc_info=True
+            )
         return True, '处置成功', {
             'hold_record_id': rid,
             'circulation_id': circ_id,

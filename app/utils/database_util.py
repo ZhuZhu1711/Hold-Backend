@@ -29,16 +29,78 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 _ALLOWED_HOLD_INFO_TABLES = {'FT_HOLD_INFO', 'FT_HOLD_INFO_TEST'}
-_ALLOWED_HOLD_RECORD_TABLES = {'FT_HOLD_RECORD'}
+_ALLOWED_HOLD_RECORD_TABLES = {'FT_HOLD_RECORD', 'FT_HOLD_RECORD_TEST'}
+_ALLOWED_CIRCULATION_TABLES = {'CIRCULATION_HISTORY', 'CIRCULATION_HISTORY_TEST'}
+_ALLOWED_HOLD_PREDICT_TABLES = {'FT_HOLD_PREDICT', 'FT_HOLD_PREDICT_TEST'}
+_ALLOWED_SEQS = {
+    'FT_HOLD_RECORD_SEQ',
+    'FT_HOLD_RECORD_TEST_SEQ',
+    'SEQ_CIRCULATION',
+    'SEQ_CIRCULATION_TEST',
+}
+_RECORD_CIRC_MAP = {
+    'FT_HOLD_RECORD': 'CIRCULATION_HISTORY',
+    'FT_HOLD_RECORD_TEST': 'CIRCULATION_HISTORY_TEST',
+}
+_RECORD_SEQ_MAP = {
+    'FT_HOLD_RECORD': 'FT_HOLD_RECORD_SEQ',
+    'FT_HOLD_RECORD_TEST': 'FT_HOLD_RECORD_TEST_SEQ',
+}
+_CIRC_SEQ_MAP = {
+    'CIRCULATION_HISTORY': 'SEQ_CIRCULATION',
+    'CIRCULATION_HISTORY_TEST': 'SEQ_CIRCULATION_TEST',
+}
 # 源表 HOLD_RECORD_ID：0/NULL=待处理；>0=已关联；-1=转换失败脏数据（需人工）
 HOLD_RECORD_ID_PENDING = 0
 HOLD_RECORD_ID_DIRTY = -1
 
 
+def resolve_hold_record_table(name=None) -> str:
+    from app.config import Config
+    tbl = (name or getattr(Config, 'HOLD_RECORD_TABLE', None) or 'FT_HOLD_RECORD').upper()
+    if tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        raise ValueError(f'非法 HOLD_RECORD 表名: {tbl}')
+    return tbl
+
+
+def resolve_circulation_table(name=None, record_table=None) -> str:
+    from app.config import Config
+    if name:
+        tbl = name.upper()
+    elif record_table:
+        tbl = _RECORD_CIRC_MAP.get(record_table.upper(), '')
+    else:
+        tbl = (getattr(Config, 'CIRCULATION_HISTORY_TABLE', None) or 'CIRCULATION_HISTORY').upper()
+    if tbl not in _ALLOWED_CIRCULATION_TABLES:
+        raise ValueError(f'非法 CIRCULATION_HISTORY 表名: {tbl}')
+    return tbl
+
+
+def resolve_hold_predict_table(name=None) -> str:
+    from app.config import Config
+    tbl = (name or getattr(Config, 'HOLD_PREDICT_TABLE', None) or 'FT_HOLD_PREDICT').upper()
+    if tbl not in _ALLOWED_HOLD_PREDICT_TABLES:
+        raise ValueError(f'非法 HOLD_PREDICT 表名: {tbl}')
+    return tbl
+
+
+def seq_for_hold_record(record_table: str) -> str:
+    seq = _RECORD_SEQ_MAP.get((record_table or '').upper())
+    if not seq:
+        raise ValueError(f'非法 HOLD_RECORD 表名: {record_table}')
+    return seq
+
+
+def seq_for_circulation(circ_table: str) -> str:
+    seq = _CIRC_SEQ_MAP.get((circ_table or '').upper())
+    if not seq:
+        raise ValueError(f'非法 CIRCULATION_HISTORY 表名: {circ_table}')
+    return seq
+
+
 def _next_positive_seq(cursor, seq_name: str) -> int:
     """取序列下一个 >0 的值（部分序列 MIN_VALUE=0，需跳过哨兵 0）。"""
-    allowed = {'FT_HOLD_RECORD_SEQ', 'SEQ_CIRCULATION'}
-    if seq_name not in allowed:
+    if seq_name not in _ALLOWED_SEQS:
         raise ValueError(f"非法序列名: {seq_name}")
     for _ in range(5):
         cursor.execute(f"SELECT {seq_name}.NEXTVAL FROM DUAL")
@@ -279,6 +341,8 @@ def auto_close_hold_records(
     if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
         logger.error(f"非法 hold_record 表名: {record_table}")
         return -1, -1
+    circ_tbl = resolve_circulation_table(record_table=record_tbl)
+    circ_seq = seq_for_circulation(circ_tbl)
 
     ids = []
     seen = set()
@@ -299,8 +363,8 @@ def auto_close_hold_records(
     except (TypeError, ValueError):
         actor_id = 1
 
-    insert_circ_sql = """
-        INSERT INTO CIRCULATION_HISTORY (
+    insert_circ_sql = f"""
+        INSERT INTO {circ_tbl} (
             ID,
             HOLD_RECORD_ID,
             DISPOSED_OWNER_ID,
@@ -336,7 +400,7 @@ def auto_close_hold_records(
         with connection.cursor() as cursor:
             for rid in ids:
                 try:
-                    circ_id = _next_positive_seq(cursor, 'SEQ_CIRCULATION')
+                    circ_id = _next_positive_seq(cursor, circ_seq)
                     cursor.execute(
                         insert_circ_sql,
                         {
@@ -466,6 +530,9 @@ def insert_hold_record_and_link(
     if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
         logger.error(f"非法 hold_record 表名: {record_table}")
         return None
+    circ_tbl = resolve_circulation_table(record_table=record_tbl)
+    record_seq = seq_for_hold_record(record_tbl)
+    circ_seq = seq_for_circulation(circ_tbl)
 
     ids = [int(i) for i in (source_info_ids or []) if i is not None]
     if not ids:
@@ -509,8 +576,8 @@ def insert_hold_record_and_link(
           AND ROWNUM = 1
     """
 
-    insert_circ_sql = """
-        INSERT INTO CIRCULATION_HISTORY (
+    insert_circ_sql = f"""
+        INSERT INTO {circ_tbl} (
             ID,
             HOLD_RECORD_ID,
             DISPOSED_OWNER_ID,
@@ -552,7 +619,7 @@ def insert_hold_record_and_link(
     try:
         with connection.cursor() as cursor:
             # 1) hold_record
-            new_id = _next_positive_seq(cursor, 'FT_HOLD_RECORD_SEQ')
+            new_id = _next_positive_seq(cursor, record_seq)
             cursor.execute(
                 insert_record_sql,
                 {
@@ -582,7 +649,7 @@ def insert_hold_record_and_link(
                 next_owner_id = int(owner_row[0])
 
             # 3) circulation_history
-            circ_id = _next_positive_seq(cursor, 'SEQ_CIRCULATION')
+            circ_id = _next_positive_seq(cursor, circ_seq)
             cursor.execute(
                 insert_circ_sql,
                 {
@@ -851,6 +918,9 @@ def insert_hold_record_and_link_from_dirty(
     if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
         logger.error(f"非法 hold_record 表名: {record_table}")
         return None
+    circ_tbl = resolve_circulation_table(record_table=record_tbl)
+    record_seq = seq_for_hold_record(record_tbl)
+    circ_seq = seq_for_circulation(circ_tbl)
 
     ids = [int(i) for i in (source_info_ids or []) if i is not None]
     if not ids:
@@ -923,8 +993,8 @@ def insert_hold_record_and_link_from_dirty(
         WHERE PRODUCT_ID = :product_id
           AND ROWNUM = 1
     """
-    insert_circ_sql = """
-        INSERT INTO CIRCULATION_HISTORY (
+    insert_circ_sql = f"""
+        INSERT INTO {circ_tbl} (
             ID,
             HOLD_RECORD_ID,
             DISPOSED_OWNER_ID,
@@ -965,7 +1035,7 @@ def insert_hold_record_and_link_from_dirty(
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
     try:
         with connection.cursor() as cursor:
-            new_id = _next_positive_seq(cursor, 'FT_HOLD_RECORD_SEQ')
+            new_id = _next_positive_seq(cursor, record_seq)
             cursor.execute(
                 insert_record_sql,
                 {
@@ -993,7 +1063,7 @@ def insert_hold_record_and_link_from_dirty(
             if owner_row and owner_row[0] is not None:
                 next_owner_id = int(owner_row[0])
 
-            circ_id = _next_positive_seq(cursor, 'SEQ_CIRCULATION')
+            circ_id = _next_positive_seq(cursor, circ_seq)
             cursor.execute(
                 insert_circ_sql,
                 {

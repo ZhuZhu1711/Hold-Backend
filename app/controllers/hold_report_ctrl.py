@@ -15,7 +15,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
-from app.config import Config
+from app.utils.database_util import (
+    resolve_circulation_table,
+    resolve_hold_record_table,
+)
 from app.utils.database_util import (
     expand_display_wafer_ids,
     format_wafer_id_display,
@@ -24,6 +27,8 @@ from app.utils.database_util import (
     normalize_lot_id,
     query_fvi_defect_details,
     query_split_merge_history,
+    resolve_circulation_table,
+    resolve_hold_record_table,
     logger as sql_file_logger,
 )
 from app.controllers.dispose_ctrl import (
@@ -45,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 
 _ALLOWED_HOLD_INFO_TABLES = {'FT_HOLD_INFO', 'FT_HOLD_INFO_TEST'}
-_ALLOWED_HOLD_RECORD_TABLES = {'FT_HOLD_RECORD'}
 _ALLOWED_LINK_COLUMNS = {'HOLD_RECORD_ID', 'PROCESSED'}
 
 # dispose_api.md「处置单划分」处置单大类 ↔ RECORD_TYPE
@@ -58,16 +62,15 @@ RECORD_TYPE_LABELS = {
 
 def _table_names():
     info_table = (getattr(Config, 'HOLD_INFO_TABLE', None) or 'FT_HOLD_INFO_TEST').upper()
-    record_table = (getattr(Config, 'HOLD_RECORD_TABLE', None) or 'FT_HOLD_RECORD').upper()
+    record_table = resolve_hold_record_table()
+    circ_table = resolve_circulation_table(record_table=record_table)
     link_col = (getattr(Config, 'HOLD_INFO_LINK_COLUMN', None) or 'HOLD_RECORD_ID').upper()
 
     if info_table not in _ALLOWED_HOLD_INFO_TABLES:
         raise ValueError(f'非法 HOLD_INFO 表名: {info_table}')
-    if record_table not in _ALLOWED_HOLD_RECORD_TABLES:
-        raise ValueError(f'非法 HOLD_RECORD 表名: {record_table}')
     if link_col not in _ALLOWED_LINK_COLUMNS:
         raise ValueError(f'非法关联字段: {link_col}')
-    return info_table, record_table, link_col
+    return info_table, record_table, circ_table, link_col
 
 
 def _row_to_dict(row):
@@ -141,7 +144,7 @@ def get_holding_records(
     成功返回 (True, msg, page_payload)。
     """
     try:
-        info_table, record_table, link_col = _table_names()
+        info_table, record_table, circ_table, link_col = _table_names()
         if limit is not None and (page is None or str(page) in ('', '1')):
             # 旧调用：limit 当作 page_size，固定第 1 页
             page, page_size, offset = _parse_page(1, limit, max_page_size=max_page_size)
@@ -216,7 +219,7 @@ def get_holding_records(
             INNER JOIN {info_table} i
                 ON i.{link_col} = r.ID
                AND NVL(i.HOLDING, 1) = 0
-            LEFT JOIN CIRCULATION_HISTORY c
+            LEFT JOIN {circ_table} c
                 ON c.ID = r.LAST_CIRCULATION_ID
             LEFT JOIN USERS u
                 ON u.ID = c.NEXT_OWNER_ID
@@ -385,7 +388,7 @@ def get_hold_count_by_wafer(wafer_id):
 
     wafer_id = str(wafer_id).strip()
     try:
-        _, record_table, _ = _table_names()
+        _, record_table, _, _ = _table_names()
         row = db.session.execute(
             text(f"""
                 SELECT COUNT(*) AS CNT
@@ -412,7 +415,7 @@ def get_hold_count_by_wafer(wafer_id):
 def get_hold_product_options(keyword=''):
     """报表筛选用：从 hold_record 取型号列表。"""
     try:
-        _, record_table, _ = _table_names()
+        _, record_table, _, _ = _table_names()
         sql = f"""
             SELECT DISTINCT PRODUCT_ID
             FROM {record_table}
@@ -464,7 +467,7 @@ def get_hold_history(product_id, period_type, year, month=None, week=None):
         except (TypeError, ValueError):
             return False, 'year 无效', None
 
-        _, record_table, _ = _table_names()
+        _, record_table, _, _ = _table_names()
         product_id = str(product_id).strip()
 
         if period_type == 'month':
@@ -656,7 +659,7 @@ def _lookup_fvi_grade_num(lot_id: str):
     if not lot_id:
         return ''
     try:
-        _, record_table, _ = _table_names()
+        _, record_table, _, _ = _table_names()
         row = db.session.execute(
             text(f"""
                 SELECT GRADE_NUM

@@ -59,7 +59,22 @@ class Config:
         return False
 
     HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if _argv_is_debug_mode() else 'FT_HOLD_INFO'
-    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD'
+    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if _argv_is_debug_mode() else 'FT_HOLD_RECORD'
+    CIRCULATION_HISTORY_TABLE = (
+        'CIRCULATION_HISTORY_TEST' if _argv_is_debug_mode() else 'CIRCULATION_HISTORY'
+    )
+    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if _argv_is_debug_mode() else 'FT_HOLD_PREDICT'
+    # 过渡期：新系统处置成功后静默写回旧 HOLD_INFO / WLT_HOLD_INFO / HISTORY_DISPOSITION。
+    # 旧系统完全下线后把下面改成 False（重启后端即停写，无需删代码）。
+    # 也可不改代码：环境变量 HOLD_LEGACY_WRITEBACK=0 后重启。
+    # debug 模式始终关闭，避免测试处置写入正式旧表。
+    LEGACY_DISPOSE_WRITEBACK = True
+    LEGACY_DISPOSE_WRITEBACK_ENABLED = (
+        LEGACY_DISPOSE_WRITEBACK
+        and (not _argv_is_debug_mode())
+        and os.environ.get('HOLD_LEGACY_WRITEBACK', '1').strip().lower()
+        not in ('0', 'false', 'no', 'off')
+    )
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30
@@ -108,3 +123,15 @@ class Config:
         'FIQC FUNCTION TEST',
         'FIQC WG TEST'
     ]
+
+    # 严重报错邮件（SMTP 用户名+密码登录）。普通 logger.error / 业务异常不发送。
+    # 未配齐 SMTP_HOST / USER / PASSWORD / TO 时静默跳过。
+    ALERT_MAIL_ENABLED = True
+    ALERT_SMTP_HOST = ''
+    ALERT_SMTP_PORT = 465
+    ALERT_SMTP_SSL = True          # True=SMTP_SSL(465)；False=先连明文再 STARTTLS(587)
+    ALERT_SMTP_USER = ''
+    ALERT_SMTP_PASSWORD = ''
+    ALERT_MAIL_FROM = ''           # 空则用 ALERT_SMTP_USER
+    ALERT_MAIL_TO = []             # 收件人列表，如 ['ops@example.com']
+    ALERT_MAIL_COOLDOWN_SECONDS = 1800  # 相同严重错误冷却，避免刷屏

@@ -27,6 +27,7 @@ if project_root_path not in sys.path:
 
 from app.config import Config
 from app.utils.database_util import DSN, PWD, USER
+from app.utils.mail_alert import install_severe_error_hooks, notify_severe_error
 from app.utils.rawdata_parse import (
     TEST_BINCODE,
     TEST_WAFER,
@@ -340,6 +341,7 @@ class RawDataScheduler(threading.Thread):
                     self.logger.error("%s 入库失败", fname)
         except Exception as e:
             self.logger.error("Raw Data 定时任务执行出错: %s", e, exc_info=True)
+            notify_severe_error('Raw Data 定时任务整轮失败', str(e), exc=e)
         finally:
             if ftp:
                 try:
@@ -383,6 +385,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     print(f"运行模式: {args.mode}")
+    install_severe_error_hooks()
     scheduler = RawDataScheduler()
 
     if args.mode == 'debug':

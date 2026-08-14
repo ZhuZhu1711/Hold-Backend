@@ -1,5 +1,6 @@
 from app.utils.FtpWorker import FtpListWorker
 from app.utils.database_util import insert_FT_WLT_TESTLOG, query_testlog_history
+from app.utils.mail_alert import notify_severe_error
 from app.config import Config
 from datetime import date, timedelta
 from queue import Queue
@@ -84,6 +85,7 @@ class TaskQueueConsumer(threading.Thread):
 
             except Exception as e:
                 self.logger.error(f"Consumer 发生未知错误: {e}")
+                notify_severe_error('Testlog Consumer 未知错误', str(e), exc=e)
                 time.sleep(10)
             finally:
                 time.sleep(5)
@@ -149,6 +151,7 @@ class FlaskTaskScheduler(threading.Thread):
             self.logger.info("<<< 定时任务执行完毕")
         except Exception as e:
             self.logger.error(f"定时任务执行出错: {e}", exc_info=True)
+            notify_severe_error('Testlog 定时任务整轮失败', str(e), exc=e)
 
     def run(self):
         """线程启动后的入口"""
