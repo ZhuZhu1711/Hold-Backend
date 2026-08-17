@@ -24,6 +24,8 @@ class Config:
     SESSION_COOKIE_SECURE = os.environ.get('HOLD_SESSION_SECURE', '').lower() in (
         '1', 'true', 'yes',
     )
+    # 客户端「打开后台」一次性票据有效期（秒）
+    WEB_SSO_TICKET_MAX_AGE = 60
 
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
@@ -92,8 +94,9 @@ class Config:
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
 
-    # FT 可放行概率静默打分（独立调度，不改处置/UI）
-    HOLD_PREDICT_ENABLED = True
+    # FT 可放行概率静默打分（独立调度，不改处置/UI）。
+    # 代码保留；改成 True 并重启后端即可重新启用。独立脚本 FT_HOLD_PREDICT_sche.py 同样看此开关。
+    HOLD_PREDICT_ENABLED = False
     HOLD_PREDICT_INTERVAL_MINUTES = 15
     HOLD_PREDICT_WAIT_HOURS = 24
     HOLD_PREDICT_BATCH_SIZE = 40

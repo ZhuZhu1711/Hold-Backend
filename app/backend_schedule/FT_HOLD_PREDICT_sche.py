@@ -145,7 +145,7 @@ class HoldPredictScheduler(threading.Thread):
         self._stop_event.set()
 
     def _run_job(self):
-        if not getattr(self.config, 'HOLD_PREDICT_ENABLED', True):
+        if not getattr(self.config, 'HOLD_PREDICT_ENABLED', False):
             logger.info('HOLD_PREDICT_ENABLED=False，跳过')
             return
         try:
@@ -172,6 +172,9 @@ def main():
     args = parser.parse_args()
     install_severe_error_hooks()
     cfg = Config()
+    if not getattr(cfg, 'HOLD_PREDICT_ENABLED', False):
+        logger.info('HOLD_PREDICT_ENABLED=False，退出（改 config.py 后重启即可启用）')
+        return
     if args.mode == 'debug':
         stats = run_once(cfg, force=args.force)
         logger.info('debug 单轮结束 %s', stats)
