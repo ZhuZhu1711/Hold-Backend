@@ -114,10 +114,12 @@ if __name__ == '__main__':
         hold_merge_scheduler = HoldMergeScheduler()
         hold_merge_scheduler.start()
         schedulers.append(hold_merge_scheduler)
-        if getattr(Config, 'HOLD_PREDICT_ENABLED', True):
+        if getattr(Config, 'HOLD_PREDICT_ENABLED', False):
             hold_predict_scheduler = HoldPredictScheduler()
             hold_predict_scheduler.start()
             schedulers.append(hold_predict_scheduler)
+        else:
+            print('HOLD_PREDICT_ENABLED=False，未启动可放行概率预测调度')
         server = threading.Thread(
             target=lambda: serve(app, host='0.0.0.0', port=50001),
             name='waitress',

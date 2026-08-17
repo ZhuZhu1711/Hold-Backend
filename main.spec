@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Hold-Backend 打包：onedir（适合常驻 Flask + 后台调度）
+# Hold-Backend 打包：onefile（单个 HoldBackend.exe）
 # 构建：conda activate web 后执行  .\build.ps1
-# 产物：dist\HoldBackend\HoldBackend.exe
+# 产物：dist\HoldBackend.exe
 
 import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -87,26 +87,20 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='HoldBackend',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='HoldBackend',
 )

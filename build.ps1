@@ -21,8 +21,8 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$exe = Join-Path $PSScriptRoot 'dist\HoldBackend\HoldBackend.exe'
+$exe = Join-Path $PSScriptRoot 'dist\HoldBackend.exe'
 Write-Host ""
 Write-Host "Build OK: $exe"
-Write-Host "启动: .\dist\HoldBackend\HoldBackend.exe"
-Write-Host "调试模式: .\dist\HoldBackend\HoldBackend.exe --mode debug"
+Write-Host "启动: .\dist\HoldBackend.exe"
+Write-Host "调试模式: .\dist\HoldBackend.exe --mode debug"
