@@ -107,7 +107,8 @@ class TaskQueueConsumer(threading.Thread):
             day = str(task_date.day)
             ftp_path = f"{self._config.WLT_TEST_DATA_REMOTE_PATH}Data[{year}-{month}-{day}]/{item}"
             parts = item.split('_')
-            wafer_id = f"{parts[3]}-{parts[4]}"
+            # wafer no 与 FtpWorker 一致：个位数补前导 0（如 6 → 06）
+            wafer_id = f"{parts[3]}-{str(parts[4]).zfill(2)}"
             step = 'WLT' + parts[5]
             insert_FT_WLT_TESTLOG(wafer_id, parts[1], parts[2], ftp_path, step, task_date)
         

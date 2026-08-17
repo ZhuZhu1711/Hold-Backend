@@ -88,7 +88,12 @@ def _shutdown(schedulers):
 if __name__ == '__main__':
     freeze_support()
     parser = argparse.ArgumentParser(description='启动 Flask 应用，可选 debug/release 模式。默认 release。')
-    parser.add_argument('--mode', choices=['debug', 'release'], default='release', help='运行模式，debug 不启动后台任务调度，release 启动。')
+    parser.add_argument(
+        '--mode',
+        choices=['debug', 'release'],
+        default='release',
+        help='运行模式：debug 启动 Hold 合并调度；release 另启动 testlog / 预测等后台任务。',
+    )
     args = parser.parse_args()
     is_debug_mode = args.mode == 'debug'
 
@@ -107,13 +112,14 @@ if __name__ == '__main__':
     _install_interrupt_handlers(stop_event)
     schedulers = []
 
+    hold_merge_scheduler = HoldMergeScheduler()
+    hold_merge_scheduler.start()
+    schedulers.append(hold_merge_scheduler)
+
     if not is_debug_mode:
         task_scheduler = FlaskTaskScheduler()
         task_scheduler.start()
         schedulers.append(task_scheduler)
-        hold_merge_scheduler = HoldMergeScheduler()
-        hold_merge_scheduler.start()
-        schedulers.append(hold_merge_scheduler)
         if getattr(Config, 'HOLD_PREDICT_ENABLED', False):
             hold_predict_scheduler = HoldPredictScheduler()
             hold_predict_scheduler.start()

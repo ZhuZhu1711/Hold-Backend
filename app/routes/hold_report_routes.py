@@ -138,6 +138,46 @@ def api_fvi_defect_details():
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
+@hold_report_bp.route('/api/wafer_yield', methods=['GET'])
+@login_required
+def api_wafer_yield():
+    """
+    按 product_id + wafer_id 查询 VW_WAFER_YIELD。
+    Query: product_id, wafer_id 必填；wafer_id 为 #03 / #01#02 时 lot_id 必填。
+    多片按展开顺序返回 items[].yield，不聚合。
+    """
+    product_id = request.args.get('product_id', '').strip()
+    lot_id = request.args.get('lot_id', '').strip()
+    wafer_id = request.args.get('wafer_id', '').strip()
+    success, msg, data = hold_report_ctrl.get_wafer_yield(
+        product_id=product_id,
+        lot_id=lot_id or None,
+        wafer_id=wafer_id,
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if (
+        '请指定' in msg or '需同时' in msg or '无效' in msg
+    ) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@hold_report_bp.route('/api/wafer_yield/batch', methods=['POST'])
+@login_required
+def api_wafer_yield_batch():
+    """
+    批量查询 VW_WAFER_YIELD。
+    Body: { "items": [ { "key", "product_id", "lot_id", "wafer_id" }, ... ] }
+    """
+    body = request.get_json(silent=True) or {}
+    items = body.get('items') if isinstance(body, dict) else None
+    success, msg, data = hold_report_ctrl.get_wafer_yield_batch(items)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if ('请指定' in msg or '上限' in msg) else 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
 @hold_report_bp.route('/api/hold_count', methods=['GET'])
 @login_required
 def api_hold_count():

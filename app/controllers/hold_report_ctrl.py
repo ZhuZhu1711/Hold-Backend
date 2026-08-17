@@ -11,7 +11,7 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 import logging
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
@@ -411,6 +411,177 @@ def get_hold_count_by_wafer(wafer_id):
     except Exception as e:
         db.session.rollback()
         return False, f'查询失败: {e}', None
+
+
+def _to_yield_number(value):
+    if value is None:
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_yield_wafer_ids(product_id, lot_id, wafer_id):
+    """product_id + lot_id/wafer_id → MES 片号列表（顺序与展示串一致）。"""
+    product_id = str(product_id or '').strip()
+    lot_id = str(lot_id or '').strip()
+    wafer_id = str(wafer_id or '').strip()
+    if not product_id:
+        return False, '请指定 product_id', None
+    if not wafer_id:
+        return False, '请指定 wafer_id', None
+    if wafer_id.startswith('#') and not lot_id:
+        return False, '展示串 Wafer 需同时指定 lot_id', None
+
+    resolved = expand_display_wafer_ids(wafer_id, lot_id)
+    if wafer_id.startswith('#') and not resolved:
+        return False, '展示串 Wafer 需同时指定 lot_id', None
+
+    resolved_ids = []
+    seen = set()
+    for wid in (resolved or [wafer_id]):
+        wid = str(wid or '').strip()
+        if not wid or wid in seen:
+            continue
+        seen.add(wid)
+        resolved_ids.append(wid)
+    if not resolved_ids:
+        resolved_ids = [wafer_id]
+    return True, '', (product_id, lot_id, wafer_id, resolved_ids)
+
+
+def _query_vw_wafer_yields(lookups):
+    """lookups: iterable[(product_id, wafer_id)] → {(product_id, wafer_id): yield}."""
+    grouped = {}
+    for product_id, wafer_id in lookups or []:
+        pid = str(product_id or '').strip()
+        wid = str(wafer_id or '').strip()
+        if not pid or not wid:
+            continue
+        grouped.setdefault(pid, [])
+        if wid not in grouped[pid]:
+            grouped[pid].append(wid)
+
+    result = {}
+    sql = """
+        SELECT WAFER_ID, YIELD
+        FROM VW_WAFER_YIELD
+        WHERE PRODUCT_ID = :product_id
+          AND WAFER_ID IN :wafer_ids
+    """
+    for product_id, wafer_ids in grouped.items():
+        if not wafer_ids:
+            continue
+        stmt = text(sql).bindparams(bindparam('wafer_ids', expanding=True))
+        rows = db.session.execute(
+            stmt,
+            {'product_id': product_id, 'wafer_ids': wafer_ids},
+        ).fetchall()
+        for wafer_id, yield_val in rows:
+            wid = str(wafer_id).strip() if wafer_id is not None else ''
+            if not wid:
+                continue
+            result[(product_id, wid)] = _to_yield_number(yield_val)
+    return result
+
+
+def _pack_yield_payload(product_id, lot_id, wafer_id, resolved_ids, yield_map):
+    items = [
+        {
+            'wafer_id': wid,
+            'yield': yield_map.get((product_id, wid)),
+        }
+        for wid in resolved_ids
+    ]
+    return {
+        'product_id': product_id,
+        'lot_id': lot_id,
+        'wafer_id': wafer_id,
+        'resolved_wafer_ids': list(resolved_ids),
+        'items': items,
+    }
+
+
+def get_wafer_yield(product_id, lot_id=None, wafer_id=None):
+    """
+    按 product_id + 对齐后的 wafer_id 查询 VW_WAFER_YIELD。
+    展示串（#03 / #01#02）需配合 lot_id 还原；多片按展开顺序返回，不聚合。
+    """
+    ok, msg, resolved = _resolve_yield_wafer_ids(product_id, lot_id, wafer_id)
+    if not ok:
+        return False, msg, None
+
+    product_id, lot_id, wafer_id, resolved_ids = resolved
+    try:
+        yield_map = _query_vw_wafer_yields(
+            (product_id, wid) for wid in resolved_ids
+        )
+        return True, '获取成功', _pack_yield_payload(
+            product_id, lot_id, wafer_id, resolved_ids, yield_map,
+        )
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return False, f'数据库查询异常: {e}', None
+    except Exception as e:
+        db.session.rollback()
+        return False, f'查询失败: {e}', None
+
+
+def get_wafer_yield_batch(items):
+    """
+    批量查询 VW_WAFER_YIELD。
+    items: [{key, product_id, lot_id, wafer_id}, ...]
+    """
+    if not isinstance(items, list):
+        return False, '请指定 items', None
+    if len(items) > 200:
+        return False, 'items 数量超过上限 200', None
+
+    prepared = []
+    lookups = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        product_id = raw.get('product_id')
+        lot_id = raw.get('lot_id')
+        wafer_id = raw.get('wafer_id')
+        key = str(raw.get('key') or '').strip() or str(wafer_id or '').strip()
+        ok, msg, resolved = _resolve_yield_wafer_ids(product_id, lot_id, wafer_id)
+        if not ok:
+            prepared.append((
+                key,
+                str(product_id or '').strip(),
+                str(lot_id or '').strip(),
+                str(wafer_id or '').strip(),
+                [],
+                msg,
+            ))
+            continue
+        product_id, lot_id, wafer_id, resolved_ids = resolved
+        prepared.append((key, product_id, lot_id, wafer_id, resolved_ids, None))
+        for wid in resolved_ids:
+            lookups.append((product_id, wid))
+
+    try:
+        yield_map = _query_vw_wafer_yields(lookups) if lookups else {}
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return False, f'数据库查询异常: {e}', None
+    except Exception as e:
+        db.session.rollback()
+        return False, f'查询失败: {e}', None
+
+    out = []
+    for key, product_id, lot_id, wafer_id, resolved_ids, error in prepared:
+        payload = _pack_yield_payload(
+            product_id, lot_id, wafer_id, resolved_ids, yield_map,
+        )
+        payload['key'] = key
+        if error:
+            payload['error'] = error
+        out.append(payload)
+    return True, '获取成功', {'items': out}
 
 
 def get_hold_product_options(keyword=''):
