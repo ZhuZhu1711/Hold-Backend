@@ -5,5 +5,6 @@ from app import db
 from .user import User
 from .product import ProductInfo
 from .rawdata import TestWafer, TestBincode
+from .client_error import ClientError
 
-__all__ = ['User', 'ProductInfo', 'db']
+__all__ = ['User', 'ProductInfo', 'ClientError', 'db']
