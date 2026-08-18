@@ -19,6 +19,7 @@ DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不�
 DISPOSE_NOTE：工程师处置时选择的工程备注文本
 DISPOSE_MANUAL_NOTE：任意处置可选手输备注；可靠性分析之后的放行/降级必须手输
 """
+import json
 import logging
 import re
 from datetime import date, datetime
@@ -199,16 +200,80 @@ def _lookup_pro_eng_id(product_id: str) -> int:
     return _system_user_id()
 
 
+def _grade_sort_key(it):
+    g = it['grade']
+    has_f = 0 if 'F' in g.upper() else 1
+    return (has_f, g.upper(), g)
+
+
+def _grades_from_mapping(mapping):
+    items = []
+    for grade, qty in mapping.items():
+        g = str(grade).strip()
+        if not g:
+            continue
+        items.append({'grade': g, 'qty': '' if qty is None else str(qty).strip()})
+    return items
+
+
+def _grades_from_seq(seq):
+    items = []
+    for item in seq:
+        if isinstance(item, dict):
+            grade = str(item.get('grade') or item.get('GRADE') or '').strip()
+            qty = item.get('qty', item.get('QTY', ''))
+            if not grade and len(item) == 1:
+                key, val = next(iter(item.items()))
+                grade = str(key).strip()
+                qty = val
+            if not grade:
+                continue
+            items.append({'grade': grade, 'qty': '' if qty is None else str(qty).strip()})
+        elif isinstance(item, (list, tuple)) and item:
+            grade = str(item[0]).strip()
+            qty = item[1] if len(item) > 1 else ''
+            if grade:
+                items.append({'grade': grade, 'qty': '' if qty is None else str(qty).strip()})
+        elif item is not None and str(item).strip():
+            items.append({'grade': str(item).strip(), 'qty': ''})
+    return items
+
+
 def parse_grade_num(raw):
     """
-    解析 GRADE_NUM 文本（如 F:1151,HA:49）为 [{grade, qty}, ...]。
+    解析 GRADE_NUM（JSON 或 F:1151,HA:49）为 [{grade, qty}, ...]。
     含字母 F（不区分大小写）的等级排在前面，组内按等级名排序。
     """
     if raw is None:
         return []
+    if isinstance(raw, dict):
+        items = _grades_from_mapping(raw)
+        items.sort(key=_grade_sort_key)
+        return items
+    if isinstance(raw, list):
+        items = _grades_from_seq(raw)
+        items.sort(key=_grade_sort_key)
+        return items
+
     text_val = str(raw).strip()
     if not text_val:
         return []
+
+    if text_val[:1] in '{[':
+        try:
+            parsed = json.loads(text_val)
+            if isinstance(parsed, str) and parsed.strip()[:1] in '{[':
+                parsed = json.loads(parsed)
+            if isinstance(parsed, dict):
+                items = _grades_from_mapping(parsed)
+                items.sort(key=_grade_sort_key)
+                return items
+            if isinstance(parsed, list):
+                items = _grades_from_seq(parsed)
+                items.sort(key=_grade_sort_key)
+                return items
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
 
     items = []
     for part in re.split(r'[,，;；]+', text_val):
@@ -227,12 +292,7 @@ def parse_grade_num(raw):
             continue
         items.append({'grade': grade, 'qty': qty})
 
-    def sort_key(it):
-        g = it['grade']
-        has_f = 0 if 'F' in g.upper() else 1
-        return (has_f, g.upper(), g)
-
-    items.sort(key=sort_key)
+    items.sort(key=_grade_sort_key)
     return items
 
 
@@ -1459,7 +1519,7 @@ def get_pending_records(
             SELECT
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
-                r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
+                r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
                 c.DISPOSE AS LAST_DISPOSE,
                 c.NEXT_OWNER_ID,
                 c.DISPOSED_OWNER_ID,
@@ -1474,7 +1534,7 @@ def get_pending_records(
         rows = db.session.execute(text(data_sql), params).fetchall()
         data = []
         for r in rows:
-            item = _row_to_dict(r)
+            item = enrich_record_grades(_row_to_dict(r))
             last_dispose = item.get('LAST_DISPOSE')
             item['LAST_DISPOSE_LABEL'] = DISPOSE_LABELS.get(last_dispose, str(last_dispose))
             data.append(item)
