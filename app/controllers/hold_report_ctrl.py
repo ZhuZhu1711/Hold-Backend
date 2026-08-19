@@ -41,6 +41,8 @@ from app.controllers.dispose_ctrl import (
     pending_sample_bind_params,
 )
 from app.controllers.rawdata_ctrl import (
+    _format_test_time,
+    _same_lot_station_of,
     get_latest_defect_bincodes_for_wafers,
     query_same_lot_bincodes_by_prefixes,
 )
@@ -931,6 +933,16 @@ def _station_to_bysite_step_list(station=None):
     return []
 
 
+def _hold_same_lot_station(station=None):
+    """请求 station → 同 lot 行上的规范化工序（WLT / FA），供 raw_data 兼容字段挑选。"""
+    station = (station or '').strip()
+    if station == 'WLT2':
+        return 'WLT'
+    if station in ('FATE-FA', 'VBOX-FA'):
+        return 'FA'
+    return None
+
+
 def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     """
     Hold Record 数据分析：bysite + raw_data（qty 降序）+ 同 lot 片列表。
@@ -939,11 +951,13 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     展示串需配合 lot_id 还原真实 MES wafer id。
 
     station 仅允许 WLT2 / FATE-FA / VBOX-FA（由调用方按 record_type + lot_id 推导）。
+    station 只影响 bysite / 兼容字段 raw_data；同 lot BIN 同时拉 WLT + FA。
 
     同 lot（same_lot_rows）按 record_type / lot_id 后缀分情况：
       - record_type=1（FVI）：仅当前片
       - record_type=2（WLT），或 FT 且 lot 后缀位数≠>2：lot 前缀 LIKE TEST_WAFER
       - record_type=0（FT）且 lot 后缀位数>2：合批源片 → 各源 lot 前缀 LIKE，并标注合批源
+    同一片在 WLT 与 FA 都有数据时拆成两行（station / test_time）。
     """
     if wafer_id is None or not str(wafer_id).strip():
         return False, '请指定 wafer_id', None
@@ -994,38 +1008,94 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
         bysite_msg = f'bysite 查询失败: {e}'
         bysite = None
 
-    # 2) 同 lot / 合批：批量查 BIN，避免 N+1
+    # 2) 同 lot / 合批：批量查 WLT+FA BIN，避免 N+1
     source_lot_ids = []
     source_raw_data = {}
     is_merged = False
     same_lot_rows = []
-    raw_by_wafer = {}
-    die_by_wafer = {}
-    wafer_ids_ordered = []
+    raw_records = []
     merge_source_set = set()
+    hold_station_key = _hold_same_lot_station(station)
 
     def _lot_prefix_of(wid):
         return normalize_lot_id(wid) or lot_id_norm or None
 
+    def _merge_records(records):
+        existing = {
+            (str(r.get('wafer_id') or ''), str(r.get('station') or ''))
+            for r in raw_records
+        }
+        for rec in records or []:
+            if not isinstance(rec, dict):
+                continue
+            wid = str(rec.get('wafer_id') or '').strip()
+            st = str(rec.get('station') or '').strip() or _same_lot_station_of(
+                rec.get('operation_id')
+            )
+            if not wid:
+                continue
+            if not st:
+                st = ''
+            rec = dict(rec)
+            rec['station'] = st or rec.get('station')
+            rec['test_time'] = rec.get('test_time') or _format_test_time(
+                rec.get('ft_time')
+            ) or _format_test_time(rec.get('record_dttm'))
+            key = (wid, st)
+            if key in existing:
+                continue
+            existing.add(key)
+            raw_records.append(rec)
+
     def _ensure_raw_for_missing(extra_ids):
-        """对批量结果中缺失的片再打一次 IN 查询；仅写入 TEST_WAFER 命中的片。"""
+        """对批量结果中完全缺失的片再打一次 IN 查询；仅写入 TEST_WAFER 命中的站。"""
+        have = {str(r.get('wafer_id') or '') for r in raw_records}
         missing = [
             w for w in extra_ids
-            if w and w not in raw_by_wafer
+            if w and w not in have
         ]
-        if not missing or not operation_id:
+        if not missing:
             return
-        filled_raw, filled_die = get_latest_defect_bincodes_for_wafers(
-            missing, operation_id, sql_trace=sql_trace,
+        _merge_records(get_latest_defect_bincodes_for_wafers(
+            missing, sql_trace=sql_trace,
+        ))
+
+    def _records_for_wafer(wid):
+        return [
+            r for r in raw_records
+            if str(r.get('wafer_id') or '') == wid
+        ]
+
+    def _pack_row(wid, rec=None):
+        rec = rec if isinstance(rec, dict) else {}
+        die_num = rec.get('die_num')
+        try:
+            die_num = int(die_num) if die_num is not None else None
+        except (TypeError, ValueError):
+            die_num = None
+        station = str(rec.get('station') or '').strip() or _same_lot_station_of(
+            rec.get('operation_id')
+        ) or None
+        test_time = rec.get('test_time') or _format_test_time(rec.get('ft_time')) or _format_test_time(
+            rec.get('record_dttm')
         )
-        for wid, raw_map in filled_raw.items():
-            raw_by_wafer[wid] = raw_map if isinstance(raw_map, dict) else {}
-        for wid, die_num in filled_die.items():
-            die_by_wafer[wid] = die_num
+        if test_time and not isinstance(test_time, str):
+            test_time = _format_test_time(test_time)
+        return {
+            'wafer_id': wid,
+            'is_current': wid in current_set,
+            'is_merge_source': wid in merge_source_set,
+            'lot_prefix': _lot_prefix_of(wid),
+            'raw_data': rec.get('raw_data') if isinstance(rec.get('raw_data'), dict) else {},
+            'die_num': die_num,
+            'operation_id': rec.get('operation_id') or None,
+            'station': station,
+            'test_time': test_time or None,
+        }
 
     def _build_rows(ordered_ids, *, require_test_wafer=True):
         """
-        组装 same_lot_rows。
+        组装 same_lot_rows：每片每个站一行。
         require_test_wafer=True 时：TEST_WAFER 未命中的片不展示（当前片除外）。
         """
         rows = []
@@ -1034,62 +1104,58 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
             wid = str(wid or '').strip()
             if not wid or wid in seen:
                 continue
-            is_current = wid in current_set
-            if require_test_wafer and wid not in raw_by_wafer and not is_current:
-                continue
             seen.add(wid)
-            rows.append({
-                'wafer_id': wid,
-                'is_current': is_current,
-                'is_merge_source': wid in merge_source_set,
-                'lot_prefix': _lot_prefix_of(wid),
-                'raw_data': raw_by_wafer.get(wid) or {},
-                'die_num': die_by_wafer.get(wid),
-            })
+            recs = _records_for_wafer(wid)
+            is_current = wid in current_set
+            if require_test_wafer and not recs and not is_current:
+                continue
+            if not recs:
+                rows.append(_pack_row(wid))
+                continue
+            for rec in recs:
+                rows.append(_pack_row(wid, rec))
         return rows
 
     def _ordered_from_query(must_have=None):
         """以 TEST_WAFER 查询结果为主；当前片始终保留。"""
-        ordered = list(wafer_ids_ordered)
-        seen = set(ordered)
-        for wid in list(raw_by_wafer.keys()):
-            if wid not in seen:
-                ordered.append(wid)
-                seen.add(wid)
+        ordered = []
+        seen = set()
+        for rec in raw_records:
+            wid = str(rec.get('wafer_id') or '').strip()
+            if not wid or wid in seen:
+                continue
+            ordered.append(wid)
+            seen.add(wid)
         for wid in must_have or []:
             wid = str(wid or '').strip()
             if not wid or wid in seen:
                 continue
-            # 仅当前片在未命中 TEST_WAFER 时仍占位；其它片不展示
             if wid in current_set:
                 ordered.append(wid)
                 seen.add(wid)
         return ordered
 
-    def _apply_batch_result(ids, raw_map, die_map):
-        wafer_ids_ordered[:] = list(ids or [])
-        raw_by_wafer.clear()
-        raw_by_wafer.update(raw_map or {})
-        die_by_wafer.clear()
-        die_by_wafer.update(die_map or {})
+    def _raw_for(wid, prefer_station=None):
+        matches = _records_for_wafer(wid)
+        if prefer_station:
+            for rec in matches:
+                if str(rec.get('station') or '') == prefer_station:
+                    return rec.get('raw_data') if isinstance(rec.get('raw_data'), dict) else {}
+        if matches:
+            rec = matches[0]
+            return rec.get('raw_data') if isinstance(rec.get('raw_data'), dict) else {}
+        return {}
 
     if fragmented_multi:
         is_merged = True
         source_lot_ids = list(resolved_ids[1:])
 
     if rt == 1:
-        # FVI：仅当前片
-        if operation_id:
-            filled_raw, filled_die = get_latest_defect_bincodes_for_wafers(
-                [primary_wafer], operation_id, sql_trace=sql_trace,
-            )
-            raw_by_wafer.update(filled_raw)
-            die_by_wafer.update(filled_die)
-            if primary_wafer not in raw_by_wafer:
-                raw_by_wafer[primary_wafer] = {}
-            raw_msg = '获取成功'
-        else:
-            raw_msg = '无法确定 operation_id，跳过 raw_data'
+        # FVI：仅当前片（接口仍返回 WLT/FA 分行，供兼容）
+        _merge_records(get_latest_defect_bincodes_for_wafers(
+            [primary_wafer], sql_trace=sql_trace,
+        ))
+        raw_msg = '获取成功'
         same_lot_rows = _build_rows([primary_wafer], require_test_wafer=False)
     elif rt == 0 and lot_id_digit_suffix_len(raw_lot_id) > 2:
         # FT 合批：MES 源片 → 多前缀一次 LIKE + BIN
@@ -1111,18 +1177,14 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
                 prefixes.append(pref)
 
         raw_msg = ''
-        if prefixes and operation_id:
-            ids, raw_map, die_map = query_same_lot_bincodes_by_prefixes(
-                prefixes, operation_id, sql_trace=sql_trace,
-            )
-            _apply_batch_result(ids, raw_map, die_map)
+        if prefixes:
+            _merge_records(query_same_lot_bincodes_by_prefixes(
+                prefixes, sql_trace=sql_trace,
+            ))
             raw_msg = '获取成功'
-        elif not operation_id:
-            raw_msg = '无法确定 operation_id，跳过 raw_data'
         else:
             raw_msg = '无合批源前缀，降级当前片'
 
-        # 仅补查仍可能存在于 TEST_WAFER 的片；查不到的不展示
         must_have = list(source_lot_ids) + [primary_wafer]
         _ensure_raw_for_missing(must_have)
         same_lot_rows = _build_rows(_ordered_from_query(must_have=[primary_wafer]))
@@ -1138,14 +1200,11 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
 
         prefix = lot_id_norm or normalize_lot_id(primary_wafer)
         raw_msg = ''
-        if prefix and operation_id:
-            ids, raw_map, die_map = query_same_lot_bincodes_by_prefixes(
-                [prefix], operation_id, sql_trace=sql_trace,
-            )
-            _apply_batch_result(ids, raw_map, die_map)
+        if prefix:
+            _merge_records(query_same_lot_bincodes_by_prefixes(
+                [prefix], sql_trace=sql_trace,
+            ))
             raw_msg = '获取成功'
-        elif not operation_id:
-            raw_msg = '无法确定 operation_id，跳过 raw_data'
         else:
             raw_msg = '无 lot 前缀'
 
@@ -1157,19 +1216,24 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
         if not same_lot_rows:
             same_lot_rows = _build_rows([primary_wafer], require_test_wafer=False)
 
-    raw_data = raw_by_wafer.get(primary_wafer) or {}
-    # 兼容字段：仅保留 TEST_WAFER 命中的源片 raw
+    raw_data = _raw_for(primary_wafer, hold_station_key)
+    # 兼容字段：仅保留 TEST_WAFER 命中的源片 raw（优先当前 hold 对应站）
     for src in source_lot_ids:
         src = str(src or '').strip()
-        if src and src in raw_by_wafer:
-            source_raw_data[src] = raw_by_wafer.get(src) or {}
+        if not src:
+            continue
+        src_raw = _raw_for(src, hold_station_key)
+        if src_raw:
+            source_raw_data[src] = src_raw
 
-    # 当前片优先，其次合批源，再按 wafer_id
+    # 当前片优先，其次合批源，再按 wafer_id、测试时间（WLT 通常更早）
     same_lot_rows.sort(
         key=lambda r: (
             0 if r.get('is_current') else 1,
             0 if r.get('is_merge_source') else 1,
             str(r.get('wafer_id') or ''),
+            str(r.get('test_time') or ''),
+            0 if str(r.get('station') or '') == 'WLT' else 1,
         )
     )
 

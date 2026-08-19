@@ -1,10 +1,19 @@
 """
 晶圆测试数据查询控制器
 """
+from datetime import date, datetime
+import logging
 from app import db
 from sqlalchemy import bindparam, desc, text
 from app.models.rawdata import TestWafer, TestBincode
 import json
+
+
+logger = logging.getLogger(__name__)
+
+# 同 lot 纵向对比：WLT + FT FA（FATE-FA 入库 remap 为 FA，此处一并兼容）
+SAME_LOT_OPERATION_IDS = ('WLT2', 'FA', 'FATE-FA', 'VBOX-FA')
+_SAME_LOT_OP_IN_SQL = "(" + ", ".join(f"'{op}'" for op in SAME_LOT_OPERATION_IDS) + ")"
 
 
 def _compact_sql(sql: str) -> str:
@@ -176,19 +185,161 @@ def query_wafer_ids_by_prefix(prefix, operation_id=None, sql_trace=None):
     return result
 
 
-def query_same_lot_bincodes_by_prefixes(prefixes, operation_id, sql_trace=None):
-    """
-    一次查出多个 lot 前缀下、指定工序的最新缺陷 BIN 与 GROSS_DIE。
+def _same_lot_station_of(operation_id):
+    op = str(operation_id or '').strip().upper()
+    if op == 'WLT2':
+        return 'WLT'
+    if op in {'FA', 'FATE-FA', 'VBOX-FA'}:
+        return 'FA'
+    return op or ''
 
-    用 ROW_NUMBER 取每片最新 TEST_WAFER，再 LEFT JOIN TEST_BINCODE。
-    去掉 PRODUCT_INFO 内连接以降低开销。
+
+def _format_test_time(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(value, date):
+        return value.strftime('%Y-%m-%d')
+    strftime = getattr(value, 'strftime', None)
+    if callable(strftime):
+        try:
+            return strftime('%Y-%m-%d %H:%M:%S')
+        except (TypeError, ValueError, OverflowError):
+            pass
+    text = str(value).strip()
+    if not text or text.lower() == 'none':
+        return None
+    if len(text) >= 19 and text[10] == ' ' and text[4] == '-':
+        return text[:19]
+    return text
+
+
+def _parse_die_num(gross_die):
+    if gross_die is None:
+        return None
+    try:
+        return int(gross_die)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_value(row, index, *names):
+    mapping = getattr(row, '_mapping', None)
+    if mapping is not None:
+        keys = {str(k).upper(): k for k in mapping.keys()}
+        for name in names:
+            real = keys.get(str(name).upper())
+            if real is not None:
+                return mapping[real]
+    try:
+        return row[index]
+    except (IndexError, KeyError, TypeError):
+        return None
+
+
+def _assemble_same_lot_records(rows):
+    """
+    SQL 行 → 按 (wafer_id, station) 聚合。
+
+    每条记录：wafer_id / station / operation_id / test_time / die_num / raw_data
+    """
+    records = []
+    index = {}
+    for row in rows or []:
+        wafer_id = _row_value(row, 0, 'WAFER_ID')
+        operation_id = _row_value(row, 1, 'OPERATION_ID')
+        ft_time = _row_value(row, 2, 'FT_TIME')
+        record_dttm = _row_value(row, 3, 'RECORD_DTTM')
+        gross_die = _row_value(row, 4, 'GROSS_DIE')
+        bin_code = _row_value(row, 5, 'BIN_CODE')
+        bin_code_qty = _row_value(row, 6, 'BIN_CODE_QTY')
+        if wafer_id is None:
+            continue
+        wid = str(wafer_id).strip()
+        if not wid:
+            continue
+        station = _same_lot_station_of(operation_id)
+        if not station:
+            continue
+        key = (wid, station)
+        rec = index.get(key)
+        if rec is None:
+            rec = {
+                'wafer_id': wid,
+                'station': station,
+                'operation_id': str(operation_id or '').strip() or None,
+                'test_time': _format_test_time(ft_time) or _format_test_time(record_dttm),
+                'die_num': _parse_die_num(gross_die),
+                'raw_data': {},
+            }
+            index[key] = rec
+            records.append(rec)
+        if bin_code is None:
+            continue
+        rec['raw_data'][str(int(bin_code))] = (
+            int(bin_code_qty) if bin_code_qty is not None else 0
+        )
+    return records
+
+
+def _same_lot_latest_sql(where_sql):
+    # 内层先算出 STN，再按 (片, 站) 取最新；时间列用原字段名，避免别名绑定问题
+    return f"""
+        SELECT
+            latest.WAFER_ID,
+            latest.OPERATION_ID,
+            latest.FT_TIME,
+            latest.RECORD_DTTM,
+            latest.GROSS_DIE,
+            atb.BIN_CODE,
+            atb.BIN_CODE_QTY
+        FROM (
+            SELECT
+                src.WAFER_ID,
+                src.OPERATION_ID,
+                src.ID AS id,
+                src.GROSS_DIE,
+                src.FT_TIME,
+                src.RECORD_DTTM,
+                ROW_NUMBER() OVER (
+                    PARTITION BY src.WAFER_ID, src.STN
+                    ORDER BY src.ID DESC
+                ) AS rn
+            FROM (
+                SELECT
+                    atw.WAFER_ID,
+                    atw.OPERATION_ID,
+                    atw.ID,
+                    atw.GROSS_DIE,
+                    atw.FT_TIME,
+                    atw.RECORD_DTTM,
+                    CASE
+                        WHEN atw.OPERATION_ID = 'WLT2' THEN 'WLT'
+                        ELSE 'FA'
+                    END AS STN
+                FROM TEST_WAFER atw
+                WHERE atw.OPERATION_ID IN {_SAME_LOT_OP_IN_SQL}
+                  AND ({where_sql})
+            ) src
+        ) latest
+        LEFT JOIN TEST_BINCODE atb ON atb.TEST_WAFER_SEQ = latest.id
+        WHERE latest.rn = 1
+        ORDER BY latest.WAFER_ID, latest.FT_TIME NULLS LAST,
+                 latest.OPERATION_ID, atb.BIN_CODE_QTY DESC NULLS LAST, atb.BIN_CODE
+    """
+
+
+def query_same_lot_bincodes_by_prefixes(prefixes, sql_trace=None):
+    """
+    一次查出多个 lot 前缀下 WLT + FA 的最新缺陷 BIN。
+
+    每片每个规范化工序（WLT / FA）取 ID 最大的 TEST_WAFER，再 LEFT JOIN TEST_BINCODE。
+    FA 与 FATE-FA 视为同一站。
 
     Returns:
-        (wafer_ids_ordered, raw_by_wafer, die_by_wafer)
-        wafer_ids_ordered: list[str]
-        raw_by_wafer: {wafer_id: {bin_code: qty}}
-        die_by_wafer: {wafer_id: gross_die|None}
-        失败返回 ([], {}, {})
+        list[dict]：wafer_id / station / operation_id / test_time / die_num / raw_data
+        失败或空输入返回 []
     """
     seen = set()
     clean_prefixes = []
@@ -200,42 +351,16 @@ def query_same_lot_bincodes_by_prefixes(prefixes, operation_id, sql_trace=None):
         clean_prefixes.append(text_p)
 
     if not clean_prefixes:
-        return [], {}, {}
-    if operation_id is None or not str(operation_id).strip():
-        return [], {}, {}
+        return []
 
-    operation_id = str(operation_id).strip()
-    params = {'operation_id': operation_id}
+    params = {}
     like_parts = []
     for i, pref in enumerate(clean_prefixes):
         key = f'p{i}'
         like_parts.append(f'atw.WAFER_ID LIKE :{key}')
         params[key] = f'{pref}%'
     like_sql = ' OR '.join(like_parts)
-
-    sql = f"""
-        SELECT
-            latest.WAFER_ID,
-            latest.GROSS_DIE,
-            atb.BIN_CODE,
-            atb.BIN_CODE_QTY
-        FROM (
-            SELECT
-                atw.WAFER_ID,
-                atw.ID AS id,
-                atw.GROSS_DIE,
-                ROW_NUMBER() OVER (
-                    PARTITION BY atw.WAFER_ID
-                    ORDER BY atw.ID DESC
-                ) AS rn
-            FROM TEST_WAFER atw
-            WHERE atw.OPERATION_ID = :operation_id
-              AND ({like_sql})
-        ) latest
-        LEFT JOIN TEST_BINCODE atb ON atb.TEST_WAFER_SEQ = latest.id
-        WHERE latest.rn = 1
-        ORDER BY latest.WAFER_ID, atb.BIN_CODE_QTY DESC NULLS LAST, atb.BIN_CODE
-    """
+    sql = _same_lot_latest_sql(like_sql)
     _trace_sql(
         sql_trace, sql, params,
         tag='query_same_lot_bincodes_by_prefixes',
@@ -244,46 +369,20 @@ def query_same_lot_bincodes_by_prefixes(prefixes, operation_id, sql_trace=None):
     try:
         rows = db.session.execute(text(sql), params).fetchall()
     except Exception:
+        logger.exception('query_same_lot_bincodes_by_prefixes failed')
         db.session.rollback()
-        return [], {}, {}
+        return []
 
-    raw_by_wafer = {}
-    die_by_wafer = {}
-    wafer_ids_ordered = []
-    for wafer_id, gross_die, bin_code, bin_code_qty in rows:
-        if wafer_id is None:
-            continue
-        wid = str(wafer_id).strip()
-        if not wid:
-            continue
-        if wid not in raw_by_wafer:
-            raw_by_wafer[wid] = {}
-            wafer_ids_ordered.append(wid)
-            if gross_die is not None:
-                try:
-                    die_by_wafer[wid] = int(gross_die)
-                except (TypeError, ValueError):
-                    die_by_wafer[wid] = None
-            else:
-                die_by_wafer[wid] = None
-        if bin_code is None:
-            continue
-        raw_by_wafer[wid][str(int(bin_code))] = (
-            int(bin_code_qty) if bin_code_qty is not None else 0
-        )
-
-    return wafer_ids_ordered, raw_by_wafer, die_by_wafer
+    return _assemble_same_lot_records(rows)
 
 
-def get_latest_defect_bincodes_for_wafers(wafer_ids, operation_id, sql_trace=None):
+def get_latest_defect_bincodes_for_wafers(wafer_ids, sql_trace=None):
     """
-    批量查询多片最新缺陷 BIN（IN 列表）及 GROSS_DIE。
+    按片号 IN 列表补查 WLT + FA 最新缺陷 BIN。
 
     Returns:
-        (raw_by_wafer, die_by_wafer)
-        raw_by_wafer: {wafer_id: {bin_code: qty}}
-        die_by_wafer: {wafer_id: gross_die|None}
-        失败或空输入返回 ({}, {})
+        list[dict]：同 query_same_lot_bincodes_by_prefixes
+        失败或空输入返回 []
     """
     ids = []
     seen = set()
@@ -295,35 +394,10 @@ def get_latest_defect_bincodes_for_wafers(wafer_ids, operation_id, sql_trace=Non
         ids.append(text_w)
 
     if not ids:
-        return {}, {}
-    if operation_id is None or not str(operation_id).strip():
-        return {}, {}
+        return []
 
-    operation_id = str(operation_id).strip()
-    sql = """
-        SELECT
-            latest.WAFER_ID,
-            latest.GROSS_DIE,
-            atb.BIN_CODE,
-            atb.BIN_CODE_QTY
-        FROM (
-            SELECT
-                atw.WAFER_ID,
-                atw.ID AS id,
-                atw.GROSS_DIE,
-                ROW_NUMBER() OVER (
-                    PARTITION BY atw.WAFER_ID
-                    ORDER BY atw.ID DESC
-                ) AS rn
-            FROM TEST_WAFER atw
-            WHERE atw.OPERATION_ID = :operation_id
-              AND atw.WAFER_ID IN :wafer_ids
-        ) latest
-        LEFT JOIN TEST_BINCODE atb ON atb.TEST_WAFER_SEQ = latest.id
-        WHERE latest.rn = 1
-        ORDER BY latest.WAFER_ID, atb.BIN_CODE_QTY DESC NULLS LAST, atb.BIN_CODE
-    """
-    params = {'operation_id': operation_id, 'wafer_ids': ids}
+    sql = _same_lot_latest_sql('atw.WAFER_ID IN :wafer_ids')
+    params = {'wafer_ids': ids}
     _trace_sql(
         sql_trace, sql, params,
         tag='get_latest_defect_bincodes_for_wafers',
@@ -333,32 +407,11 @@ def get_latest_defect_bincodes_for_wafers(wafer_ids, operation_id, sql_trace=Non
     try:
         rows = db.session.execute(stmt, params).fetchall()
     except Exception:
+        logger.exception('get_latest_defect_bincodes_for_wafers failed')
         db.session.rollback()
-        return {}, {}
+        return []
 
-    raw_by_wafer = {}
-    die_by_wafer = {}
-    for wafer_id, gross_die, bin_code, bin_code_qty in rows:
-        if wafer_id is None:
-            continue
-        wid = str(wafer_id).strip()
-        if not wid:
-            continue
-        if wid not in raw_by_wafer:
-            raw_by_wafer[wid] = {}
-            if gross_die is not None:
-                try:
-                    die_by_wafer[wid] = int(gross_die)
-                except (TypeError, ValueError):
-                    die_by_wafer[wid] = None
-            else:
-                die_by_wafer[wid] = None
-        if bin_code is None:
-            continue
-        raw_by_wafer[wid][str(int(bin_code))] = (
-            int(bin_code_qty) if bin_code_qty is not None else 0
-        )
-    return raw_by_wafer, die_by_wafer
+    return _assemble_same_lot_records(rows)
 
 
 def _calculate_yield(wafer):
