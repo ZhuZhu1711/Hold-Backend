@@ -836,6 +836,40 @@ def insert_manual_hold_record(
         connection.close()
 
 
+def update_manual_hold_annex_path(record_id, annex_ftp_path, record_table=None) -> bool:
+    """回写 ANNEX_FTP_PATH。成功 True。"""
+    record_tbl = resolve_hold_record_table(record_table)
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return False
+    try:
+        rid = int(record_id)
+    except (TypeError, ValueError):
+        return False
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                    UPDATE {record_tbl}
+                    SET ANNEX_FTP_PATH = :path
+                    WHERE ID = :rid
+                """,
+                {'path': annex_ftp_path, 'rid': rid},
+            )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                return False
+            connection.commit()
+            return True
+    except Exception as e:
+        connection.rollback()
+        logger.error(f"回写 ANNEX_FTP_PATH 失败 id={record_id}: {e}", exc_info=True)
+        return False
+    finally:
+        connection.close()
+
+
 def query_dirty_hold_infos(
     info_table: str = 'FT_HOLD_INFO_TEST',
     product_id: str = '',
@@ -1269,14 +1303,18 @@ def _short_defect_code(raw) -> str:
 
 def normalize_lot_id(lot_id) -> str:
     """
-    MES LOT ID → 用户侧 LOT ID。
-    若含 '-'，截取第一个 '-' 之前的文本（不含 '-'）；否则原样返回。
+    MES / 手提 LOT ID → 用于拼真实片号的 lot 前缀。
+    含 '-'：截取第一个 '-' 之前。
+    含 '.NN'（1~2 位数字，WLT 手提 LOT.NO）：去掉 .NO。
     """
     text = str(lot_id).strip() if lot_id is not None else ''
     if not text:
         return ''
     if '-' in text:
         return text.split('-', 1)[0].strip()
+    m = re.match(r'^(.*)\.(\d{1,2})$', text)
+    if m:
+        return m.group(1).strip()
     return text
 
 

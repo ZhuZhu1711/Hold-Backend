@@ -16,10 +16,14 @@
 
 | 产线 `line` | PRODUCT_ID | HOLD_CODE | RECORD_TYPE | STATION |
 | --- | --- | --- | --- | --- |
-| `FT` | 须 `*-3.5` | 当前仅 `AQL_HOLD`（可扩） | `0` FT 异常反馈单 | 必填 |
-| `WLT` | 须 `*-2.6` | `004` 或 `022` | `2` WLT 异常反馈单 | 默认 `WOQC` |
+| `FT` | 须 `*-3.5`，可关键字匹配 `PRODUCT_INFO` | 当前仅 `AQL_HOLD`（可扩） | `0` FT 异常反馈单 | 从合批 FT 站点中选（不含 FAOIFINISH / FFVI） |
+| `WLT` | 须 `*-2.6`，可关键字匹配 `PRODUCT_INFO` | `004` 或 `022` | `2` WLT 异常反馈单 | 固定 `WLT2` |
 
 其它必填：`equip_id`、`lot_id`、`wafer_id`、`hold_reason`。
+
+- **FT**：`LOT_ID` 与 `WAFER_ID` 相同，均手输。
+- **WLT**：`LOT_ID` 手输，格式 `LOT.NO`（`NO` 为本 lot 第一片片号，如 `C123456.01`）。未带 `.NO` 时用所选最小片号补上。`WAFER_ID` 由勾选的 1~25 片拼接，如 `#01#03#13`。也可传 `wafer_nos: [1,3,13]`。
+- 型号：`GET /admin/hold/api/manual_hold/products?line=FT|WLT`。创建时精确匹配，否则唯一前缀/包含命中则采用。工程师仅所属型号。
 
 FT `hold_code` 从允许列表中选，目前只有 `AQL_HOLD`；未传时默认该项。后续加码时同步更新允许列表、页面下拉，以及合批「FT 异常反馈单」码表。分析是否改看附件仍按码本身判断（目前仅 `AQL_HOLD` 跳过 `/api/analysis`）。
 
@@ -27,10 +31,17 @@ FT `hold_code` 从允许列表中选，目前只有 `AQL_HOLD`；未传时默认
 
 ### 附件 `ANNEX_FTP_PATH`
 
+单条记录最多 **25** 张。附件走独立 FTP（`Config.ANNEX_FTP_HOST` / `USER` / `PASSWD`），与 TESTLOG 不是同一台。按产线平铺，不再按型号/lot 分子目录：
+
+- FT：`/JDY_UPLOAD/FT_MANUAL/`
+- WLT：`/JDY_UPLOAD/WLT_MANUAL/`
+
+服务端上传文件名：`{recordId}_{n}.ext`（如 `188_1.jpg`）。`ANNEX_FTP_PATH` 存相对名 `@188_1.jpg@188_2.jpg`，下载时再拼根目录，避免 VARCHAR2(1024) 写满。已带 `/` 的绝对路径仍按原样下载。
+
 多图路径以 `@` 引导拼接，例如：
 
 ```
-@/JDY_UPLOAD/HOLD_ANNEX/a.jpg@/JDY_UPLOAD/HOLD_ANNEX/b.jpg
+@188_1.jpg@188_2.jpg
 ```
 
 解析：`split('@')` 后丢掉空段。字段可空。
@@ -49,19 +60,33 @@ JSON（调用方已把图传到 FTP）：
 {
   "line": "FT",
   "product_id": "XX-3.5",
-  "station": "FIQC",
+  "station": "FIQC_MERGE",
   "equip_id": "MANUAL",
   "lot_id": "ABC01",
   "wafer_id": "ABC01",
   "hold_code": "AQL_HOLD",
   "hold_reason": "AQL 抽检不合格",
-  "annex_ftp_path": "@/JDY_UPLOAD/HOLD_ANNEX/a.jpg@/JDY_UPLOAD/HOLD_ANNEX/b.jpg"
+  "annex_ftp_path": "@/JDY_UPLOAD/FT_MANUAL/a.jpg@/JDY_UPLOAD/FT_MANUAL/b.jpg"
 }
 ```
 
-WLT 示例：`"line":"WLT"`，`"hold_code":"004"`（或 `022`）。也可传 `annex_paths: ["/a.jpg","/b.jpg"]`。
+WLT 示例：
 
-`multipart/form-data`：同样字段 + `files`（或多张 `images`）由服务端上传到 `/JDY_UPLOAD/HOLD_ANNEX/{product}/{lot}/`。
+```json
+{
+  "line": "WLT",
+  "product_id": "XX-2.6",
+  "hold_code": "004",
+  "equip_id": "MANUAL",
+  "lot_id": "C123456.01",
+  "wafer_nos": [1, 3, 13],
+  "hold_reason": "WLT 抽检"
+}
+```
+
+写入 `STATION=WLT2`，`WAFER_ID=#01#03#13`。也可直接传 `"wafer_id":"#01#03#13"`。`annex_paths: ["/a.jpg","/b.jpg"]` 同样支持。
+
+`multipart/form-data`：同样字段 + `files`（或多张 `images`）。先插入 Record，再把文件平铺存到 `/JDY_UPLOAD/FT_MANUAL/` 或 `/JDY_UPLOAD/WLT_MANUAL/`，文件名为 `{recordId}_{n}.ext`。库内 `ANNEX_FTP_PATH` 存相对名以控制 1024 长度。
 
 **成功：** `{ code: 200, msg: "创建成功", data: { ID, PRODUCT_ID, HOLD_CODE, RECORD_TYPE, ANNEX_COUNT, ... } }`
 

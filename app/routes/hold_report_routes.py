@@ -83,6 +83,7 @@ def manual_hold_page():
         user_name=session.get('user_name'),
         role_name=current_role_name(),
         nav_area=nav_area,
+        **manual_hold_ctrl.manual_hold_page_options(),
     )
 
 
@@ -169,6 +170,9 @@ def _manual_hold_payload():
     paths = request.form.getlist('annex_paths')
     if paths:
         data['annex_paths'] = paths
+    nos = request.form.getlist('wafer_nos')
+    if nos:
+        data['wafer_nos'] = nos
     return data
 
 
@@ -178,7 +182,7 @@ def api_manual_hold():
     """
     创建手提 Hold Record（SOURCE=1）。
     JSON 或 multipart：line=FT|WLT，product_id / station / equip_id / lot_id /
-    wafer_id / hold_reason；WLT 须 hold_code=004|022。
+    wafer_id / hold_reason；WLT 须 hold_code=004|022，STATION 固定 WLT2。
     附件：annex_ftp_path / annex_paths，或 files/images 上传。
     工程师仅可创建所属型号。
     """
@@ -193,7 +197,7 @@ def api_manual_hold():
         return jsonify({'code': 200, 'msg': msg, 'data': data})
     if '不属于' in msg:
         status = 403
-    elif any(k in msg for k in ('须', '缺少', '要求', '不支持', '过大', '为空')):
+    elif any(k in msg for k in ('须', '缺少', '要求', '不支持', '过大', '为空', '匹配', '相同', '超过')):
         status = 400
     else:
         status = 500
@@ -216,6 +220,24 @@ def api_manual_hold_recent():
     return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
 
 
+@hold_report_bp.route('/api/manual_hold/products', methods=['GET'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
+def api_manual_hold_products():
+    """手提型号智能匹配：PRODUCT_INFO，按产线后缀过滤。工程师仅所属型号。"""
+    owner_eng_id = None
+    if session.get('role') == ROLE_ENGINEER:
+        owner_eng_id = session.get('user_id')
+    success, msg, data = manual_hold_ctrl.list_manual_hold_products(
+        request.args.get('line', '').strip(),
+        keyword=request.args.get('keyword', '').strip(),
+        owner_eng_id=owner_eng_id,
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 400 if '须为' in msg else 500
+    return jsonify({'code': status, 'msg': msg, 'data': []}), status
+
+
 @hold_report_bp.route('/api/annex_image', methods=['GET'])
 @login_required
 def api_annex_image():
@@ -228,13 +250,35 @@ def api_annex_image():
         request.args.get('index', 0),
     )
     if success:
+        as_attachment = str(request.args.get('download') or '').lower() in ('1', 'true', 'yes')
         return send_file(
             io.BytesIO(payload['bytes']),
             mimetype=payload.get('mimetype') or 'application/octet-stream',
             download_name=payload.get('filename') or 'annex',
-            as_attachment=False,
+            as_attachment=as_attachment,
         )
     if '不存在' in msg or '无附件' in msg or '超出' in msg:
+        status = 404
+    elif any(k in msg for k in ('无效', '须为')):
+        status = 400
+    else:
+        status = 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@hold_report_bp.route('/api/annex_zip', methods=['GET'])
+@login_required
+def api_annex_zip():
+    """打包下载该 hold_record 全部附件。Query: record_id"""
+    success, msg, payload = manual_hold_ctrl.get_annex_zip(request.args.get('record_id'))
+    if success:
+        return send_file(
+            io.BytesIO(payload['bytes']),
+            mimetype=payload.get('mimetype') or 'application/zip',
+            download_name=payload.get('filename') or 'annex.zip',
+            as_attachment=True,
+        )
+    if '不存在' in msg or '无附件' in msg:
         status = 404
     elif any(k in msg for k in ('无效', '须为')):
         status = 400

@@ -29,8 +29,13 @@ class Config:
 
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
-    # 手提 Hold 附件图 FTP 根目录（与 TESTLOG 同一台 share）
-    ANNEX_FTP_REMOTE_DIR = '/JDY_UPLOAD/HOLD_ANNEX/'
+    # 手提 Hold 附件图 FTP（独立于 TESTLOG；请自行填写 HOST / USER / PASSWD）
+    ANNEX_FTP_HOST = '172.18.107.206'
+    ANNEX_FTP_USER = 'ft'
+    ANNEX_FTP_PASSWD = 'FTabc@123'
+    ANNEX_FTP_TIMEOUT = 8
+    ANNEX_FTP_FT_DIR = '/JDY_UPLOAD/FT_MANUAL/'
+    ANNEX_FTP_WLT_DIR = '/JDY_UPLOAD/WLT_MANUAL/'
 
     # 数据分析用 testlog FTP（bysite / testlog 下载）
     TESTLOG_FTP_HOST = '172.18.200.250'

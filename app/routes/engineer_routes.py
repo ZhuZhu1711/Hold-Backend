@@ -9,7 +9,7 @@
 """
 from flask import Blueprint, render_template, request, jsonify, session
 
-from app.controllers import engineer_ctrl, dispose_ctrl
+from app.controllers import engineer_ctrl, dispose_ctrl, manual_hold_ctrl
 from app.utils.auth_decorators import engineer_required, current_role_name
 from app.utils.excel_export import stamp_filename, xlsx_or_error
 
@@ -82,7 +82,10 @@ def notes_page():
 @engineer_required
 def manual_hold_page():
     """手提 Hold 料：仅所属型号。"""
-    return render_template('hold/manual_hold.html', **_page_ctx(nav_area='eng'))
+    return render_template(
+        'hold/manual_hold.html',
+        **_page_ctx(nav_area='eng', **manual_hold_ctrl.manual_hold_page_options()),
+    )
 
 
 # ==========================================

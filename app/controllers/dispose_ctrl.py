@@ -1472,7 +1472,7 @@ def get_pending_records(
     成功返回 (True, msg, page_payload)。
     """
     try:
-        from app.controllers.hold_report_ctrl import _parse_page, _page_payload
+        from app.controllers.hold_report_ctrl import RECORD_TYPE_LABELS, _parse_page, _page_payload
 
         record_table = _record_table()
         if limit is not None and (page is None or str(page) in ('', '1')):
@@ -1525,6 +1525,7 @@ def get_pending_records(
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
                 r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
+                r.ANNEX_FTP_PATH,
                 c.DISPOSE AS LAST_DISPOSE,
                 c.NEXT_OWNER_ID,
                 c.DISPOSED_OWNER_ID,
@@ -1542,6 +1543,13 @@ def get_pending_records(
             item = enrich_record_grades(_row_to_dict(r))
             last_dispose = item.get('LAST_DISPOSE')
             item['LAST_DISPOSE_LABEL'] = DISPOSE_LABELS.get(last_dispose, str(last_dispose))
+            try:
+                rt_key = int(item.get('RECORD_TYPE')) if item.get('RECORD_TYPE') is not None else None
+            except (TypeError, ValueError):
+                rt_key = None
+            item['RECORD_TYPE_NAME'] = RECORD_TYPE_LABELS.get(rt_key, '-')
+            item['IS_AQL_HOLD'] = hold_code_is_aql(item.get('HOLD_CODE'))
+            item['ANNEX_COUNT'] = len(parse_annex_ftp_paths(item.get('ANNEX_FTP_PATH')))
             data.append(item)
         return True, '获取成功', _page_payload(data, total, page, page_size)
     except ValueError as e:

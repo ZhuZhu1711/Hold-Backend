@@ -3,7 +3,7 @@
 """
 from flask import Blueprint, render_template, request, jsonify, session
 
-from app.controllers import production_ctrl, dispose_ctrl
+from app.controllers import production_ctrl, dispose_ctrl, manual_hold_ctrl
 from app.utils.auth_decorators import production_required, current_role_name
 from app.utils.excel_export import stamp_filename, xlsx_or_error
 
@@ -58,7 +58,10 @@ def circulations_page():
 @production_required
 def manual_hold_page():
     """手提 Hold 料创建。"""
-    return render_template('hold/manual_hold.html', **_page_ctx(nav_area='prod'))
+    return render_template(
+        'hold/manual_hold.html',
+        **_page_ctx(nav_area='prod', **manual_hold_ctrl.manual_hold_page_options()),
+    )
 
 
 # ==========================================

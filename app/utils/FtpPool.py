@@ -145,3 +145,10 @@ testlog_ftp_pool = RobustFtpPool(
     getattr(Config, 'TESTLOG_FTP_PASSWD', ''),
     timeout=getattr(Config, 'TESTLOG_FTP_TIMEOUT', 8),
 )
+
+annex_ftp_pool = RobustFtpPool(
+    getattr(Config, 'ANNEX_FTP_HOST', ''),
+    getattr(Config, 'ANNEX_FTP_USER', ''),
+    getattr(Config, 'ANNEX_FTP_PASSWD', ''),
+    timeout=getattr(Config, 'ANNEX_FTP_TIMEOUT', 8),
+)

@@ -444,12 +444,14 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 
 权限：root、产品工程师或生产。工程师仅可操作所属型号。完整字段、附件路径约定见 [`docs/07-手提Hold.md`](./docs/07-手提Hold.md)。
 
+型号匹配：`GET /admin/hold/api/manual_hold/products?line=FT|WLT`。FT 站点从合批列表选；WLT 站点固定 `WLT2`。附件最多 25 张。
+
 附件图：`GET /admin/hold/api/annex_image?record_id=&index=`（已登录即可）。`AQL_HOLD` 不要调 analysis。
 
 ```bash
 curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
   -H "Content-Type: application/json" \
-  -d "{\"line\":\"FT\",\"product_id\":\"XX-3.5\",\"station\":\"FIQC\",\"equip_id\":\"MANUAL\",\"lot_id\":\"ABC01\",\"wafer_id\":\"ABC01\",\"hold_code\":\"AQL_HOLD\",\"hold_reason\":\"AQL\",\"annex_ftp_path\":\"@/JDY_UPLOAD/HOLD_ANNEX/a.jpg\"}"
+  -d "{\"line\":\"FT\",\"product_id\":\"XX-3.5\",\"station\":\"FIQC_MERGE\",\"equip_id\":\"MANUAL\",\"lot_id\":\"ABC01\",\"wafer_id\":\"ABC01\",\"hold_code\":\"AQL_HOLD\",\"hold_reason\":\"AQL\",\"annex_ftp_path\":\"@/JDY_UPLOAD/FT_MANUAL/a.jpg\"}"
 ```
 
 ---
@@ -516,6 +518,7 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
 | POST | `/admin/hold/api/dispose` | root/工程师 | 工程师侧处置 |
 | POST | `/admin/hold/api/production/dispose` | 登录(生产OP/root) | **生产侧处置（外部对接）** |
 | POST | `/admin/hold/api/manual_hold` | root/工程师/生产 | **手提创建 Hold Record（外部对接）** |
+| GET | `/admin/hold/api/manual_hold/products` | root/工程师/生产 | 手提型号匹配 |
 | GET | `/admin/hold/api/annex_image` | 登录 | 按 record 下载附件图 |
 | GET | `/eng/api/holding_records` | 工程师 | 所属型号 hold |
 | POST | `/eng/api/dispose` | 工程师 | 工程师处置 |
@@ -526,6 +529,7 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
 
 | 日期 | 说明 |
 | --- | --- |
+| 2026-08-19 | 手提 Hold：型号智能匹配、FT 选站点、WLT 固定 WLT2 / LOT.NO / 勾选片号，附件上限 25 |
 | 2026-08-19 | 手提 Hold 创建 API、AQL_HOLD、ANNEX_FTP_PATH 附件图 |
 | 2026-08-03 | 初版：整理 Hold Record 查询 / 流转 / 处置对接接口 |
 

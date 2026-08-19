@@ -115,7 +115,9 @@
         .wafer-checks input { accent-color: #007bff; cursor: pointer; }
         .raw-chart-wrap { position: relative; height: 320px; margin-bottom: 4px; }
         .annex-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+        .annex-item { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
         .annex-img { max-width: 100%; max-height: 420px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
+        .annex-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -499,9 +501,15 @@
 
         function renderAnnexHtml(recordId, count) {
             if (!count) return '<div class="empty">无附件图片</div>';
-            let html = '<div class="section-title">附件图片</div><div class="annex-grid">';
+            const rid = encodeURIComponent(recordId);
+            let html = '<div class="section-title">附件图片</div>';
+            html += `<div class="annex-actions"><a class="btn btn-ghost" href="/admin/hold/api/annex_zip?record_id=${rid}">下载全部</a></div>`;
+            html += '<div class="annex-grid">';
             for (let i = 0; i < count; i++) {
-                html += `<img class="annex-img" src="/admin/hold/api/annex_image?record_id=${encodeURIComponent(recordId)}&index=${i}" alt="附件 ${i + 1}" />`;
+                html += `<div class="annex-item">
+                    <img class="annex-img" src="/admin/hold/api/annex_image?record_id=${rid}&index=${i}" alt="附件 ${i + 1}" />
+                    <a class="btn btn-ghost" href="/admin/hold/api/annex_image?record_id=${rid}&index=${i}&download=1">下载第 ${i + 1} 张</a>
+                </div>`;
             }
             html += '</div>';
             return html;

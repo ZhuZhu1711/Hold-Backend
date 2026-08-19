@@ -57,6 +57,28 @@
         }
         .line-row { display: flex; gap: 16px; align-items: center; font-size: 14px; }
         .line-row label { margin: 0; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+        .combo { position: relative; }
+        .combo-list {
+            display: none; position: absolute; left: 0; right: 0; top: 100%;
+            z-index: 20; max-height: 220px; overflow: auto;
+            background: #fff; border: 1px solid #ddd; border-radius: 4px;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+        }
+        .combo-list.show { display: block; }
+        .combo-item {
+            padding: 8px 12px; cursor: pointer; font-size: 13px;
+        }
+        .combo-item:hover, .combo-item.active { background: #e8f1ff; }
+        .combo-empty { padding: 10px 12px; color: #888; font-size: 12px; }
+        .wafer-grid {
+            display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
+        }
+        .wafer-grid label {
+            margin: 0; display: flex; align-items: center; gap: 4px;
+            padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px; cursor: pointer; background: #fafbfc;
+        }
+        .wafer-grid label:hover { border-color: #007bff; }
         .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; min-height: 100vh; }
         .sidebar-header { padding: 20px; text-align: center; background: #212529; }
         .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
@@ -110,8 +132,8 @@
         <div class="card">
             <h1>手提 Hold 料</h1>
             <p class="sub">
-                直接创建一条 Hold Record（SOURCE=1）。FT / WLT 各自选择 HOLD_CODE（目前 FT 仅 AQL_HOLD）。
-                可上传多张图片，路径写入 ANNEX_FTP_PATH（@拼接）。
+                直接创建一条 Hold Record（SOURCE=1）。型号可输入关键字匹配；FT 选站点，WLT 站点固定 WLT2。
+                附件最多 25 张，路径写入 ANNEX_FTP_PATH（@拼接）。
                 {% if nav_area == 'eng' %}产品工程师仅可创建自己负责的型号。{% endif %}
             </p>
             <div id="toast" class="toast"></div>
@@ -126,7 +148,11 @@
                     </div>
                     <div>
                         <label>PRODUCT_ID *</label>
-                        <input id="product_id" placeholder="FT 须 *-3.5 / WLT 须 *-2.6" required />
+                        <div class="combo">
+                            <input id="product_id" placeholder="输入关键字匹配型号" required autocomplete="off" />
+                            <div id="product_list" class="combo-list"></div>
+                        </div>
+                        <div class="hint" id="product_hint">FT 须 *-3.5 / WLT 须 *-2.6</div>
                     </div>
                     <div>
                         <label>HOLD_CODE *</label>
@@ -134,7 +160,7 @@
                     </div>
                     <div>
                         <label>STATION *</label>
-                        <input id="station" placeholder="FT 必填；WLT 默认 WOQC" />
+                        <select id="station"></select>
                     </div>
                     <div>
                         <label>EQUIP_ID *</label>
@@ -143,19 +169,26 @@
                     <div>
                         <label>LOT_ID *</label>
                         <input id="lot_id" required />
+                        <div class="hint" id="lot_hint"></div>
                     </div>
-                    <div>
+                    <div id="wafer_ft_wrap">
                         <label>WAFER_ID *</label>
                         <input id="wafer_id" required />
+                        <div class="hint">与 LOT_ID 相同</div>
+                    </div>
+                    <div id="wafer_wlt_wrap" class="full" style="display:none;">
+                        <label>WAFER_ID *（勾选 1~25，拼接为 #01#03#13）</label>
+                        <div class="wafer-grid" id="wafer_grid"></div>
+                        <div class="hint" id="wlt_preview"></div>
                     </div>
                     <div class="full">
                         <label>HOLD_REASON *</label>
                         <textarea id="hold_reason" maxlength="512" required></textarea>
                     </div>
                     <div class="full">
-                        <label>附件图片（可选，最多 20 张）</label>
+                        <label>附件图片（可选，最多 25 张）</label>
                         <input id="files" type="file" accept="image/*" multiple />
-                        <div class="hint">jpg / png / gif / bmp / webp；也可由外部系统直接传 FTP 路径。</div>
+                        <div class="hint">jpg / png / gif / bmp / webp；单条记录上限 25 张。</div>
                     </div>
                 </div>
                 <div class="actions">
@@ -201,43 +234,203 @@
             el.textContent = msg;
             el.className = 'toast show ' + (ok ? 'ok' : 'err');
         }
-        const HOLD_CODES = {
-            FT: ['AQL_HOLD'],
-            WLT: ['004', '022'],
-        };
+        const HOLD_CODES = { FT: ['AQL_HOLD'], WLT: ['004', '022'] };
+        const FT_STATIONS = {{ (ft_stations or [])|tojson }};
+        const WLT_STATION = {{ (wlt_station or 'WLT2')|tojson }};
+        const ANNEX_MAX = {{ (annex_max_files or 25)|int }};
+        const SUFFIX = { FT: '-3.5', WLT: '-2.6' };
+        let productCache = [];
+        let syncingLot = false;
+
         function currentLine() {
             const el = document.querySelector('input[name="line"]:checked');
             return el ? el.value : 'FT';
+        }
+        function pad2(n) { return String(n).padStart(2, '0'); }
+        function selectedWaferNos() {
+            return Array.from(document.querySelectorAll('#wafer_grid input:checked'))
+                .map(el => parseInt(el.value, 10))
+                .filter(n => n >= 1 && n <= 25)
+                .sort((a, b) => a - b);
+        }
+        function updateWltPreview() {
+            const nos = selectedWaferNos();
+            const lotRaw = document.getElementById('lot_id').value.trim();
+            const m = lotRaw.match(/^(.*)[.-](\d{1,2})$/);
+            let lotOut = '';
+            if (m && m[1]) lotOut = m[1] + '.' + pad2(parseInt(m[2], 10));
+            else if (lotRaw && nos.length) lotOut = lotRaw + '.' + pad2(nos[0]);
+            const waferOut = nos.map(n => '#' + pad2(n)).join('');
+            document.getElementById('wlt_preview').textContent =
+                '将写入 LOT_ID=' + (lotOut || '（待输入）') +
+                '　WAFER_ID=' + (waferOut || '（请勾选片号）');
         }
         function fillHoldCodes() {
             const sel = document.getElementById('hold_code');
             const codes = HOLD_CODES[currentLine()] || [];
             sel.innerHTML = codes.map(c => `<option value="${c}">${c}</option>`).join('');
         }
+        function fillStations() {
+            const sel = document.getElementById('station');
+            const isFt = currentLine() === 'FT';
+            if (isFt) {
+                sel.innerHTML = (FT_STATIONS || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+                sel.disabled = false;
+            } else {
+                sel.innerHTML = `<option value="${esc(WLT_STATION)}">${esc(WLT_STATION)}</option>`;
+                sel.disabled = true;
+            }
+        }
+        function buildWaferGrid() {
+            const host = document.getElementById('wafer_grid');
+            host.innerHTML = '';
+            for (let i = 1; i <= 25; i++) {
+                const id = 'waf_' + i;
+                host.insertAdjacentHTML('beforeend',
+                    `<label for="${id}"><input type="checkbox" id="${id}" value="${i}"> ${pad2(i)}</label>`);
+            }
+            host.querySelectorAll('input').forEach(el => el.addEventListener('change', updateWltPreview));
+        }
         function onLineChange() {
+            const isFt = currentLine() === 'FT';
             fillHoldCodes();
-            const st = document.getElementById('station');
-            if (currentLine() === 'WLT' && !st.value.trim()) st.value = 'WOQC';
+            fillStations();
+            document.getElementById('wafer_ft_wrap').style.display = isFt ? '' : 'none';
+            document.getElementById('wafer_wlt_wrap').style.display = isFt ? 'none' : '';
+            document.getElementById('wafer_id').required = isFt;
+            document.getElementById('product_hint').textContent =
+                isFt ? '输入匹配 *-3.5 型号' : '输入匹配 *-2.6 型号';
+            document.getElementById('lot_hint').textContent = isFt
+                ? '与 WAFER_ID 相同，手输'
+                : '手输 LOT.NO，NO 为本 lot 第一片片号，如 C123456.01';
+            document.getElementById('lot_id').placeholder = isFt ? '' : 'C123456.01';
+            hideProductList();
+            loadProducts();
+            if (!isFt) updateWltPreview();
         }
         function resetForm() {
             document.getElementById('manualForm').reset();
             onLineChange();
+        }
+        function hideProductList() {
+            document.getElementById('product_list').classList.remove('show');
+        }
+        function renderProductList(items) {
+            const box = document.getElementById('product_list');
+            if (!items.length) {
+                box.innerHTML = '<div class="combo-empty">无匹配型号</div>';
+                box.classList.add('show');
+                return;
+            }
+            box.innerHTML = items.map(p =>
+                `<div class="combo-item" data-pid="${esc(p)}">${esc(p)}</div>`
+            ).join('');
+            box.classList.add('show');
+            box.querySelectorAll('.combo-item').forEach(el => {
+                el.addEventListener('mousedown', (ev) => {
+                    ev.preventDefault();
+                    document.getElementById('product_id').value = el.getAttribute('data-pid');
+                    hideProductList();
+                });
+            });
+        }
+        function filterProducts(keyword) {
+            const kw = String(keyword || '').trim().toUpperCase();
+            const suffix = (SUFFIX[currentLine()] || '').toUpperCase();
+            let items = productCache;
+            if (kw) {
+                items = items.filter(p => String(p).toUpperCase().includes(kw));
+            } else {
+                items = items.filter(p => String(p).toUpperCase().endsWith(suffix));
+            }
+            return items.slice(0, 40);
+        }
+        function pickUniqueProduct(raw) {
+            const text = String(raw || '').trim();
+            if (!text) return '';
+            const upper = text.toUpperCase();
+            const exact = productCache.find(p => String(p).toUpperCase() === upper);
+            if (exact) return exact;
+            const prefix = productCache.filter(p => String(p).toUpperCase().startsWith(upper));
+            if (prefix.length === 1) return prefix[0];
+            const contains = productCache.filter(p => String(p).toUpperCase().includes(upper));
+            if (contains.length === 1) return contains[0];
+            return text;
+        }
+        async function loadProducts() {
+            try {
+                const line = currentLine();
+                const resp = await fetch('/admin/hold/api/manual_hold/products?line=' + encodeURIComponent(line));
+                const json = await resp.json();
+                productCache = (json.code === 200 && Array.isArray(json.data)) ? json.data : [];
+            } catch (e) {
+                productCache = [];
+            }
+        }
+        function bindProductCombo() {
+            const input = document.getElementById('product_id');
+            input.addEventListener('focus', () => renderProductList(filterProducts(input.value)));
+            input.addEventListener('input', () => renderProductList(filterProducts(input.value)));
+            input.addEventListener('blur', () => {
+                setTimeout(() => {
+                    hideProductList();
+                    const picked = pickUniqueProduct(input.value);
+                    if (picked) input.value = picked;
+                }, 150);
+            });
+        }
+        function bindFtLotWafer() {
+            const lot = document.getElementById('lot_id');
+            const wafer = document.getElementById('wafer_id');
+            lot.addEventListener('input', () => {
+                if (currentLine() === 'WLT') { updateWltPreview(); return; }
+                if (syncingLot) return;
+                syncingLot = true;
+                wafer.value = lot.value;
+                syncingLot = false;
+            });
+            wafer.addEventListener('input', () => {
+                if (currentLine() !== 'FT' || syncingLot) return;
+                syncingLot = true;
+                lot.value = wafer.value;
+                syncingLot = false;
+            });
         }
         async function submitForm(ev) {
             ev.preventDefault();
             const btn = document.getElementById('btnSubmit');
             btn.disabled = true;
             const line = currentLine();
+            const productId = pickUniqueProduct(document.getElementById('product_id').value.trim());
+            document.getElementById('product_id').value = productId;
             const fd = new FormData();
             fd.append('line', line);
-            fd.append('product_id', document.getElementById('product_id').value.trim());
-            fd.append('station', document.getElementById('station').value.trim());
+            fd.append('product_id', productId);
+            fd.append('station', line === 'FT'
+                ? document.getElementById('station').value.trim()
+                : WLT_STATION);
             fd.append('equip_id', document.getElementById('equip_id').value.trim());
             fd.append('lot_id', document.getElementById('lot_id').value.trim());
-            fd.append('wafer_id', document.getElementById('wafer_id').value.trim());
             fd.append('hold_reason', document.getElementById('hold_reason').value.trim());
             fd.append('hold_code', document.getElementById('hold_code').value);
+            if (line === 'FT') {
+                fd.append('wafer_id', document.getElementById('wafer_id').value.trim());
+            } else {
+                const nos = selectedWaferNos();
+                if (!nos.length) {
+                    toast('请勾选至少一片 wafer', false);
+                    btn.disabled = false;
+                    return false;
+                }
+                nos.forEach(n => fd.append('wafer_nos', String(n)));
+                fd.append('wafer_id', nos.map(n => '#' + pad2(n)).join(''));
+            }
             const input = document.getElementById('files');
+            if (input.files && input.files.length > ANNEX_MAX) {
+                toast('图片最多 ' + ANNEX_MAX + ' 张', false);
+                btn.disabled = false;
+                return false;
+            }
             if (input.files) {
                 for (const f of input.files) fd.append('files', f);
             }
@@ -295,6 +488,9 @@
                 document.getElementById('meta').textContent = '请求失败: ' + e;
             }
         }
+        buildWaferGrid();
+        bindProductCombo();
+        bindFtLotWafer();
         onLineChange();
         loadRecent();
     </script>
