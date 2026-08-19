@@ -54,6 +54,13 @@ def circulations_page():
     return render_template('prod/circulations.html', **_page_ctx())
 
 
+@production_bp.route('/manual')
+@production_required
+def manual_hold_page():
+    """手提 Hold 料创建。"""
+    return render_template('hold/manual_hold.html', **_page_ctx(nav_area='prod'))
+
+
 # ==========================================
 # API
 # ==========================================

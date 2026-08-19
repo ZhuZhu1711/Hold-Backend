@@ -8,7 +8,7 @@
 | --- | --- |
 | 登录 | Session Cookie 鉴权 |
 | Holding 查询 | 登录工程师所属型号的在线 Hold Record |
-| 数据分析 | bysite + 缺陷 BIN；FVI 可查缺陷明细 |
+| 数据分析 | bysite + 缺陷 BIN；FVI 可查缺陷明细；**AQL_HOLD 改看附件图，不调 analysis** |
 | 处置 | 工程师意见：放行 / 降级 / 重测 / 可靠性分析（含 WLT 按片） |
 
 ## 明确不做
@@ -25,12 +25,13 @@
 4. [04-处置规范.md](./04-处置规范.md)（重点）
 5. [05-处置接口与示例.md](./05-处置接口与示例.md)（重点）
 6. [06-客户端集成流程.md](./06-客户端集成流程.md)
+7. [07-手提Hold.md](./07-手提Hold.md)（外部创建 API / AQL 附件，非客户端必读）
 
 ## 概念区分
 
 | 名称 | 含义 |
 | --- | --- |
-| **数据分析** | `GET /admin/hold/api/analysis`：加载测试 bysite / 缺陷 BIN，供研判 |
+| **数据分析** | `GET /admin/hold/api/analysis`：加载测试 bysite / 缺陷 BIN，供研判。`AQL_HOLD` **不调用**，改调附件图 |
 | **可靠性分析** | 处置码 `dispose=5`：工程师处置意见，下一节点仍是自己；生产并行留样 |
 
 ## 主源码对照
@@ -41,3 +42,4 @@
 | 工程师 API | `app/routes/engineer_routes.py`、`app/controllers/engineer_ctrl.py` |
 | 处置 | `app/controllers/dispose_ctrl.py` |
 | 数据分析 | `app/controllers/hold_report_ctrl.py` → `get_hold_analysis` |
+| 手提 Hold | `app/controllers/manual_hold_ctrl.py`；附件 `GET /admin/hold/api/annex_image` |

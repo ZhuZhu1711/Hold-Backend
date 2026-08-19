@@ -43,6 +43,7 @@
         <ul class="nav-links">
             <li class="active"><a href="/prod/">工作台</a></li>
             <li><a href="/prod/holds">Hold Record</a></li>
+            <li><a href="/prod/manual">手提 Hold 料</a></li>
             <li><a href="/prod/circulations">Hold 流转</a></li>
             <li><a href="/logout">退出</a></li>
         </ul>
@@ -54,6 +55,7 @@
             <p>当前角色：<strong>{{ role_name }}</strong>。可查看并处置当前节点在生产的 Hold Record（分析返回 / 回退 / 关闭），以及全量 Hold 流转。</p>
             <div class="links">
                 <a href="/prod/holds">生产节点 Hold / 处置</a>
+                <a class="secondary" href="/prod/manual">手提 Hold 料</a>
                 <a class="secondary" href="/prod/circulations">Hold 流转查询</a>
             </div>
         </div>

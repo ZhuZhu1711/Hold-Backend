@@ -173,7 +173,7 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
 
     仅捞取满足 dispose_api.md「处置单划分」的候选行：
-      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027), STATION∉(FAOIFINISH,FFVI)
+      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,AQL_HOLD), STATION∉(FAOIFINISH,FFVI)
       FVI : HOLD_CODE=023, STATION∈(FAOIFINISH,FFVI)
       WLT : PRODUCT_ID LIKE '%-2.6', HOLD_CODE∈(004,022), STATION=WOQC
     精确 RECORD_TYPE 仍由调用方按同样规则判定后写入 FT_HOLD_RECORD。
@@ -202,7 +202,7 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
             AND (
                 (
                     PRODUCT_ID LIKE '%-3.5'
-                    AND HOLD_CODE IN ('023', '024', '025', '027')
+                    AND HOLD_CODE IN ('023', '024', '025', '027', 'AQL_HOLD')
                     AND STATION NOT IN ('FAOIFINISH', 'FFVI')
                 )
                 OR (
@@ -695,6 +695,143 @@ def insert_hold_record_and_link(
             exc_info=True,
         )
         return _fail(str(e))
+    finally:
+        connection.close()
+
+
+def insert_manual_hold_record(
+    record: dict,
+    record_table: str = 'FT_HOLD_RECORD',
+):
+    """
+    手提 Hold：直接插入 FT_HOLD_RECORD + 创建流转（DISPOSE=0），不写 FT_HOLD_INFO。
+    SOURCE 应为 1。成功返回新 ID；失败返回 None。
+    """
+    record_tbl = (record_table or '').upper()
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return None
+    circ_tbl = resolve_circulation_table(record_table=record_tbl)
+    record_seq = seq_for_hold_record(record_tbl)
+    circ_seq = seq_for_circulation(circ_tbl)
+
+    required = (
+        'PRODUCT_ID', 'STATION', 'EQUIP_ID', 'LOT_ID', 'WAFER_ID',
+        'SOURCE', 'RECORD_TYPE', 'STATUS',
+    )
+    missing = [k for k in required if record.get(k) is None]
+    if missing:
+        logger.error(f"insert_manual_hold_record: 缺少必填字段 {missing}")
+        return None
+
+    dispose_source = 'JDY' if int(record['SOURCE']) == 1 else 'SYS'
+
+    insert_record_sql = f"""
+        INSERT INTO {record_tbl} (
+            ID,
+            PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
+            HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID,
+            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM, ANNEX_FTP_PATH
+        ) VALUES (
+            :new_id,
+            :product_id, :station, :equip_id, :lot_id, :wafer_id,
+            :hold_code, :hold_reason, :source, :second_code, :route_id,
+            :grade_num, :record_type, :status, :hold_dttm, :annex_ftp_path
+        )
+    """
+    lookup_owner_sql = """
+        SELECT PRO_ENG_ID
+        FROM PRODUCT_INFO
+        WHERE PRODUCT_ID = :product_id
+          AND ROWNUM = 1
+    """
+    insert_circ_sql = f"""
+        INSERT INTO {circ_tbl} (
+            ID,
+            HOLD_RECORD_ID,
+            DISPOSED_OWNER_ID,
+            DISPOSE,
+            NEXT_OWNER_ID,
+            DISPOSE_SOURCE,
+            DISPOSE_DTTM,
+            DISPOSE_TYPE,
+            DISPOSE_DETAIL
+        ) VALUES (
+            :circ_id,
+            :hold_record_id,
+            1,
+            0,
+            :next_owner_id,
+            :dispose_source,
+            SYSDATE,
+            0,
+            :dispose_detail
+        )
+    """
+    update_last_circ_sql = f"""
+        UPDATE {record_tbl}
+        SET LAST_CIRCULATION_ID = :circ_id
+        WHERE ID = :record_id
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            new_id = _next_positive_seq(cursor, record_seq)
+            cursor.execute(
+                insert_record_sql,
+                {
+                    'new_id': new_id,
+                    'product_id': record['PRODUCT_ID'],
+                    'station': record['STATION'],
+                    'equip_id': record['EQUIP_ID'],
+                    'lot_id': record['LOT_ID'],
+                    'wafer_id': record['WAFER_ID'],
+                    'hold_code': record.get('HOLD_CODE'),
+                    'hold_reason': record.get('HOLD_REASON'),
+                    'source': record['SOURCE'],
+                    'second_code': record.get('SECOND_CODE'),
+                    'route_id': record.get('ROUTE_ID'),
+                    'grade_num': record.get('GRADE_NUM'),
+                    'record_type': record['RECORD_TYPE'],
+                    'status': record['STATUS'],
+                    'hold_dttm': record.get('HOLD_DTTM'),
+                    'annex_ftp_path': record.get('ANNEX_FTP_PATH'),
+                },
+            )
+
+            cursor.execute(lookup_owner_sql, {'product_id': record['PRODUCT_ID']})
+            owner_row = cursor.fetchone()
+            next_owner_id = 1
+            if owner_row and owner_row[0] is not None:
+                next_owner_id = int(owner_row[0])
+
+            circ_id = _next_positive_seq(cursor, circ_seq)
+            cursor.execute(
+                insert_circ_sql,
+                {
+                    'circ_id': circ_id,
+                    'hold_record_id': new_id,
+                    'next_owner_id': next_owner_id,
+                    'dispose_source': dispose_source,
+                    'dispose_detail': None,
+                },
+            )
+            cursor.execute(
+                update_last_circ_sql,
+                {'circ_id': circ_id, 'record_id': new_id},
+            )
+            connection.commit()
+            logger.info(
+                f"手提写入 {record_tbl} id={new_id}, wafer={record['WAFER_ID']}, "
+                f"hold_code={record.get('HOLD_CODE')}, "
+                f"circulation_id={circ_id}, next_owner_id={next_owner_id}"
+            )
+            return new_id
+    except Exception as e:
+        connection.rollback()
+        logger.error(f"插入手提 hold_record 失败: {e}", exc_info=True)
+        return None
     finally:
         connection.close()
 

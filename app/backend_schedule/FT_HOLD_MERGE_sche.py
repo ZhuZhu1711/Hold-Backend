@@ -32,11 +32,11 @@ from app.utils.database_util import (
 )
 
 # 处置单划分（见 dispose_api.md）：
-#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027}, STATION∉{FAOIFINISH,FFVI}
+#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,AQL_HOLD}, STATION∉{FAOIFINISH,FFVI}
 #   FVI异常反馈单 RECORD_TYPE=1  PRODUCT_ID *,     HOLD_CODE=023,               STATION∈{FAOIFINISH,FFVI}
 #   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_ID *-2.6, HOLD_CODE∈{004,022},         STATION=WOQC
 # 不满足以上规则的 hold_info 不转成 record。
-_FT_HOLD_CODES = frozenset({'023', '024', '025', '027'})
+_FT_HOLD_CODES = frozenset({'023', '024', '025', '027', 'AQL_HOLD'})
 _FVI_HOLD_CODES = frozenset({'023'})
 _WLT_HOLD_CODES = frozenset({'004', '022'})
 _FVI_STATIONS = frozenset({'FAOIFINISH', 'FFVI'})

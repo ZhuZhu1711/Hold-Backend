@@ -4,7 +4,8 @@
 范围：仅 PRODUCT_INFO.PRO_ENG_ID = 当前用户 的型号。
 功能：
   1. 维护所属型号缺陷 code / BSL
-  2. 查看所属型号 Hold Record（处置功能预留）
+  2. 查看所属型号 Hold Record
+  3. 手提 Hold 料（所属型号）
 """
 from flask import Blueprint, render_template, request, jsonify, session
 
@@ -75,6 +76,13 @@ def notes_page():
         'eng/notes.html',
         **_page_ctx(product_id=request.args.get('product_id', '')),
     )
+
+
+@engineer_bp.route('/manual')
+@engineer_required
+def manual_hold_page():
+    """手提 Hold 料：仅所属型号。"""
+    return render_template('hold/manual_hold.html', **_page_ctx(nav_area='eng'))
 
 
 # ==========================================

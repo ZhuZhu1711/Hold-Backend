@@ -1,10 +1,19 @@
 from datetime import datetime
 
-from flask import Blueprint, render_template, request, jsonify, session, Response
+from flask import Blueprint, render_template, request, jsonify, session, Response, send_file
+import io
 
-from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl, hold_info_export_ctrl
+from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl, hold_info_export_ctrl, manual_hold_ctrl
 from app.controllers.defect_code_ctrl import query_bincode_defect
-from app.utils.auth_decorators import root_required, login_required, current_role_name
+from app.utils.auth_decorators import (
+    root_required,
+    login_required,
+    role_required,
+    current_role_name,
+    ROLE_ROOT,
+    ROLE_ENGINEER,
+    ROLE_PRODUCTION,
+)
 from app.utils.excel_export import stamp_filename, xlsx_or_error
 
 hold_report_bp = Blueprint('hold_report', __name__, url_prefix='/admin/hold')
@@ -55,6 +64,25 @@ def hold_info_export_page():
         'hold/export.html',
         user_name=session.get('user_name'),
         role_name=current_role_name(),
+    )
+
+
+@hold_report_bp.route('/manual')
+@role_required(ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
+def manual_hold_page():
+    """手提 Hold 料创建页（root / 工程师 / 生产）。"""
+    role = session.get('role')
+    if role == ROLE_ENGINEER:
+        nav_area = 'eng'
+    elif role == ROLE_PRODUCTION:
+        nav_area = 'prod'
+    else:
+        nav_area = 'admin'
+    return render_template(
+        'hold/manual_hold.html',
+        user_name=session.get('user_name'),
+        role_name=current_role_name(),
+        nav_area=nav_area,
     )
 
 
@@ -116,6 +144,103 @@ def api_holding_records_export():
         success, msg, content, stamp_filename('holding_records'),
         bad_keys=('无效', '须为'),
     )
+
+
+def _collect_upload_files():
+    files = []
+    seen = set()
+    for key in ('files', 'images', 'annex'):
+        for item in request.files.getlist(key):
+            if not item or not item.filename:
+                continue
+            ident = id(item)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            files.append((item.filename, item.read()))
+    return files
+
+
+def _manual_hold_payload():
+    ctype = (request.content_type or '').lower()
+    if 'application/json' in ctype:
+        return request.get_json(silent=True) or {}
+    data = request.form.to_dict(flat=True)
+    paths = request.form.getlist('annex_paths')
+    if paths:
+        data['annex_paths'] = paths
+    return data
+
+
+@hold_report_bp.route('/api/manual_hold', methods=['POST'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
+def api_manual_hold():
+    """
+    创建手提 Hold Record（SOURCE=1）。
+    JSON 或 multipart：line=FT|WLT，product_id / station / equip_id / lot_id /
+    wafer_id / hold_reason；WLT 须 hold_code=004|022。
+    附件：annex_ftp_path / annex_paths，或 files/images 上传。
+    工程师仅可创建所属型号。
+    """
+    success, msg, data = manual_hold_ctrl.create_manual_hold(
+        _manual_hold_payload(),
+        uploaded_files=_collect_upload_files(),
+        operator=session.get('user_name') or '',
+        actor_role=session.get('role'),
+        actor_user_id=session.get('user_id'),
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    if '不属于' in msg:
+        status = 403
+    elif any(k in msg for k in ('须', '缺少', '要求', '不支持', '过大', '为空')):
+        status = 400
+    else:
+        status = 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@hold_report_bp.route('/api/manual_hold/recent', methods=['GET'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
+def api_manual_hold_recent():
+    """最近手提 Hold Record（SOURCE=1）。工程师仅看所属型号。"""
+    owner_eng_id = None
+    if session.get('role') == ROLE_ENGINEER:
+        owner_eng_id = session.get('user_id')
+    success, msg, data = manual_hold_ctrl.list_recent_manual_holds(
+        request.args.get('limit', 20),
+        owner_eng_id=owner_eng_id,
+    )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
+
+
+@hold_report_bp.route('/api/annex_image', methods=['GET'])
+@login_required
+def api_annex_image():
+    """
+    按 hold_record 下载 ANNEX_FTP_PATH 中第 index 张图（从 0 起）。
+    Query: record_id, index
+    """
+    success, msg, payload = manual_hold_ctrl.get_annex_image(
+        request.args.get('record_id'),
+        request.args.get('index', 0),
+    )
+    if success:
+        return send_file(
+            io.BytesIO(payload['bytes']),
+            mimetype=payload.get('mimetype') or 'application/octet-stream',
+            download_name=payload.get('filename') or 'annex',
+            as_attachment=False,
+        )
+    if '不存在' in msg or '无附件' in msg or '超出' in msg:
+        status = 404
+    elif any(k in msg for k in ('无效', '须为')):
+        status = 400
+    else:
+        status = 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
 @hold_report_bp.route('/api/fvi_defect_details', methods=['GET'])

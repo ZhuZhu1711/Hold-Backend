@@ -144,6 +144,8 @@
         }
         .wafer-checks input { accent-color: #007bff; cursor: pointer; }
         .raw-chart-wrap { position: relative; height: 320px; margin-bottom: 4px; }
+        .annex-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+        .annex-img { max-width: 100%; max-height: 420px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
     </style>
 </head>
 <body>
@@ -157,6 +159,7 @@
             <li><a href="/eng/defects">缺陷 / BSL</a></li>
             <li><a href="/eng/notes">工程备注</a></li>
             <li class="active"><a href="/eng/holds">Hold Record</a></li>
+            <li><a href="/eng/manual">手提 Hold 料</a></li>
             <li><a href="/eng/circulations">Hold 流转</a></li>
             <li><a href="/logout">退出</a></li>
         </ul>
@@ -582,7 +585,25 @@
             return bysiteHtml + rawHtml;
         }
 
-        async function showAnalysis(waferId, recordType, lotId) {
+        function renderAnnexHtml(recordId, count) {
+            if (!count) return '<div class="empty">无附件图片</div>';
+            let html = '<div class="section-title">附件图片</div><div class="annex-grid">';
+            for (let i = 0; i < count; i++) {
+                html += `<img class="annex-img" src="/admin/hold/api/annex_image?record_id=${encodeURIComponent(recordId)}&index=${i}" alt="附件 ${i + 1}" />`;
+            }
+            html += '</div>';
+            return html;
+        }
+
+        async function showAnalysis(waferId, recordType, lotId, recordId, isAql, annexCount) {
+            if (isAql) {
+                if (typeof destroyRawChart === 'function') destroyRawChart();
+                document.getElementById('analysisSub').textContent =
+                    `Wafer: ${waferId || '-'} · AQL_HOLD · 附件 ${annexCount || 0} 张`;
+                document.getElementById('analysisBody').innerHTML = renderAnnexHtml(recordId, annexCount);
+                document.getElementById('analysisModal').classList.add('show');
+                return;
+            }
             if (!waferId) {
                 alert('缺少 Wafer ID');
                 return;
@@ -625,7 +646,11 @@
                     data.operation_id && `op=${data.operation_id}`,
                     data.is_merged ? '合批' : null,
                 ].filter(Boolean).join(' · ');
-                document.getElementById('analysisBody').innerHTML = renderAnalysis(data);
+                let html = renderAnalysis(data);
+                if (annexCount > 0 && recordId) {
+                    html += renderAnnexHtml(recordId, annexCount);
+                }
+                document.getElementById('analysisBody').innerHTML = html;
                 bindWaferChecks();
                 initRawChart();
             } catch (e) {
@@ -765,9 +790,12 @@
                         ? `<a class="btn btn-sm" href="/eng/dispose/${esc(r.ID)}">处置</a>`
                         : `<button class="btn btn-sm btn-disabled" disabled title="仅当前负责人可处置">处置</button>`;
                     const analyzeBtn = `<button class="btn btn-sm btn-ghost"
+                        data-analyze-id="${esc(r.ID)}"
                         data-analyze-wafer="${esc(r.WAFER_ID)}"
                         data-analyze-lot="${esc(r.LOT_ID || '')}"
-                        data-analyze-type="${esc(r.RECORD_TYPE ?? '')}">分析</button>`;
+                        data-analyze-type="${esc(r.RECORD_TYPE ?? '')}"
+                        data-analyze-aql="${r.IS_AQL_HOLD ? '1' : '0'}"
+                        data-annex-count="${esc(r.ANNEX_COUNT ?? 0)}">${r.IS_AQL_HOLD ? '附件' : '分析'}</button>`;
                     const gradeText = r.GRADE_NUM_DISPLAY || r.GRADE_NUM || '-';
                     return `
                     <tr>
@@ -799,6 +827,9 @@
                         el.dataset.analyzeWafer,
                         el.dataset.analyzeType,
                         el.dataset.analyzeLot,
+                        el.dataset.analyzeId,
+                        el.dataset.analyzeAql === '1',
+                        Number(el.dataset.annexCount || 0),
                     ));
                 });
             } catch (e) {

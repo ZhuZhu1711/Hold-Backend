@@ -2,7 +2,8 @@
 Hold 报表业务逻辑（root 全量数据）。
 
 1. holding_record：当前仍在 hold 的 FT_HOLD_RECORD
-   - 通过 FT_HOLD_INFO 关联字段 + HOLDING=0 过滤已解 hold
+   - MES：通过 FT_HOLD_INFO 关联字段 + HOLDING=0 过滤已解 hold
+   - 手提（SOURCE=1）：无 hold_info，以 STATUS<>99 视为在线
    - 注意：HOLDING=0 表示正在 hold（命名反直觉）
 
 2. hold 历史：按型号 + 月份/周聚合 hold 数量，供柱状图使用
@@ -47,6 +48,7 @@ from app.controllers.rawdata_ctrl import (
     query_same_lot_bincodes_by_prefixes,
 )
 from app.controllers import testlog_ctrl
+from app.utils.annex_util import hold_code_is_aql, parse_annex_ftp_paths
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +139,7 @@ def get_holding_records(
 ):
     """
     查询当前仍在 hold 的 hold_record 列表（分页）。
-    HOLDING=0 才是在线 hold；用 INFO 关联字段踢掉已解 hold 的 record。
+    HOLDING=0 才是在线 hold（MES）；手提 SOURCE=1 无 info 时以 STATUS<>99 视为在线。
     record_type：按处置单大类筛选（0=FT / 1=FVI / 2=WLT），空则不过滤。
     owner_eng_id：仅返回 PRODUCT_INFO.PRO_ENG_ID 等于该工程师的型号。
     product_ids：精确匹配型号列表（与 product_id 模糊可叠加）。
@@ -154,7 +156,12 @@ def get_holding_records(
         else:
             page, page_size, offset = _parse_page(page, page_size, max_page_size=max_page_size)
 
-        where_sql = " WHERE 1 = 1"
+        where_sql = """
+            WHERE (
+                i.ID IS NOT NULL
+                OR (NVL(r.SOURCE, 0) = 1 AND NVL(r.STATUS, 0) <> 99)
+            )
+        """
         params = {'offset': offset, 'page_size': page_size}
 
         if owner_eng_id is not None:
@@ -219,7 +226,7 @@ def get_holding_records(
 
         from_sql = f"""
             FROM {record_table} r
-            INNER JOIN {info_table} i
+            LEFT JOIN {info_table} i
                 ON i.{link_col} = r.ID
                AND NVL(i.HOLDING, 1) = 0
             LEFT JOIN {circ_table} c
@@ -257,6 +264,7 @@ def get_holding_records(
                 r.STATUS,
                 r.LAST_CIRCULATION_ID,
                 r.HOLD_DTTM,
+                r.ANNEX_FTP_PATH,
                 c.NEXT_OWNER_ID AS CURRENT_OWNER_ID,
                 c.DISPOSE AS LAST_DISPOSE,
                 c.DISPOSE_DETAIL AS LAST_DISPOSE_DETAIL,
@@ -273,6 +281,7 @@ def get_holding_records(
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
                 r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
+                r.ANNEX_FTP_PATH,
                 c.NEXT_OWNER_ID, c.DISPOSE, c.DISPOSE_DETAIL, c.DISPOSE_NOTE,
                 c.DISPOSE_MANUAL_NOTE, c.DISPOSE_DTTM,
                 c.DISPOSED_OWNER_ID, u.NAME, u_disp.NAME
@@ -305,6 +314,8 @@ def get_holding_records(
             item['IS_CLOSED'] = status_val == DISPOSE_CLOSE
             item['GRADE_NUM_DISPLAY'] = format_grade_num_display(item.get('GRADE_NUM')) or ''
             item['GRADES'] = parse_grade_num(item.get('GRADE_NUM'))
+            item['IS_AQL_HOLD'] = hold_code_is_aql(item.get('HOLD_CODE'))
+            item['ANNEX_COUNT'] = len(parse_annex_ftp_paths(item.get('ANNEX_FTP_PATH')))
             data.append(item)
         return True, '获取成功', _page_payload(data, total, page, page_size)
     except ValueError as e:

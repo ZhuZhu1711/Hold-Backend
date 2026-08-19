@@ -2,7 +2,10 @@
 
 工程师只能看到 **`PRODUCT_INFO.PRO_ENG_ID` = 本人** 的型号下的在线 Hold Record。
 
-「在线」含义：关联 hold_info 且 `HOLDING = 0`（命名反直觉：`0` 表示仍在 hold）。
+「在线」含义：
+
+- MES 合批：关联 hold_info 且 `HOLDING = 0`（命名反直觉：`0` 表示仍在 hold）
+- 手提（`SOURCE=1`）：无 hold_info，以 `STATUS <> 99` 视为在线
 
 Auth：全部为工程师 Session（`@engineer_required`）。
 
@@ -61,6 +64,10 @@ Auth：全部为工程师 Session（`@engineer_required`）。
 | `STATION` | 站点 |
 | `LOT_ID` / `WAFER_ID` | 批号 / 片号（展示可能为 `#01#02`） |
 | `HOLD_CODE` / `HOLD_REASON` | Hold 码 / 原因 |
+| `SOURCE` | `0` MES 合批；`1` 手提 |
+| `ANNEX_FTP_PATH` | 附件 FTP 路径，多图 `@path1@path2`；可空 |
+| `IS_AQL_HOLD` | `HOLD_CODE` 含 `AQL_HOLD` |
+| `ANNEX_COUNT` | 附件张数（解析自 `ANNEX_FTP_PATH`） |
 | `GRADE_NUM` | 原始等级串 |
 | `GRADE_NUM_DISPLAY` | 展示用等级 |
 | `GRADES` | 解析后的等级列表（供降级/重测 UI） |
@@ -110,6 +117,7 @@ Auth：全部为工程师 Session（`@engineer_required`）。
 
 - `WAFER_ID`、`LOT_ID`（展示串 `#..` 时 lot 必填）
 - `RECORD_TYPE`、`STATION`
+- 若 `IS_AQL_HOLD`：改调 `GET /admin/hold/api/annex_image?record_id={ID}&index=`，**不要**调 `/api/analysis`；`ANNEX_COUNT=0` 则不显示图片
 
 进入处置时：
 

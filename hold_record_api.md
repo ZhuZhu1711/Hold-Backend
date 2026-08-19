@@ -165,7 +165,7 @@
 `GET /admin/hold/api/holding_records`
 
 > 权限：仅 root。  
-> 「在线」= 关联 hold_info 且 `HOLDING = 0`（命名反直觉：0 表示仍在 hold）。
+> 「在线」= MES 关联 hold_info 且 `HOLDING = 0`，**或** `SOURCE=1` 且 `STATUS <> 99`。
 
 **Query**
 
@@ -185,6 +185,8 @@
 | `ID` | hold_record 主键 |
 | `PRODUCT_ID` / `WAFER_ID` / `LOT_ID` / `STATION` | 基础信息 |
 | `HOLD_CODE` / `HOLD_REASON` / `HOLD_DTTM` | Hold 信息 |
+| `SOURCE` | `0` MES；`1` 手提 |
+| `ANNEX_FTP_PATH` / `ANNEX_COUNT` / `IS_AQL_HOLD` | 附件路径、张数、是否 AQL |
 | `RECORD_TYPE` / `RECORD_TYPE_NAME` | 处置单类型 |
 | `STATUS` / `IS_CLOSED` | 状态 |
 | `CURRENT_OWNER_ID` / `CURRENT_OWNER_NAME` | 当前负责人 |
@@ -436,6 +438,22 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 
 ---
 
+## 5.4 手提创建 Hold Record（外部对接）
+
+`POST /admin/hold/api/manual_hold`
+
+权限：root、产品工程师或生产。工程师仅可操作所属型号。完整字段、附件路径约定见 [`docs/07-手提Hold.md`](./docs/07-手提Hold.md)。
+
+附件图：`GET /admin/hold/api/annex_image?record_id=&index=`（已登录即可）。`AQL_HOLD` 不要调 analysis。
+
+```bash
+curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
+  -H "Content-Type: application/json" \
+  -d "{\"line\":\"FT\",\"product_id\":\"XX-3.5\",\"station\":\"FIQC\",\"equip_id\":\"MANUAL\",\"lot_id\":\"ABC01\",\"wafer_id\":\"ABC01\",\"hold_code\":\"AQL_HOLD\",\"hold_reason\":\"AQL\",\"annex_ftp_path\":\"@/JDY_UPLOAD/HOLD_ANNEX/a.jpg\"}"
+```
+
+---
+
 ## 6. 工程师侧等价接口（可选）
 
 产品工程师后台前缀：`/eng`。数据范围默认限制为**所属型号**（`PRODUCT_INFO.PRO_ENG_ID`）。
@@ -497,6 +515,8 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 | GET | `/admin/hold/api/dispose_actions` | root/工程师 | 处置码说明 |
 | POST | `/admin/hold/api/dispose` | root/工程师 | 工程师侧处置 |
 | POST | `/admin/hold/api/production/dispose` | 登录(生产OP/root) | **生产侧处置（外部对接）** |
+| POST | `/admin/hold/api/manual_hold` | root/工程师/生产 | **手提创建 Hold Record（外部对接）** |
+| GET | `/admin/hold/api/annex_image` | 登录 | 按 record 下载附件图 |
 | GET | `/eng/api/holding_records` | 工程师 | 所属型号 hold |
 | POST | `/eng/api/dispose` | 工程师 | 工程师处置 |
 
@@ -506,6 +526,7 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 
 | 日期 | 说明 |
 | --- | --- |
+| 2026-08-19 | 手提 Hold 创建 API、AQL_HOLD、ANNEX_FTP_PATH 附件图 |
 | 2026-08-03 | 初版：整理 Hold Record 查询 / 流转 / 处置对接接口 |
 
 规则变更请同步维护 [`dispose_api.md`](./dispose_api.md)。

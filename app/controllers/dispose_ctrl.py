@@ -30,6 +30,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import db
 from app.config import Config
 from app.utils.auth_decorators import ROLE_ROOT, ROLE_PRODUCTION
+from app.utils.annex_util import hold_code_is_aql, parse_annex_ftp_paths
 from app.utils.database_util import (
     _ALLOWED_SEQS,
     expand_display_wafer_ids,
@@ -865,7 +866,8 @@ def _load_record(record_id: int):
             SELECT
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
-                r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM
+                r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
+                r.ANNEX_FTP_PATH
             FROM {record_table} r
             WHERE r.ID = :rid
         """),
@@ -873,7 +875,10 @@ def _load_record(record_id: int):
     ).fetchone()
     if not row:
         return None
-    return enrich_record_wafers(enrich_record_grades(_row_to_dict(row)))
+    rec = enrich_record_wafers(enrich_record_grades(_row_to_dict(row)))
+    rec['IS_AQL_HOLD'] = hold_code_is_aql(rec.get('HOLD_CODE'))
+    rec['ANNEX_COUNT'] = len(parse_annex_ftp_paths(rec.get('ANNEX_FTP_PATH')))
+    return rec
 
 
 def _load_circulation(circ_id):
