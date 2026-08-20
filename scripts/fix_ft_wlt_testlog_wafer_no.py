@@ -24,7 +24,7 @@ import oracledb
 
 from app.utils.database_util import DSN, PWD, USER
 
-CUTOFF = date(2026, 7, 1)
+CUTOFF = date(2026, 5, 1)
 BATCH_COMMIT = 200
 
 

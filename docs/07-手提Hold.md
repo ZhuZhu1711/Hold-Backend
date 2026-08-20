@@ -50,7 +50,7 @@ FT `hold_code` 从允许列表中选，目前只有 `AQL_HOLD`；未传时默认
 
 ## 2. 创建接口（外部系统）
 
-鉴权：先 `POST /api/login`，携带 `hold_session` Cookie。角色须为 **root（0）、产品工程师（1）或生产（9）**。产品工程师只能创建自己负责的型号。
+鉴权：`Cookie: hold_session` **或** `X-Hold-Token`（与 `HOLD_API_TOKEN` 一致）。走 Cookie 时角色须为 **root（0）、产品工程师（1）或生产（9）**，产品工程师只能创建自己负责的型号。走 Token 时跳过角色校验，操作人记为系统用户。
 
 ### `POST /admin/hold/api/manual_hold`
 

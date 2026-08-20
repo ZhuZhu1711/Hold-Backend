@@ -15,16 +15,35 @@
 | Base URL 示例 | `http://{host}:50001` |
 | 数据格式 | 请求/响应均为 JSON（`Content-Type: application/json`） |
 | 字符编码 | UTF-8 |
-| 鉴权 | Session Cookie（先登录拿 Cookie，后续请求携带） |
+| 鉴权 | Session Cookie **或** Header `X-Hold-Token`（二选一） |
 
 ### 1.1 鉴权流程
+
+**方式 A：登录 Cookie（人类用户 / 已有对接）**
 
 1. 调用 `POST /api/login` 获取 Session Cookie（Cookie 名：`hold_session`）
 2. 后续接口请求带上该 Cookie（`credentials: include` / `Cookie: hold_session=...`）
 3. 退出：`GET /logout`（清空 Session）
 
-> 生产系统对接建议使用**生产 OP 账号**登录后调用生产处置接口。  
+> 生产系统对接若走 Cookie，建议使用**生产 OP 账号**登录后调用生产处置接口。  
 > 默认生产 OP 用户 ID = `181`（配置项 `PRODUCTION_OP_ID`）。
+
+**方式 B：固定 Token（推荐给外部系统）**
+
+不必登录。每次请求加 Header：
+
+```
+X-Hold-Token: <双方约定的固定值>
+```
+
+服务端环境变量 `HOLD_API_TOKEN` 与该值一致才放行；未配置则此通道关闭。匹配后不做角色校验。操作人记为系统用户（`SYSTEM_USER_ID=1`）。
+
+```http
+GET /admin/hold/api/holding_records?page=1&page_size=20 HTTP/1.1
+Host: {host}:50001
+X-Hold-Token: <固定值>
+Accept: application/json
+```
 
 ### 1.2 统一响应结构
 

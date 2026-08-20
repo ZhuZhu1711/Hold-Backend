@@ -26,6 +26,9 @@ class Config:
     )
     # 客户端「打开后台」一次性票据有效期（秒）
     WEB_SSO_TICKET_MAX_AGE = 60
+    # 外部系统固定 Token（Header: X-Hold-Token）。空字符串 = 关闭该通道。
+    # 生产请用环境变量 HOLD_API_TOKEN，勿把真实值提交进仓库。
+    HOLD_API_TOKEN = os.environ.get('HOLD_API_TOKEN', '').strip()
 
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'

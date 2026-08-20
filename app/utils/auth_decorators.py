@@ -6,10 +6,22 @@
   1 = 产品工程师（仅所属型号）
   8 = 质量部（只读：已处置物料报表，不参与决策）
   9 = 生产（查看生产节点 Hold / 流转）
+
+双通道：
+  1) Session Cookie（人类用户登录）
+  2) Header X-Hold-Token 与配置 HOLD_API_TOKEN 一致时，跳过登录与角色校验，
+     无 Session 则注入系统用户（SYSTEM_USER_ID + ROLE_ROOT）。
 """
+import hmac
 from functools import wraps
 
-from flask import session, redirect, url_for, flash, request, jsonify
+from flask import session, redirect, url_for, flash, request, jsonify, current_app
+
+from app.config import Config
+
+API_TOKEN_HEADER = 'X-Hold-Token'
+API_TOKEN_USER_NAME = 'API_TOKEN'
+API_TOKEN_EMPLOYEE_NO = 'API_TOKEN'
 
 ROLE_ROOT = 0
 ROLE_ENGINEER = 1
@@ -22,6 +34,47 @@ ROLE_NAMES = {
     ROLE_QUALITY: '质量部',
     ROLE_PRODUCTION: '生产',
 }
+
+
+def _configured_api_token():
+    """优先读 Flask app.config，便于测试覆盖；未设置则回退 Config。"""
+    try:
+        token = current_app.config.get('HOLD_API_TOKEN')
+        if token is not None:
+            return str(token).strip()
+    except RuntimeError:
+        pass
+    return str(getattr(Config, 'HOLD_API_TOKEN', '') or '').strip()
+
+
+def _api_token_ok():
+    expected = _configured_api_token()
+    if not expected:
+        return False
+    provided = request.headers.get(API_TOKEN_HEADER) or ''
+    if not isinstance(provided, str):
+        provided = str(provided)
+    if not provided or len(provided) != len(expected):
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
+def _establish_api_token_session():
+    """无登录态时注入系统用户，供处置/报表读取 session。"""
+    if session.get('user_id'):
+        return
+    session['user_id'] = Config.SYSTEM_USER_ID
+    session['user_name'] = API_TOKEN_USER_NAME
+    session['employee_no'] = API_TOKEN_EMPLOYEE_NO
+    session['role'] = ROLE_ROOT
+    session.permanent = False
+
+
+def _authorize_api_token():
+    if not _api_token_ok():
+        return False
+    _establish_api_token_session()
+    return True
 
 
 def _wants_json():
@@ -37,6 +90,8 @@ def _wants_json():
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        if _authorize_api_token():
+            return f(*args, **kwargs)
         if not session.get('user_id'):
             if _wants_json():
                 return jsonify({'code': 401, 'msg': '请先登录'}), 401
@@ -50,12 +105,15 @@ def role_required(*allowed_roles):
     """
     要求已登录且 ROLE 在 allowed_roles 中。
     用法: @role_required(ROLE_ROOT) 或 @role_required(ROLE_ROOT, ROLE_ENGINEER)
+    固定 Token 通道跳过角色校验。
     """
     allowed = set(allowed_roles)
 
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            if _authorize_api_token():
+                return f(*args, **kwargs)
             if not session.get('user_id'):
                 if _wants_json():
                     return jsonify({'code': 401, 'msg': '请先登录'}), 401

@@ -36,6 +36,7 @@ def create_app():
     app.config['SESSION_COOKIE_HTTPONLY'] = Config.SESSION_COOKIE_HTTPONLY
     app.config['SESSION_COOKIE_SAMESITE'] = Config.SESSION_COOKIE_SAMESITE
     app.config['SESSION_COOKIE_SECURE'] = Config.SESSION_COOKIE_SECURE
+    app.config['HOLD_API_TOKEN'] = Config.HOLD_API_TOKEN
 
     # 4. 将 db 实例与 app 绑定
     db.init_app(app)

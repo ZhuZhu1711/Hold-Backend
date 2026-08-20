@@ -30,7 +30,6 @@ from app.config import Config
 from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp, client_error_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
 from app.backend_schedule.FT_HOLD_MERGE_sche import HoldMergeScheduler
-from app.backend_schedule.FT_HOLD_PREDICT_sche import HoldPredictScheduler
 
 app = create_app()
 
@@ -122,6 +121,7 @@ if __name__ == '__main__':
         task_scheduler.start()
         schedulers.append(task_scheduler)
         if getattr(Config, 'HOLD_PREDICT_ENABLED', False):
+            from app.backend_schedule.FT_HOLD_PREDICT_sche import HoldPredictScheduler
             hold_predict_scheduler = HoldPredictScheduler()
             hold_predict_scheduler.start()
             schedulers.append(hold_predict_scheduler)
