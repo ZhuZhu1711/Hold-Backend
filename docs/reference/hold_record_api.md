@@ -36,7 +36,7 @@
 X-Hold-Token: <双方约定的固定值>
 ```
 
-服务端环境变量 `HOLD_API_TOKEN` 与该值一致才放行；未配置则此通道关闭。匹配后不做角色校验。操作人记为系统用户（`SYSTEM_USER_ID=1`）。
+服务端按启动模式读环境变量：release 用 `HOLD_API_TOKEN`，`--mode debug` 用 `HOLD_API_TOKEN_DEBUG`。与 Header 值一致才放行；未配置则此通道关闭。匹配后不做角色校验。操作人记为系统用户（`SYSTEM_USER_ID=1`）。
 
 ```http
 GET /admin/hold/api/holding_records?page=1&page_size=20 HTTP/1.1
@@ -285,7 +285,7 @@ Accept: application/json
 
 `GET /admin/hold/api/circulations`
 
-> 权限：已登录。**不按型号归属过滤**。
+> 权限：已登录。默认**不按型号归属过滤**。客户端传 `mine=1` 时仅本人相关。
 
 **Query**
 
@@ -296,6 +296,7 @@ Accept: application/json
 | `wafer_id` / `lot_id` | 否 | 精确/模糊见实现 |
 | `dispose` | 否 | 行为码 |
 | `keyword` | 否 | wafer/lot/型号/hold_code/备注 |
+| `mine` | 否 | `1`：经办人 / 下一 owner / 所属型号 命中当前登录人 |
 | `page` / `page_size` | 否 | 分页 |
 
 ---
@@ -486,7 +487,7 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
 | POST | `/eng/api/dispose` | 工程师处置（同 §5.2） |
 | GET | `/eng/api/fvi_defect_details` | 所属型号 FVI 缺陷明细 |
 
-工程师查询流转列表时，页面复用 `/admin/hold/api/circulations`（不按归属过滤）。
+工程师 Web 流转页复用 `/admin/hold/api/circulations`（不按归属过滤）。桌面客户端传 `mine=1`，仅本人相关。
 
 ---
 

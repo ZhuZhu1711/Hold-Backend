@@ -108,5 +108,39 @@ class ApiTokenAuthTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 401)
 
 
+class ApiTokenEnvNameTest(unittest.TestCase):
+    def test_release_reads_hold_api_token(self):
+        from app.config import hold_api_token_env_name, load_hold_api_token
+
+        self.assertEqual(hold_api_token_env_name(['app.py', '--mode', 'release']), 'HOLD_API_TOKEN')
+        name, value = load_hold_api_token(
+            environ={'HOLD_API_TOKEN': 'prod-secret', 'HOLD_API_TOKEN_DEBUG': 'dbg-secret'},
+            argv=['app.py', '--mode', 'release'],
+        )
+        self.assertEqual(name, 'HOLD_API_TOKEN')
+        self.assertEqual(value, 'prod-secret')
+
+    def test_debug_reads_hold_api_token_debug(self):
+        from app.config import hold_api_token_env_name, load_hold_api_token
+
+        self.assertEqual(hold_api_token_env_name(['app.py', '--mode', 'debug']), 'HOLD_API_TOKEN_DEBUG')
+        name, value = load_hold_api_token(
+            environ={'HOLD_API_TOKEN': 'prod-secret', 'HOLD_API_TOKEN_DEBUG': 'dbg-secret'},
+            argv=['app.py', '--mode', 'debug'],
+        )
+        self.assertEqual(name, 'HOLD_API_TOKEN_DEBUG')
+        self.assertEqual(value, 'dbg-secret')
+
+    def test_debug_does_not_fallback_to_release_token(self):
+        from app.config import load_hold_api_token
+
+        name, value = load_hold_api_token(
+            environ={'HOLD_API_TOKEN': 'prod-secret'},
+            argv=['app.py', '--mode', 'debug'],
+        )
+        self.assertEqual(name, 'HOLD_API_TOKEN_DEBUG')
+        self.assertEqual(value, '')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1279,14 +1279,16 @@ def query_circulations(
     lot_id='',
     dispose=None,
     keyword='',
+    related_user_id=None,
     page=1,
     page_size=20,
     limit=None,
     max_page_size=200,
 ):
     """
-    流转记录查询（全量可读，不按角色/型号归属过滤，分页）。
+    流转记录查询（默认全量可读，不按角色/型号归属过滤，分页）。
     可按 hold_record_id / product_id / wafer_id / lot_id / dispose / keyword 筛选。
+    related_user_id：仅本人相关（经办人 / 下一 owner / 所属型号）。
     成功返回 (True, msg, page_payload)。
     """
     try:
@@ -1340,6 +1342,23 @@ def query_circulations(
                 )
             """
             params['keyword'] = f"%{str(keyword).strip()}%"
+
+        if related_user_id is not None and str(related_user_id).strip() != '':
+            try:
+                params['related_user_id'] = int(related_user_id)
+            except (TypeError, ValueError):
+                return False, 'related_user_id 无效', _page_payload([], 0, page, page_size)
+            where_sql += """
+                AND (
+                    c.DISPOSED_OWNER_ID = :related_user_id
+                    OR c.NEXT_OWNER_ID = :related_user_id
+                    OR r.PRODUCT_ID IN (
+                        SELECT p.PRODUCT_ID
+                        FROM PRODUCT_INFO p
+                        WHERE p.PRO_ENG_ID = :related_user_id
+                    )
+                )
+            """
 
         from_sql = f"""
             FROM {_circ_table()} c
@@ -1437,6 +1456,7 @@ def export_circulations_xlsx(
     lot_id='',
     dispose=None,
     keyword='',
+    related_user_id=None,
 ):
     """导出流转记录为 xlsx（筛选条件与列表一致，最多 5000 行）。"""
     from app.utils.excel_export import EXPORT_MAX_ROWS, from_page_payload
@@ -1448,6 +1468,7 @@ def export_circulations_xlsx(
         lot_id=lot_id,
         dispose=dispose,
         keyword=keyword,
+        related_user_id=related_user_id,
         page=1,
         page_size=EXPORT_MAX_ROWS,
         max_page_size=EXPORT_MAX_ROWS,

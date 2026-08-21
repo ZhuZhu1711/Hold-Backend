@@ -1,0 +1,1316 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Hold 放行处置 API",
+    "description": "Hold 系统放行/处置相关接口，依据当前后端代码整理，可供 Apifox 导入。\n\n**导入**：Apifox → 项目 → 导入 → OpenAPI / Swagger → 选择本文件。\n\n**鉴权二选一**\n1. 先调 `POST /api/login`，后续请求自动带 Cookie `hold_session`。\n2. 外部系统每次请求带 Header `X-Hold-Token`（release 读 `HOLD_API_TOKEN`，debug 读 `HOLD_API_TOKEN_DEBUG`）。\n\n**端口**：release `50001`，debug `60001`。\n\n**工程师处置码**：1 放行 / 2 降级 / 3 重测 / 5 可靠性分析（转交 7 已屏蔽）。\n**生产处置码**：65 留样完成 / 8 回退 / 99 关闭。",
+    "version": "2026-08-20",
+    "contact": {
+      "name": "Hold-Backend"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:50001",
+      "description": "release（默认）"
+    },
+    {
+      "url": "http://localhost:60001",
+      "description": "debug（--mode debug）"
+    }
+  ],
+  "tags": [
+    {
+      "name": "鉴权",
+      "description": "登录拿 Session Cookie"
+    },
+    {
+      "name": "工程师处置",
+      "description": "产品工程师（ROLE=1）：所属型号待办、加载单条、提交放行/降级/重测/可靠性分析"
+    },
+    {
+      "name": "生产处置",
+      "description": "生产工作台（ROLE=9）：留样完成 / 回退 / 关闭"
+    },
+    {
+      "name": "后台处置",
+      "description": "管理端 / 外部系统：工程师处置 + 生产处置入口"
+    }
+  ],
+  "security": [
+    {
+      "HoldSession": []
+    },
+    {
+      "HoldToken": []
+    }
+  ],
+  "paths": {
+    "/api/login": {
+      "post": {
+        "tags": ["鉴权"],
+        "summary": "登录",
+        "operationId": "login",
+        "security": [],
+        "description": "密码须为 **MD5(明文) 的 32 位小写 hex**，禁止传明文。成功后下发 Cookie `hold_session`。工程师客户端须校验 `data.role === 1`。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              },
+              "examples": {
+                "default": {
+                  "summary": "明文 123456 的 MD5",
+                  "value": {
+                    "employee_no": "A0001",
+                    "password": "e10adc3949ba59abbe56e057f20f883e",
+                    "remember": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功，响应 Set-Cookie: hold_session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "用户不存在 / 密码错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                },
+                "example": {
+                  "code": 401,
+                  "msg": "用户名或密码错误"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "角色不在允许列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logout": {
+      "get": {
+        "tags": ["鉴权"],
+        "summary": "退出登录",
+        "operationId": "logout",
+        "description": "清空 Session。浏览器会跳转登录页；API 客户端也可直接丢弃 Cookie。",
+        "responses": {
+          "302": {
+            "description": "跳转登录页"
+          }
+        }
+      }
+    },
+    "/eng/api/holding_records": {
+      "get": {
+        "tags": ["工程师处置"],
+        "summary": "工程师 Holding 列表",
+        "operationId": "engListHoldingRecords",
+        "description": "仅所属型号（`PRODUCT_INFO.PRO_ENG_ID = 本人`）的在线 Hold。待办工作台建议 `pending_only=1`。仅 `CAN_DISPOSE=true` 时可提交处置。",
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "型号模糊匹配"
+          },
+          {
+            "name": "station",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "站点模糊匹配"
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "匹配 WAFER_ID / LOT_ID / HOLD_CODE / HOLD_REASON"
+          },
+          {
+            "name": "record_type",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "enum": [0, 1, 2]
+            },
+            "description": "0 FT / 1 FVI / 2 WLT；空则不过滤"
+          },
+          {
+            "name": "pending_only",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["1", "true", "yes", "y"]
+            },
+            "description": "仅当前负责人为本人的待办",
+            "example": "1"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": { "type": "integer", "default": 1, "minimum": 1 }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 200 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldingListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PagedErrorBody" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/eng/api/records/{record_id}": {
+      "get": {
+        "tags": ["工程师处置"],
+        "summary": "加载处置单条",
+        "operationId": "engGetDisposeRecord",
+        "description": "处置页完整 record。须为所属型号。WLT 用 `WAFERS` 组装 `wafer_actions`；FT/FVI 用 `GRADES` 组装降级/重测。若 `AFTER_RELIABILITY_ANALYZE=true`：仅允许放行/降级，且必须手输备注。",
+        "parameters": [
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "example": 123
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeRecordResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "403": {
+            "description": "不属于您负责的型号",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "404": {
+            "description": "记录不存在",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/eng/api/dispose_actions": {
+      "get": {
+        "tags": ["工程师处置"],
+        "summary": "工程师可发起处置码",
+        "operationId": "engListDisposeActions",
+        "description": "固定返回 1 放行 / 2 降级 / 3 重测 / 5 可靠性分析。也可客户端本地写死。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeActionsResponse"
+                },
+                "example": {
+                  "code": 200,
+                  "msg": "获取成功",
+                  "data": [
+                    { "dispose": 1, "label": "放行", "group": "engineer" },
+                    { "dispose": 2, "label": "降级", "group": "engineer" },
+                    { "dispose": 3, "label": "重测", "group": "engineer" },
+                    { "dispose": 5, "label": "可靠性分析", "group": "engineer" }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/eng/api/notes": {
+      "get": {
+        "tags": ["工程师处置"],
+        "summary": "工程备注下拉",
+        "operationId": "engListNotes",
+        "description": "所属型号可用工程备注（`IS_AVAILABLE=1`）。选中文本填入处置请求的 `dispose_note`。",
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "型号代码，与 Holding 行 PRODUCT_ID 一致",
+            "example": "XX-3.5"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotesListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "缺少 product_id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "403": {
+            "description": "型号不属于当前工程师",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/eng/api/dispose": {
+      "post": {
+        "tags": ["工程师处置"],
+        "summary": "提交工程师处置",
+        "operationId": "engSubmitDispose",
+        "description": "写入 CIRCULATION_HISTORY，回写 LAST_CIRCULATION_ID / STATUS，**不改 GRADE_NUM**。\n\n- 非 WLT：必填 `dispose`；降级带 `downgrades`，重测带 `retest_grades`；禁止 `wafer_actions`。\n- WLT：必填 `wafer_actions`，须覆盖全部 `WAFERS`；顶层 `dispose` 可省略，由各片汇总（任一 5→5，否则 3→3，否则 2→2，否则 1）。\n- 可靠性分析之后：仅允许 1/2，且 `dispose_manual_note` 必填；不足 30 分钟返回 409，确认后带 `confirm_interval=true`。\n- 须为当前负责人，且记录未关闭。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineerDisposeRequest"
+              },
+              "examples": {
+                "ftRelease": {
+                  "summary": "FT/FVI 放行",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 1,
+                    "dispose_note": "良率可接受",
+                    "dispose_manual_note": "可选手输"
+                  }
+                },
+                "ftDowngrade": {
+                  "summary": "FT/FVI 降级",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 2,
+                    "downgrades": [
+                      { "from": "HA", "to": "F" },
+                      { "from": "FB", "to": "F" }
+                    ],
+                    "dispose_note": "按规范降级"
+                  }
+                },
+                "ftRetest": {
+                  "summary": "FT/FVI 重测",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 3,
+                    "retest_grades": ["F", "HA"],
+                    "dispose_manual_note": "关注边缘"
+                  }
+                },
+                "ftAnalyze": {
+                  "summary": "可靠性分析",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 5,
+                    "dispose_manual_note": "送可靠性"
+                  }
+                },
+                "afterAnalyzeRelease": {
+                  "summary": "分析后放行（须手输备注；不足30分钟加 confirm_interval）",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 1,
+                    "dispose_manual_note": "分析完成，同意放行",
+                    "confirm_interval": true
+                  }
+                },
+                "wltMixed": {
+                  "summary": "WLT 按片混用",
+                  "value": {
+                    "hold_record_id": 123,
+                    "wafer_actions": [
+                      { "wafer": "#01", "dispose": 1 },
+                      { "wafer": "#02", "dispose": 2, "downgrade_mode": "main_split" },
+                      { "wafer": "#03", "dispose": 3, "retest_mode": "fixture_a", "retest_codes": "@1@361" },
+                      { "wafer": "#04", "dispose": 3, "retest_mode": "full" },
+                      { "wafer": "#05", "dispose": 5 }
+                    ],
+                    "dispose_note": "按片意见"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "处置成功。放行/降级/重测 next_owner_id 一般为 181；可靠性分析仍是操作工程师。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeSuccessResponse"
+                },
+                "examples": {
+                  "release": {
+                    "summary": "放行成功",
+                    "value": {
+                      "code": 200,
+                      "msg": "处置成功",
+                      "data": {
+                        "hold_record_id": 123,
+                        "circulation_id": 456,
+                        "dispose": 1,
+                        "dispose_label": "放行",
+                        "disposed_owner_id": 12,
+                        "next_owner_id": 181,
+                        "dispose_detail": null,
+                        "dispose_note": "良率可接受",
+                        "dispose_manual_note": "可选手输",
+                        "status": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数或业务校验失败",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" },
+                "examples": {
+                  "missingId": { "value": { "code": 400, "msg": "hold_record_id 必填", "data": null } },
+                  "needOne": { "value": { "code": 400, "msg": "dispose 与 wafer_actions 至少提供其一", "data": null } },
+                  "notOwner": { "value": { "code": 400, "msg": "仅当前负责人可处置该记录", "data": null } },
+                  "afterAnalyze": { "value": { "code": 400, "msg": "可靠性分析之后仅允许放行或降级", "data": null } },
+                  "needManual": { "value": { "code": 400, "msg": "可靠性分析之后须手输备注", "data": null } }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "距上次可靠性分析不足 30 分钟，需确认后带 confirm_interval=true 再提交",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntervalConfirmResponse"
+                },
+                "example": {
+                  "code": 409,
+                  "msg": "距上次可靠性分析不足30分钟，确认后请再次提交",
+                  "data": { "need_interval_confirm": true }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/prod/api/holding_records": {
+      "get": {
+        "tags": ["生产处置"],
+        "summary": "生产待办列表",
+        "operationId": "prodListHoldingRecords",
+        "description": "当前节点在生产 OP（默认 181），或待留样（可靠性分析后尚未留样完成）。`CAN_DISPOSE`：节点在生产且未关闭；`CAN_SAMPLE_DONE`：待留样且未关闭。",
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "station",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "record_type",
+            "in": "query",
+            "schema": { "type": "integer", "enum": [0, 1, 2] }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": { "type": "integer", "default": 1 }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": { "type": "integer", "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldingListResponse"
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/prod/api/records/{record_id}": {
+      "get": {
+        "tags": ["生产处置"],
+        "summary": "加载生产处置单条",
+        "operationId": "prodGetDisposeRecord",
+        "description": "允许：当前节点为生产 OP，或待留样。否则 400「该记录当前不在生产待办且无需留样」。",
+        "parameters": [
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeRecordResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "不在生产待办且无需留样",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "404": {
+            "description": "记录不存在",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/prod/api/dispose_actions": {
+      "get": {
+        "tags": ["生产处置"],
+        "summary": "生产可发起处置码",
+        "operationId": "prodListDisposeActions",
+        "description": "返回 65 留样完成 / 8 回退 / 99 关闭。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeActionsResponse"
+                },
+                "example": {
+                  "code": 200,
+                  "msg": "获取成功",
+                  "data": [
+                    { "dispose": 8, "label": "回退", "group": "production" },
+                    { "dispose": 65, "label": "留样完成", "group": "production" },
+                    { "dispose": 99, "label": "关闭", "group": "production" }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/prod/api/dispose": {
+      "post": {
+        "tags": ["生产处置"],
+        "summary": "提交生产处置",
+        "operationId": "prodSubmitDispose",
+        "description": "65 留样完成：只写流转，不改当前负责人 / STATUS。8 回退：退回型号工程师。99 关闭：终态。回退/关闭须当前节点在生产；留样完成不要求当前节点在生产。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductionDisposeRequest"
+              },
+              "examples": {
+                "sampleDone": {
+                  "summary": "留样完成",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 65,
+                    "dispose_manual_note": "已留样"
+                  }
+                },
+                "rollback": {
+                  "summary": "回退",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 8,
+                    "dispose_manual_note": "产线回退"
+                  }
+                },
+                "close": {
+                  "summary": "关闭",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 99,
+                    "dispose_manual_note": "已落地关闭"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeSuccessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数或业务校验失败",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/admin/hold/api/dispose_actions": {
+      "get": {
+        "tags": ["后台处置"],
+        "summary": "查询可发起处置码",
+        "operationId": "adminListDisposeActions",
+        "description": "权限：root / 工程师。`group` 为空时返回用户可发起的全部码。",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["engineer", "production", "system"]
+            },
+            "description": "可选过滤"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeActionsResponse"
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/admin/hold/api/dispose": {
+      "post": {
+        "tags": ["后台处置"],
+        "summary": "工程师/Root 处置",
+        "operationId": "adminSubmitDispose",
+        "description": "权限：root / 工程师。工程师只能对「当前负责人是自己」的单做 1/2/3/5；root 可代操作更广范围。Body 与 `POST /eng/api/dispose` 相同。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineerDisposeRequest"
+              },
+              "examples": {
+                "ftRelease": {
+                  "summary": "放行",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 1,
+                    "dispose_note": "良率可接受"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeSuccessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数或业务校验失败",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "409": {
+            "description": "距上次可靠性分析不足 30 分钟",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntervalConfirmResponse"
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/admin/hold/api/production/dispose": {
+      "post": {
+        "tags": ["后台处置"],
+        "summary": "生产处置（外部系统入口）",
+        "operationId": "adminSubmitProductionDispose",
+        "description": "权限：生产角色或 root。Body 与 `POST /prod/api/dispose` 相同。外部生产系统完成作业后回写走此接口。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductionDisposeRequest"
+              },
+              "examples": {
+                "rollback": {
+                  "summary": "回退",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 8,
+                    "dispose_manual_note": "产线回退"
+                  }
+                },
+                "sampleDone": {
+                  "summary": "留样完成",
+                  "value": {
+                    "hold_record_id": 123,
+                    "dispose": 65
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisposeSuccessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数或业务校验失败",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorBody" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/admin/hold/api/pending_records": {
+      "get": {
+        "tags": ["后台处置"],
+        "summary": "待办列表",
+        "operationId": "adminListPendingRecords",
+        "description": "最新流转 NEXT_OWNER_ID = 当前用户。root 默认全量，可传 owner_id 过滤。生产角色固定 owner_id = 181。",
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "owner_id",
+            "in": "query",
+            "schema": { "type": "integer" },
+            "description": "仅 root 可用"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": { "type": "integer", "default": 1 }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": { "type": "integer", "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldingListResponse"
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "HoldSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "hold_session",
+        "description": "登录后由服务端下发。Apifox 勾选「自动携带 Cookie」即可。"
+      },
+      "HoldToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Hold-Token",
+        "description": "外部系统固定 Token。release 对应 HOLD_API_TOKEN，debug 对应 HOLD_API_TOKEN_DEBUG。匹配后跳过登录与角色校验，操作人记为系统用户。"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "未登录",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorBody" },
+            "example": { "code": 401, "msg": "请先登录" }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "已登录但角色不符",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorBody" }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "服务异常",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorBody" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "required": ["employee_no", "password"],
+        "properties": {
+          "employee_no": {
+            "type": "string",
+            "description": "工号",
+            "example": "A0001"
+          },
+          "password": {
+            "type": "string",
+            "description": "MD5(明文密码) 的 32 位小写 hex",
+            "example": "e10adc3949ba59abbe56e057f20f883e"
+          },
+          "remember": {
+            "type": "boolean",
+            "default": true,
+            "description": "持久 Cookie，约 30 天"
+          }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "msg": { "type": "string", "example": "登录成功" },
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "integer", "example": 12 },
+              "name": { "type": "string", "example": "张三" },
+              "role": {
+                "type": "integer",
+                "description": "0 超管 / 1 工程师 / 9 生产",
+                "example": 1
+              },
+              "employee_no": { "type": "string", "example": "A0001" },
+              "remember": { "type": "boolean" },
+              "redirect": { "type": "string", "example": "/eng/dashboard" }
+            }
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer" },
+          "msg": { "type": "string" },
+          "data": { "nullable": true }
+        }
+      },
+      "PagedErrorBody": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ErrorBody" },
+          {
+            "type": "object",
+            "properties": {
+              "total": { "type": "integer", "example": 0 }
+            }
+          }
+        ]
+      },
+      "DisposeAction": {
+        "type": "object",
+        "properties": {
+          "dispose": { "type": "integer" },
+          "label": { "type": "string" },
+          "group": {
+            "type": "string",
+            "enum": ["engineer", "production", "system"]
+          }
+        }
+      },
+      "DisposeActionsResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "msg": { "type": "string" },
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DisposeAction" }
+          }
+        }
+      },
+      "HoldingRecord": {
+        "type": "object",
+        "description": "在线 Hold 列表项。工程师/生产列表还会附加 CAN_DISPOSE、可靠性分析后续字段。",
+        "properties": {
+          "ID": { "type": "integer", "example": 123 },
+          "PRODUCT_ID": { "type": "string" },
+          "STATION": { "type": "string" },
+          "EQUIP_ID": { "type": "string" },
+          "LOT_ID": { "type": "string" },
+          "WAFER_ID": { "type": "string", "description": "展示可能为 #01#02" },
+          "HOLD_CODE": { "type": "string" },
+          "HOLD_REASON": { "type": "string" },
+          "SOURCE": {
+            "type": "integer",
+            "description": "0 MES 合批；1 手提"
+          },
+          "SECOND_CODE": { "type": "string", "nullable": true },
+          "ROUTE_ID": { "type": "string", "nullable": true },
+          "GRADE_NUM": { "type": "string", "nullable": true },
+          "GRADE_NUM_DISPLAY": { "type": "string" },
+          "GRADES": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "解析后的等级列表"
+          },
+          "RECORD_TYPE": {
+            "type": "integer",
+            "enum": [0, 1, 2],
+            "description": "0 FT / 1 FVI / 2 WLT"
+          },
+          "RECORD_TYPE_NAME": { "type": "string" },
+          "STATUS": {
+            "type": "integer",
+            "description": "等于最近一次处置码；99 已关闭"
+          },
+          "IS_CLOSED": { "type": "boolean" },
+          "LAST_CIRCULATION_ID": { "type": "integer", "nullable": true },
+          "HOLD_DTTM": { "type": "string", "nullable": true },
+          "ANNEX_FTP_PATH": { "type": "string", "nullable": true },
+          "IS_AQL_HOLD": { "type": "boolean" },
+          "ANNEX_COUNT": { "type": "integer" },
+          "CURRENT_OWNER_ID": { "type": "integer", "nullable": true },
+          "CURRENT_OWNER_NAME": { "type": "string", "nullable": true },
+          "LAST_DISPOSE": { "type": "integer", "nullable": true },
+          "LAST_DISPOSE_LABEL": { "type": "string" },
+          "LAST_DISPOSE_DETAIL": { "type": "string", "nullable": true },
+          "LAST_DISPOSE_NOTE": { "type": "string", "nullable": true },
+          "LAST_DISPOSE_MANUAL_NOTE": { "type": "string", "nullable": true },
+          "LAST_DISPOSE_DTTM": { "type": "string", "nullable": true },
+          "LAST_DISPOSED_OWNER_ID": { "type": "integer", "nullable": true },
+          "LAST_DISPOSED_OWNER_NAME": { "type": "string", "nullable": true },
+          "CAN_DISPOSE": {
+            "type": "boolean",
+            "description": "当前负责人是本人且未关闭"
+          },
+          "CAN_SAMPLE_DONE": {
+            "type": "boolean",
+            "description": "生产列表：待留样且未关闭"
+          },
+          "PENDING_SAMPLE_RETAIN": { "type": "boolean" },
+          "AFTER_RELIABILITY_ANALYZE": {
+            "type": "boolean",
+            "description": "上一工程师处置为可靠性分析"
+          },
+          "ALLOWED_DISPOSES": {
+            "type": "array",
+            "items": { "type": "integer" },
+            "description": "分析后为 [1,2]，否则 [1,2,3,5]"
+          },
+          "REQUIRE_MANUAL_NOTE": { "type": "boolean" },
+          "ANALYZE_INTERVAL_WARN": {
+            "type": "boolean",
+            "description": "距上次分析不足 30 分钟"
+          },
+          "LAST_ANALYZE_DTTM": { "type": "string", "nullable": true }
+        }
+      },
+      "HoldingListResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "msg": { "type": "string" },
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/HoldingRecord" }
+          },
+          "total": { "type": "integer" },
+          "page": { "type": "integer" },
+          "page_size": { "type": "integer" },
+          "pages": { "type": "integer" }
+        }
+      },
+      "DisposeRecord": {
+        "allOf": [
+          { "$ref": "#/components/schemas/HoldingRecord" },
+          {
+            "type": "object",
+            "properties": {
+              "WAFERS": {
+                "type": "array",
+                "items": { "type": "string" },
+                "example": ["#01", "#02", "#03"],
+                "description": "WLT 按片处置必用，须全部覆盖"
+              }
+            }
+          }
+        ]
+      },
+      "DisposeRecordResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "msg": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/DisposeRecord" }
+        }
+      },
+      "EngNote": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "product_id": {
+            "type": "integer",
+            "description": "PRODUCT_INFO 主键，不是型号代码"
+          },
+          "product_code": {
+            "type": "string",
+            "description": "型号代码"
+          },
+          "note": { "type": "string" },
+          "is_available": { "type": "integer", "example": 1 },
+          "type": { "type": "string" }
+        }
+      },
+      "NotesListResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "msg": { "type": "string" },
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EngNote" }
+          },
+          "total": { "type": "integer" }
+        }
+      },
+      "DowngradeItem": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "type": "string", "example": "HA" },
+          "to": { "type": "string", "example": "F" }
+        }
+      },
+      "WaferAction": {
+        "type": "object",
+        "required": ["dispose"],
+        "properties": {
+          "wafer": {
+            "type": "string",
+            "description": "片号展示，如 #01；也可用字段名 wafer_id",
+            "example": "#01"
+          },
+          "wafer_id": {
+            "type": "string",
+            "description": "与 wafer 二选一"
+          },
+          "dispose": {
+            "type": "integer",
+            "enum": [1, 2, 3, 5],
+            "description": "1 放行 / 2 降级 / 3 重测 / 5 可靠性分析"
+          },
+          "downgrade_mode": {
+            "type": "string",
+            "enum": ["main_split", "main_nosplit"],
+            "description": "dispose=2 必填；不指定等级"
+          },
+          "retest_mode": {
+            "type": "string",
+            "enum": ["full", "fixture_a", "fixture_b"],
+            "description": "dispose=3 必填。full 禁止填 code；夹具重测必须 retest_codes"
+          },
+          "retest_codes": {
+            "type": "string",
+            "description": "正则 ^(@\\d+)+$，如 @1@361",
+            "example": "@1@361"
+          }
+        }
+      },
+      "EngineerDisposeRequest": {
+        "type": "object",
+        "required": ["hold_record_id"],
+        "properties": {
+          "hold_record_id": {
+            "type": "integer",
+            "description": "记录 ID"
+          },
+          "dispose": {
+            "type": "integer",
+            "enum": [1, 2, 3, 5],
+            "description": "非 WLT 必填。WLT 可省略，由 wafer_actions 汇总；若传入须与汇总一致。1 放行 / 2 降级 / 3 重测 / 5 可靠性分析"
+          },
+          "wafer_actions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/WaferAction" },
+            "description": "WLT 必填，须覆盖全部 wafer；非 WLT 禁止"
+          },
+          "downgrades": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DowngradeItem" },
+            "description": "非 WLT 降级：至少一条 from≠to；服务端生成 DISPOSE_DETAIL=DG:HA>F;FB>F"
+          },
+          "retest_grades": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "非 WLT 重测等级列表；服务端生成 DISPOSE_DETAIL=RT:F,HA"
+          },
+          "retest_code": {
+            "type": "string",
+            "description": "旧版兼容；新 WLT 勿用"
+          },
+          "dispose_detail": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "一般勿传，由服务端生成"
+          },
+          "dispose_note": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "工程备注（备注库选中文本）"
+          },
+          "dispose_manual_note": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "手输备注；可靠性分析之后的放行/降级必填"
+          },
+          "confirm_interval": {
+            "type": "boolean",
+            "description": "距可靠性分析不足 30 分钟时须为 true"
+          }
+        }
+      },
+      "ProductionDisposeRequest": {
+        "type": "object",
+        "required": ["hold_record_id", "dispose"],
+        "properties": {
+          "hold_record_id": { "type": "integer" },
+          "dispose": {
+            "type": "integer",
+            "enum": [65, 8, 99],
+            "description": "65 留样完成 / 8 回退 / 99 关闭"
+          },
+          "dispose_detail": {
+            "type": "string",
+            "description": "兼容旧字段；自由备注请用 dispose_manual_note"
+          },
+          "dispose_manual_note": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      },
+      "DisposeResult": {
+        "type": "object",
+        "properties": {
+          "hold_record_id": { "type": "integer" },
+          "circulation_id": { "type": "integer" },
+          "dispose": { "type": "integer" },
+          "dispose_label": { "type": "string", "example": "放行" },
+          "disposed_owner_id": { "type": "integer" },
+          "next_owner_id": {
+            "type": "integer",
+            "nullable": true,
+            "description": "放行/降级/重测一般为 181；可靠性分析为操作工程师；关闭为 null"
+          },
+          "dispose_detail": { "type": "string", "nullable": true },
+          "dispose_note": { "type": "string", "nullable": true },
+          "dispose_manual_note": { "type": "string", "nullable": true },
+          "status": { "type": "integer" }
+        }
+      },
+      "DisposeSuccessResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "msg": { "type": "string", "example": "处置成功" },
+          "data": { "$ref": "#/components/schemas/DisposeResult" }
+        }
+      },
+      "IntervalConfirmResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 409 },
+          "msg": {
+            "type": "string",
+            "example": "距上次可靠性分析不足30分钟，确认后请再次提交"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "need_interval_confirm": { "type": "boolean", "example": true }
+            }
+          }
+        }
+      }
+    }
+  }
+}
