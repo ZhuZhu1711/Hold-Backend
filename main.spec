@@ -18,7 +18,7 @@ from app.config import Config
 
 INCLUDE_HOLD_PREDICT_ML = bool(getattr(Config, 'HOLD_PREDICT_ENABLED', False))
 print(
-    'Hold-Backend spec: HOLD_PREDICT_ENABLED=%s → pack ML=%s'
+    'Hold-Backend spec: HOLD_PREDICT_ENABLED=%s -> pack ML=%s'
     % (getattr(Config, 'HOLD_PREDICT_ENABLED', False), INCLUDE_HOLD_PREDICT_ML)
 )
 
