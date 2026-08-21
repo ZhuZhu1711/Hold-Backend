@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
 
 if ($env:GITHUB_ACTIONS -eq 'true' -or $env:CI -eq 'true') {
     $cmd = Get-Command python -ErrorAction Stop
