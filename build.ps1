@@ -1,13 +1,18 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-$py = Join-Path $env:USERPROFILE '.conda\envs\web\python.exe'
-if (-not (Test-Path $py)) {
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        Write-Error '找不到 Python。请先 conda activate web，或把 web 环境的 python.exe 加入 PATH。'
-    }
+if ($env:GITHUB_ACTIONS -eq 'true' -or $env:CI -eq 'true') {
+    $cmd = Get-Command python -ErrorAction Stop
     $py = $cmd.Source
+} else {
+    $py = Join-Path $env:USERPROFILE '.conda\envs\web\python.exe'
+    if (-not (Test-Path $py)) {
+        $cmd = Get-Command python -ErrorAction SilentlyContinue
+        if (-not $cmd) {
+            Write-Error '找不到 Python。请先 conda activate web，或把 web 环境的 python.exe 加入 PATH。'
+        }
+        $py = $cmd.Source
+    }
 }
 
 Write-Host "Using: $py"
