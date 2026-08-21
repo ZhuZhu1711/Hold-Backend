@@ -2,6 +2,33 @@ import os
 import sys
 from datetime import timedelta
 
+
+def argv_is_debug_mode(argv=None):
+    argv = sys.argv if argv is None else argv
+    for i, a in enumerate(argv):
+        a_l = a.lower()
+        if a_l.startswith('--mode='):
+            if a_l.split('=', 1)[1] == 'debug':
+                return True
+        if a_l == '--mode':
+            if i + 1 < len(argv) and argv[i + 1].lower() == 'debug':
+                return True
+        if a_l in ('mode==debug', 'mode=debug', 'debug'):
+            return True
+    return False
+
+
+def hold_api_token_env_name(argv=None):
+    """release: HOLD_API_TOKEN；debug: HOLD_API_TOKEN_DEBUG。"""
+    return 'HOLD_API_TOKEN_DEBUG' if argv_is_debug_mode(argv) else 'HOLD_API_TOKEN'
+
+
+def load_hold_api_token(environ=None, argv=None):
+    environ = os.environ if environ is None else environ
+    name = hold_api_token_env_name(argv)
+    return name, (environ.get(name) or '').strip()
+
+
 class Config:
 
     SQLALCHEMY_DATABASE_URI = 'oracle+oracledb://FT_OWEN:Mee0MvpgXU!Lcp@172.18.202.5:1521/?service_name=jsqy'
@@ -26,6 +53,9 @@ class Config:
     )
     # 客户端「打开后台」一次性票据有效期（秒）
     WEB_SSO_TICKET_MAX_AGE = 60
+    # 外部系统固定 Token（Header: X-Hold-Token）。空字符串 = 关闭该通道。
+    # release 读 HOLD_API_TOKEN，debug 读 HOLD_API_TOKEN_DEBUG。勿把真实值提交进仓库。
+    HOLD_API_TOKEN_ENV, HOLD_API_TOKEN = load_hold_api_token()
 
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
@@ -54,25 +84,12 @@ class Config:
     RAW_DATA_INTERVAL_MINUTES = 60
 
     # Hold info 合并为 hold_record 的定时任务配置
-    def _argv_is_debug_mode():
-        for i, a in enumerate(sys.argv):
-            a_l = a.lower()
-            if a_l.startswith('--mode='):
-                if a_l.split('=', 1)[1] == 'debug':
-                    return True
-            if a_l == '--mode':
-                if i + 1 < len(sys.argv) and sys.argv[i + 1].lower() == 'debug':
-                    return True
-            if a_l in ('mode==debug', 'mode=debug', 'debug'):
-                return True
-        return False
-
-    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if _argv_is_debug_mode() else 'FT_HOLD_INFO'
-    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if _argv_is_debug_mode() else 'FT_HOLD_RECORD'
+    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if argv_is_debug_mode() else 'FT_HOLD_INFO'
+    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if argv_is_debug_mode() else 'FT_HOLD_RECORD'
     CIRCULATION_HISTORY_TABLE = (
-        'CIRCULATION_HISTORY_TEST' if _argv_is_debug_mode() else 'CIRCULATION_HISTORY'
+        'CIRCULATION_HISTORY_TEST' if argv_is_debug_mode() else 'CIRCULATION_HISTORY'
     )
-    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if _argv_is_debug_mode() else 'FT_HOLD_PREDICT'
+    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if argv_is_debug_mode() else 'FT_HOLD_PREDICT'
     # 过渡期：新系统处置成功后静默写回旧 HOLD_INFO / WLT_HOLD_INFO / HISTORY_DISPOSITION。
     # 旧系统完全下线后把下面改成 False（重启后端即停写，无需删代码）。
     # 也可不改代码：环境变量 HOLD_LEGACY_WRITEBACK=0 后重启。
@@ -80,7 +97,7 @@ class Config:
     LEGACY_DISPOSE_WRITEBACK = True
     LEGACY_DISPOSE_WRITEBACK_ENABLED = (
         LEGACY_DISPOSE_WRITEBACK
-        and (not _argv_is_debug_mode())
+        and (not argv_is_debug_mode())
         and os.environ.get('HOLD_LEGACY_WRITEBACK', '1').strip().lower()
         not in ('0', 'false', 'no', 'off')
     )

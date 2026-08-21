@@ -21,6 +21,11 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error '当前 Python 缺少 PyInstaller 或 waitress，请先: pip install -r requirements.txt'
 }
 
+& $py -c "from app.config import Config; print('HOLD_PREDICT_ENABLED=', Config.HOLD_PREDICT_ENABLED)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error '无法读取 app.config.HOLD_PREDICT_ENABLED'
+}
+
 & $py -m PyInstaller --noconfirm --clean main.spec
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

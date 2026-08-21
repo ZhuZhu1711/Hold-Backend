@@ -27,6 +27,17 @@ def _actor():
     return session.get('user_id'), session.get('role')
 
 
+def _related_user_id_if_mine():
+    """mine=1 时按当前登录人过滤；未开则返回 (True, None)。"""
+    raw = str(request.args.get('mine') or '').strip().lower()
+    if raw not in ('1', 'true', 'yes', 'y', 'on'):
+        return True, None
+    try:
+        return True, int(session.get('user_id'))
+    except (TypeError, ValueError):
+        return False, None
+
+
 # ==========================================
 # 页面
 # ==========================================
@@ -182,15 +193,19 @@ def api_production_dispose():
 @role_required(*_CIRCULATION_ROLES)
 def api_query_circulations():
     """
-    流转记录查询（root / 工程师 / 生产可读，含他人型号，分页）。
+    流转记录查询（root / 工程师 / 生产可读；默认含他人型号，分页）。
     Query:
       hold_record_id  指定 record
       product_id      型号（模糊）
       wafer_id / lot_id
       dispose         行为码
       keyword         wafer/lot/型号/hold_code/备注
+      mine            1 时仅本人相关：经办人 / 下一 owner / 所属型号
       page / page_size  默认 1 / 20
     """
+    ok, related_user_id = _related_user_id_if_mine()
+    if not ok:
+        return jsonify({'code': 400, 'msg': 'mine 需要已登录用户', 'data': [], 'total': 0}), 400
     success, msg, payload = dispose_ctrl.query_circulations(
         hold_record_id=request.args.get('hold_record_id'),
         product_id=request.args.get('product_id', '').strip(),
@@ -198,6 +213,7 @@ def api_query_circulations():
         lot_id=request.args.get('lot_id', '').strip(),
         dispose=request.args.get('dispose'),
         keyword=request.args.get('keyword', '').strip(),
+        related_user_id=related_user_id,
         page=request.args.get('page', 1),
         page_size=request.args.get('page_size', 20),
     )
@@ -220,8 +236,11 @@ def api_query_circulations():
 def api_query_circulations_export():
     """
     导出流转记录为 xlsx（筛选条件与列表一致，最多 5000 行）。
-    Query: hold_record_id, product_id, wafer_id, lot_id, dispose, keyword
+    Query: hold_record_id, product_id, wafer_id, lot_id, dispose, keyword, mine
     """
+    ok, related_user_id = _related_user_id_if_mine()
+    if not ok:
+        return jsonify({'code': 400, 'msg': 'mine 需要已登录用户', 'data': None}), 400
     success, msg, content = dispose_ctrl.export_circulations_xlsx(
         hold_record_id=request.args.get('hold_record_id'),
         product_id=request.args.get('product_id', '').strip(),
@@ -229,6 +248,7 @@ def api_query_circulations_export():
         lot_id=request.args.get('lot_id', '').strip(),
         dispose=request.args.get('dispose'),
         keyword=request.args.get('keyword', '').strip(),
+        related_user_id=related_user_id,
     )
     return xlsx_or_error(
         success, msg, content, stamp_filename('hold_circulations'),
