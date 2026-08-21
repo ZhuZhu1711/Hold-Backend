@@ -1,0 +1,42 @@
+# GitLab CI：Windows 打包 HoldBackend.exe
+# 需要一台带 tag `windows` 的 Runner，PATH 上有 Python 3.12 与 PowerShell。
+# 触发：master、v* 标签、CI/CD → Run pipeline。
+
+stages:
+  - package
+
+variables:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
+package:
+  stage: package
+  tags:
+    - windows
+  timeout: 60 minutes
+  interruptible: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == "master"
+  script:
+    - python --version
+    - python -m pip install --upgrade pip
+    - python -m pip install -r requirements.txt
+    - powershell -NoProfile -ExecutionPolicy Bypass -File ./build.ps1
+    - |
+      if (-not (Test-Path dist/HoldBackend.exe)) {
+        throw "missing dist/HoldBackend.exe"
+      }
+      Compress-Archive -Path dist/HoldBackend.exe -DestinationPath dist/HoldBackend-windows.zip -Force
+    - |
+      if ($env:CI_COMMIT_TAG) {
+        $url = "$env:CI_API_V4_URL/projects/$env:CI_PROJECT_ID/packages/generic/HoldBackend/$env:CI_COMMIT_TAG/HoldBackend-windows.zip"
+        Invoke-WebRequest -Uri $url -Method Put -Headers @{ "JOB-TOKEN" = $env:CI_JOB_TOKEN } -InFile dist/HoldBackend-windows.zip -UseBasicParsing
+      }
+  artifacts:
+    name: HoldBackend-windows
+    paths:
+      - dist/HoldBackend-windows.zip
+    expire_in: 14 days
+    when: on_success
