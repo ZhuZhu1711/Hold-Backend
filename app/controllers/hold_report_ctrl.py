@@ -11,6 +11,7 @@ Hold 报表业务逻辑（root 全量数据）。
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 import logging
+import re
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -393,27 +394,137 @@ def export_holding_records_xlsx(
     )
 
 
-def get_hold_count_by_wafer(wafer_id):
+def _hold_count_match_spec(wafer_id, lot_id=None):
     """
-    按 wafer_id 统计 FT_HOLD_RECORD 中的 hold 次数（记录条数）。
+    解析查询片号：完整 MES 片号（C196721-05）或 WLT 展示串（#05 / #01#02）。
+    返回 (exact_ids, lot_prefix, display_tokens)。
+    exact_ids 只含完整片号，不含 #05，避免登录客户端把展示串当成全局等值匹配。
+    display_tokens 必须配合 lot_prefix 使用：单片只匹配 #05/#5，不匹配合批串 #01#02#05。
+    """
+    wafer_id = str(wafer_id or '').strip()
+    lot_raw = str(lot_id or '').strip() if lot_id is not None else ''
+    exact_ids = []
+    display_tokens = []
+    seen_exact = set()
+    seen_disp = set()
+
+    def _add_exact(val):
+        text = str(val or '').strip()
+        if not text or text.startswith('#') or text in seen_exact:
+            return
+        seen_exact.add(text)
+        exact_ids.append(text)
+
+    def _add_disp(val):
+        text = str(val or '').strip().replace(' ', '')
+        if not text or text in seen_disp:
+            return
+        seen_disp.add(text)
+        display_tokens.append(text)
+
+    def _add_suffix_tokens(suf):
+        if not suf:
+            return
+        _add_disp(f'#{suf}')
+        if suf.isdigit():
+            num = int(suf)
+            _add_disp(f'#{num}')
+            if 1 <= num <= 25:
+                _add_disp(f'#{num:02d}')
+
+    if wafer_id.startswith('#'):
+        lot_prefix = normalize_lot_id(lot_raw)
+        tokens = re.findall(r'#([^#\s]+)', wafer_id)
+        _add_disp(wafer_id)
+        if len(tokens) == 1:
+            _add_suffix_tokens(tokens[0])
+        for wid in expand_display_wafer_ids(wafer_id, lot_raw):
+            _add_exact(wid)
+    elif '-' in wafer_id:
+        lot_prefix = normalize_lot_id(wafer_id) or normalize_lot_id(lot_raw)
+        _add_exact(wafer_id)
+        _add_suffix_tokens(wafer_id.rsplit('-', 1)[-1].strip())
+    else:
+        lot_prefix = normalize_lot_id(lot_raw) or normalize_lot_id(wafer_id)
+        _add_exact(wafer_id)
+
+    return exact_ids, lot_prefix, display_tokens
+
+
+def _stored_wafer_matches_hold_count(stored, exact_ids, display_tokens):
+    stored = str(stored or '').strip()
+    if not stored:
+        return False
+    compact = stored.replace(' ', '')
+    if stored in exact_ids or compact in exact_ids:
+        return True
+    return compact in display_tokens
+
+
+def get_hold_count_by_wafer(wafer_id, lot_id=None):
+    """
+    按 wafer 统计 FT_HOLD_RECORD 中的 hold 次数（记录条数）。
+
+    WLT / 合批写入的 WAFER_ID 为 #05 / #01#02 展示串、LOT_ID 为 lot 前缀。
+    登录与 X-Hold-Token 走同一条 /admin/hold/api/hold_count。
     """
     if wafer_id is None or not str(wafer_id).strip():
         return False, '请指定 wafer_id', None
 
     wafer_id = str(wafer_id).strip()
+    lot_id = str(lot_id).strip() if lot_id is not None else ''
+    exact_ids, lot_prefix, display_tokens = _hold_count_match_spec(
+        wafer_id, lot_id or None,
+    )
     try:
         _, record_table, _, _ = _table_names()
-        row = db.session.execute(
-            text(f"""
-                SELECT COUNT(*) AS CNT
-                FROM {record_table}
-                WHERE WAFER_ID = :wafer_id
-            """),
-            {'wafer_id': wafer_id},
-        ).fetchone()
-        count = int(row[0] or 0) if row else 0
+        where_sql = []
+        params = {}
+        expanding = []
+        if exact_ids:
+            where_sql.append('TRIM(WAFER_ID) IN :exact_ids')
+            params['exact_ids'] = exact_ids
+            expanding.append('exact_ids')
+        if lot_prefix and display_tokens:
+            where_sql.append(
+                '('
+                'TRIM(WAFER_ID) IN :display_tokens'
+                ' AND ('
+                'TRIM(LOT_ID) = :lot_prefix'
+                ' OR TRIM(LOT_ID) LIKE :lot_like_dot'
+                ')'
+                ')'
+            )
+            params['display_tokens'] = display_tokens
+            params['lot_prefix'] = lot_prefix
+            params['lot_like_dot'] = f'{lot_prefix}.%'
+            expanding.append('display_tokens')
+
+        if not where_sql:
+            count = 0
+        else:
+            stmt = text(
+                f"""
+                    SELECT ID, WAFER_ID
+                    FROM {record_table}
+                    WHERE {' OR '.join(where_sql)}
+                """
+            )
+            for key in expanding:
+                stmt = stmt.bindparams(bindparam(key, expanding=True))
+            rows = db.session.execute(stmt, params).fetchall()
+            matched_ids = set()
+            exact_set = set(exact_ids)
+            disp_set = set(display_tokens)
+            for rec_id, stored in rows:
+                if rec_id in matched_ids:
+                    continue
+                if _stored_wafer_matches_hold_count(stored, exact_set, disp_set):
+                    matched_ids.add(rec_id)
+            count = len(matched_ids)
         return True, '获取成功', {
             'wafer_id': wafer_id,
+            'lot_id': lot_id or None,
             'hold_count': count,
         }
     except ValueError as e:

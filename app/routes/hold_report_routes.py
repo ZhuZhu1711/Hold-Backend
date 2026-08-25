@@ -352,10 +352,13 @@ def api_wafer_yield_batch():
 def api_hold_count():
     """
     按 wafer_id 统计 hold_record 次数。
-    Query: wafer_id (必填)
+    Query: wafer_id (必填)；lot_id 可选（展示串 #05 / #01#02 时建议带上）
     """
     wafer_id = request.args.get('wafer_id', '').strip()
-    success, msg, data = hold_report_ctrl.get_hold_count_by_wafer(wafer_id)
+    lot_id = request.args.get('lot_id', '').strip()
+    success, msg, data = hold_report_ctrl.get_hold_count_by_wafer(
+        wafer_id, lot_id=lot_id or None,
+    )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
     status = 400 if ('请指定' in msg or '无效' in msg) else 500
