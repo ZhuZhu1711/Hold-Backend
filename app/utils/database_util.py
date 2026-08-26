@@ -330,12 +330,14 @@ def auto_close_hold_records(
     record_ids,
     record_table: str = 'FT_HOLD_RECORD',
     actor_user_id: int = 1,
+    dispose_detail: str | None = None,
 ):
     """
     系统/root 自动关闭 hold_record：插入 CIRCULATION_HISTORY(DISPOSE=99)，
     回写 STATUS=99 / LAST_CIRCULATION_ID。
     同一 connection 内逐条处理；单条失败记日志并继续。
-    返回 (ok_count, fail_count)；无待处理返回 (0, 0)。
+    dispose_detail 可覆盖默认备注；无待处理返回 (0, 0)。
+    返回 (ok_count, fail_count)。
     """
     record_tbl = (record_table or '').upper()
     if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
@@ -362,6 +364,8 @@ def auto_close_hold_records(
         actor_id = int(actor_user_id)
     except (TypeError, ValueError):
         actor_id = 1
+
+    detail = (dispose_detail or '').strip() or _AUTO_CLOSE_DETAIL
 
     insert_circ_sql = f"""
         INSERT INTO {circ_tbl} (
@@ -410,7 +414,7 @@ def auto_close_hold_records(
                             'dispose': DISPOSE_CLOSE,
                             'dispose_source': 'SYS',
                             'dispose_type': DISPOSE_CLOSE,
-                            'dispose_detail': _AUTO_CLOSE_DETAIL,
+                            'dispose_detail': detail,
                         },
                     )
                     cursor.execute(
