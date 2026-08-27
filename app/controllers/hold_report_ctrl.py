@@ -394,12 +394,38 @@ def export_holding_records_xlsx(
     )
 
 
+def _hold_count_suffix_keys(*parts):
+    """
+    从完整片号 / 展示串抽出可比较的片号键。
+    数字后缀用 int（#05 与 #5 相同）；非数字用原文本。
+    """
+    keys = set()
+    for raw in parts:
+        text = str(raw or '').strip().replace(' ', '')
+        if not text:
+            continue
+        suffixes = re.findall(r'#([^#\s]+)', text) if '#' in text else []
+        if not suffixes:
+            if '-' in text:
+                suffixes = [text.rsplit('-', 1)[-1].strip()]
+            else:
+                suffixes = [text.lstrip('#')]
+        for suf in suffixes:
+            if not suf:
+                continue
+            if suf.isdigit():
+                keys.add(('n', int(suf)))
+            else:
+                keys.add(('s', suf))
+    return keys
+
+
 def _hold_count_match_spec(wafer_id, lot_id=None):
     """
     解析查询片号：完整 MES 片号（C196721-05）或 WLT 展示串（#05 / #01#02）。
     返回 (exact_ids, lot_prefix, display_tokens)。
     exact_ids 只含完整片号，不含 #05，避免登录客户端把展示串当成全局等值匹配。
-    display_tokens 必须配合 lot_prefix 使用：单片只匹配 #05/#5，不匹配合批串 #01#02#05。
+    display_tokens 必须配合 lot_prefix 使用；库存合批串在 lot 对上后按片号包含匹配。
     """
     wafer_id = str(wafer_id or '').strip()
     lot_raw = str(lot_id or '').strip() if lot_id is not None else ''
@@ -458,7 +484,14 @@ def _stored_wafer_matches_hold_count(stored, exact_ids, display_tokens):
     compact = stored.replace(' ', '')
     if stored in exact_ids or compact in exact_ids:
         return True
-    return compact in display_tokens
+    if compact in display_tokens:
+        return True
+    # lot 已由 SQL 收窄：展示串按片号包含匹配（#01#02#05 含 05 即算）
+    if not compact.startswith('#'):
+        return False
+    query_keys = _hold_count_suffix_keys(*exact_ids, *display_tokens)
+    stored_keys = _hold_count_suffix_keys(compact)
+    return bool(query_keys and stored_keys and (query_keys & stored_keys))
 
 
 def get_hold_count_by_wafer(wafer_id, lot_id=None):
@@ -466,6 +499,7 @@ def get_hold_count_by_wafer(wafer_id, lot_id=None):
     按 wafer 统计 FT_HOLD_RECORD 中的 hold 次数（记录条数）。
 
     WLT / 合批写入的 WAFER_ID 为 #05 / #01#02 展示串、LOT_ID 为 lot 前缀。
+    lot 对得上时，库存展示串含查询片号即计入（#01#02#05 对 05 算一次）。
     登录与 X-Hold-Token 走同一条 /admin/hold/api/hold_count。
     """
     if wafer_id is None or not str(wafer_id).strip():
@@ -486,19 +520,19 @@ def get_hold_count_by_wafer(wafer_id, lot_id=None):
             params['exact_ids'] = exact_ids
             expanding.append('exact_ids')
         if lot_prefix and display_tokens:
+            # 该 lot 下所有展示串（#05 / #01#02#05），片号包含在 Python 侧判定
             where_sql.append(
                 '('
-                'TRIM(WAFER_ID) IN :display_tokens'
+                'TRIM(WAFER_ID) LIKE :wafer_display_like'
                 ' AND ('
                 'TRIM(LOT_ID) = :lot_prefix'
                 ' OR TRIM(LOT_ID) LIKE :lot_like_dot'
                 ')'
                 ')'
             )
-            params['display_tokens'] = display_tokens
+            params['wafer_display_like'] = '#%'
             params['lot_prefix'] = lot_prefix
             params['lot_like_dot'] = f'{lot_prefix}.%'
-            expanding.append('display_tokens')
 
         if not where_sql:
             count = 0

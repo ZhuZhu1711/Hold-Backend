@@ -5,6 +5,7 @@ import unittest
 
 from app.controllers.hold_report_ctrl import (
     _hold_count_match_spec,
+    _hold_count_suffix_keys,
     _stored_wafer_matches_hold_count,
 )
 
@@ -37,6 +38,24 @@ class HoldCountMatchSpecTest(unittest.TestCase):
         self.assertNotIn('#05', display_tokens)
 
 
+class SuffixKeysTest(unittest.TestCase):
+    def test_padded_and_unpadded_same_key(self):
+        self.assertEqual(
+            _hold_count_suffix_keys('#05'),
+            _hold_count_suffix_keys('#5'),
+        )
+        self.assertEqual(_hold_count_suffix_keys('#05'), {('n', 5)})
+
+    def test_group_string_splits_tokens(self):
+        self.assertEqual(
+            _hold_count_suffix_keys('#01#02#05'),
+            {('n', 1), ('n', 2), ('n', 5)},
+        )
+
+    def test_three_digit_not_equal_two_digit(self):
+        self.assertFalse(_hold_count_suffix_keys('#050') & _hold_count_suffix_keys('#05'))
+
+
 class StoredWaferMatchTest(unittest.TestCase):
     def _spec(self, wafer_id, lot_id=None):
         exact_ids, _lot, display_tokens = _hold_count_match_spec(wafer_id, lot_id)
@@ -46,17 +65,34 @@ class StoredWaferMatchTest(unittest.TestCase):
         exact, disp = self._spec('C196721-05')
         self.assertTrue(_stored_wafer_matches_hold_count('#05', exact, disp))
 
-    def test_wlt_merged_display_does_not_count_as_single_wafer(self):
+    def test_wlt_merged_display_counts_when_contains_wafer(self):
         exact, disp = self._spec('C196721-05')
-        self.assertFalse(_stored_wafer_matches_hold_count('#01#02#05', exact, disp))
+        self.assertTrue(_stored_wafer_matches_hold_count('#01#02#05', exact, disp))
+
+    def test_wlt_merged_display_with_spaces(self):
+        exact, disp = self._spec('C196721-05')
+        self.assertTrue(_stored_wafer_matches_hold_count('#01 #02 #05', exact, disp))
 
     def test_other_wafer_in_same_lot_excluded(self):
         exact, disp = self._spec('C196721-05')
         self.assertFalse(_stored_wafer_matches_hold_count('#13', exact, disp))
 
+    def test_unrelated_group_excluded(self):
+        exact, disp = self._spec('C196721-05')
+        self.assertFalse(_stored_wafer_matches_hold_count('#01#02#13', exact, disp))
+
+    def test_three_digit_token_not_treated_as_contains(self):
+        exact, disp = self._spec('C196721-05')
+        self.assertFalse(_stored_wafer_matches_hold_count('#050', exact, disp))
+
     def test_exact_full_id_still_matches(self):
         exact, disp = self._spec('C196721-05')
         self.assertTrue(_stored_wafer_matches_hold_count('C196721-05', exact, disp))
+
+    def test_query_group_matches_single_member_display(self):
+        exact, disp = self._spec('#01#02#05', 'C196721')
+        self.assertTrue(_stored_wafer_matches_hold_count('#05', exact, disp))
+        self.assertFalse(_stored_wafer_matches_hold_count('#13', exact, disp))
 
 
 if __name__ == '__main__':
