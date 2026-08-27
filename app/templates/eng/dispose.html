@@ -179,12 +179,18 @@
 
         function allowedDisposes() {
             const raw = record.ALLOWED_DISPOSES;
+            let codes;
             if (Array.isArray(raw) && raw.length) {
-                return raw.map(Number);
+                codes = raw.map(Number);
+            } else if (afterAnalyze()) {
+                codes = [DISPOSE_RELEASE, DISPOSE_DOWNGRADE];
+            } else {
+                codes = [DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_ANALYZE];
             }
-            return afterAnalyze()
-                ? [DISPOSE_RELEASE, DISPOSE_DOWNGRADE]
-                : [DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_ANALYZE];
+            if (isWlt()) {
+                return codes.filter(c => c !== DISPOSE_ANALYZE);
+            }
+            return codes;
         }
 
         function disposeAllowed(code) {
@@ -248,8 +254,7 @@
         function syncWaferRtMode(idx) {
             const box = document.getElementById(`w_rt_codes_box_${idx}`);
             if (!box) return;
-            const mode = waferRtMode(idx);
-            box.classList.toggle('hidden', mode === 'full');
+            box.classList.remove('hidden');
         }
 
         function engNoteOptionsHtml() {
@@ -352,9 +357,9 @@
                         <label><input type="radio" name="wrt_mode_${idx}" value="fixture_a" ${dis} /> 重测A夹具</label>
                         <label><input type="radio" name="wrt_mode_${idx}" value="fixture_b" ${dis} /> 重测B夹具</label>
                     </div>
-                    <div id="w_rt_codes_box_${idx}" class="form-row hidden">
-                        <label>重测 code（必填，如 @1@361）</label>
-                        <input id="wrt_codes_${idx}" type="text" placeholder="@1@361" ${dis} />
+                    <div id="w_rt_codes_box_${idx}" class="form-row">
+                        <label>重测 code（选填，如 @1@361）</label>
+                        <input id="wrt_codes_${idx}" type="text" placeholder="选填，格式 @1@361" ${dis} />
                     </div>
                 </div>
             </div>`;
@@ -518,13 +523,8 @@
                 } else if (dispose === DISPOSE_RETEST) {
                     const mode = waferRtMode(idx);
                     item.retest_mode = mode;
-                    if (mode === 'full') {
-                        // 整片重测不填 code
-                    } else {
-                        const codes = (document.getElementById(`wrt_codes_${idx}`).value || '').trim();
-                        if (!codes) {
-                            return { error: `${wafer} 夹具重测须填写 code（如 @1@361）` };
-                        }
+                    const codes = (document.getElementById(`wrt_codes_${idx}`).value || '').trim();
+                    if (codes) {
                         if (!RETEST_CODES_RE.test(codes)) {
                             return { error: `${wafer} 重测 code 须为 @数字 形式，如 @1@361` };
                         }

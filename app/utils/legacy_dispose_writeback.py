@@ -199,7 +199,7 @@ def build_wlt_comment(
             return _sys_comment(EXTEND_FIXTURE_A, codes or manual)
         if mode == RT_MODE_FIXTURE_B:
             return _sys_comment(EXTEND_FIXTURE_B, codes or manual)
-        return _sys_comment(EXTEND_REWORK, manual)
+        return _sys_comment(EXTEND_REWORK, codes or manual)
 
     return _sys_comment(manual)
 

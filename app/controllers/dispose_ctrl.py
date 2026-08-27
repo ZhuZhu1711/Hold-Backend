@@ -14,7 +14,8 @@ DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不�
   降级: DG:HA>F;FB>F
   重测(等级): RT:F,HA
   重测(WLT code): RT:CODE=123
-  WLT 按片（直白中文，片间 ;）：#02，降级，降main拆批;#03，重测，整片重测;#04，重测，重测A夹具，@1@361
+  WLT 按片（直白中文，片间 ;）：#02，降级，降main拆批;#03，重测，整片重测，@1@361;#04，重测，重测A夹具，@1@361
+  WLT 不开放可靠性分析(5)；重测可填 @code，填了须为 @数字 形式
 工程师处置仅为意见，不改写 FT_HOLD_RECORD.GRADE_NUM。
 DISPOSE_NOTE：工程师处置时选择的工程备注文本
 DISPOSE_MANUAL_NOTE：任意处置可选手输备注；可靠性分析之后的放行/降级必须手输
@@ -467,7 +468,10 @@ def _encode_one_wafer_action(action):
     action_label = DISPOSE_LABELS.get(dispose, str(dispose))
     parts = [wafer, action_label]
 
-    if dispose in (DISPOSE_RELEASE, DISPOSE_ANALYZE):
+    if dispose == DISPOSE_ANALYZE:
+        return False, f'{wafer} WLT 不支持可靠性分析', None
+
+    if dispose == DISPOSE_RELEASE:
         return True, '，'.join(parts), dispose
 
     if dispose == DISPOSE_DOWNGRADE:
@@ -488,14 +492,8 @@ def _encode_one_wafer_action(action):
         if not ok_codes:
             return False, f'{wafer} {codes_or_err}', None
         parts.append(_RT_MODE_LABEL[mode])
-        if mode == RT_MODE_FULL:
-            if codes_or_err:
-                return False, f'{wafer} 整片重测不支持填写 code', None
-            return True, '，'.join(parts), dispose
-        # 夹具重测须填 code
-        if not codes_or_err:
-            return False, f'{wafer} 夹具重测须填写 code（如 @1@361）', None
-        parts.append(codes_or_err)
+        if codes_or_err:
+            parts.append(codes_or_err)
         return True, '，'.join(parts), dispose
 
     return False, f'{wafer} 不支持的处置行为: {dispose}', None
@@ -562,7 +560,7 @@ def build_dispose_detail(
     按处置行为生成 DISPOSE_DETAIL（仅规则化文本，不含工程备注/手输备注）。
     降级: DG:HA>F;FB>F
     重测: RT:F,HA 或 RT:CODE=123
-    WLT 按片: #01，放行;#02，降级，降main拆批;#03，重测，整片重测;#04，重测，重测A夹具，@1@361
+    WLT 按片: #01，放行;#02，降级，降main拆批;#03，重测，整片重测，@1@361;#04，重测，重测A夹具，@1@361
     其它行为：DISPOSE_DETAIL 为空
     成功返回 (True, detail_or_None[, summarized_dispose])；
     无 wafer_actions 时仍为 (True, detail)；失败返回 (False, err_msg)。
@@ -823,7 +821,18 @@ def attach_reliability_followup_many(records):
         except (TypeError, ValueError):
             interval_warn = False
         item['AFTER_RELIABILITY_ANALYZE'] = after
-        item['ALLOWED_DISPOSES'] = after_allowed if after else default_allowed
+        try:
+            record_type = (
+                int(item.get('RECORD_TYPE'))
+                if item.get('RECORD_TYPE') is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            record_type = None
+        allowed = after_allowed if after else list(default_allowed)
+        if record_type == RECORD_TYPE_WLT:
+            allowed = [code for code in allowed if code != DISPOSE_ANALYZE]
+        item['ALLOWED_DISPOSES'] = allowed
         item['REQUIRE_MANUAL_NOTE'] = after
         item['ANALYZE_INTERVAL_WARN'] = bool(after and interval_warn)
         item['LAST_ANALYZE_DTTM'] = circ.get('DISPOSE_DTTM') if after else None
@@ -1676,6 +1685,19 @@ def dispose_record(
         engineer_side = dispose in ENGINEER_DISPOSES if dispose is not None else (
             wafer_actions is not None
         )
+        if is_wlt:
+            if dispose == DISPOSE_ANALYZE:
+                return False, 'WLT 不支持可靠性分析', None
+            if wafer_actions is not None:
+                for action in wafer_actions:
+                    if not isinstance(action, dict):
+                        continue
+                    try:
+                        wafer_disp = int(action.get('dispose'))
+                    except (TypeError, ValueError):
+                        continue
+                    if wafer_disp == DISPOSE_ANALYZE:
+                        return False, 'WLT 不支持可靠性分析', None
         if is_wlt and engineer_side and wafer_actions is None:
             return False, 'WLT 处置须提供 wafer_actions', None
         if (not is_wlt) and wafer_actions is not None:

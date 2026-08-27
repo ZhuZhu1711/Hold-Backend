@@ -93,6 +93,17 @@ class WltCommentTest(unittest.TestCase):
             'SYS\nRework WLT\nn',
         )
 
+    def test_full_prefers_codes(self):
+        self.assertEqual(
+            build_wlt_comment(
+                3,
+                retest_mode='full',
+                retest_codes='@1@361',
+                dispose_manual_note='ignored',
+            ),
+            'SYS\nRework WLT\n@1@361',
+        )
+
     def test_fixture_a_prefers_codes(self):
         self.assertEqual(
             build_wlt_comment(
