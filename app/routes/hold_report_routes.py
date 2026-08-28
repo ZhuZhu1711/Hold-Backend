@@ -1,7 +1,10 @@
 from datetime import datetime
+import io
+import logging
+import os
+from logging.handlers import RotatingFileHandler
 
 from flask import Blueprint, render_template, request, jsonify, session, Response, send_file
-import io
 
 from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl, hold_info_export_ctrl, manual_hold_ctrl
 from app.controllers.defect_code_ctrl import query_bincode_defect
@@ -10,6 +13,8 @@ from app.utils.auth_decorators import (
     login_required,
     role_required,
     current_role_name,
+    API_TOKEN_HEADER,
+    API_TOKEN_USER_NAME,
     ROLE_ROOT,
     ROLE_ENGINEER,
     ROLE_PRODUCTION,
@@ -17,6 +22,54 @@ from app.utils.auth_decorators import (
 from app.utils.excel_export import stamp_filename, xlsx_or_error
 
 hold_report_bp = Blueprint('hold_report', __name__, url_prefix='/admin/hold')
+
+# 手提 Hold API 调用日志（外部 Token / 页面 Session 共用）
+_manual_hold_logger = logging.getLogger('manual_hold_api')
+_manual_hold_logger.setLevel(logging.INFO)
+_manual_hold_logger.propagate = False
+if not _manual_hold_logger.handlers:
+    if not os.path.exists('logs'):
+        os.makedirs('./logs')
+    _mh_handler = RotatingFileHandler(
+        'logs/manual_hold.log',
+        maxBytes=20 * 1024 * 1024,
+        backupCount=5,
+        encoding='utf-8',
+    )
+    _mh_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    _manual_hold_logger.addHandler(_mh_handler)
+
+
+def _log_manual_hold_api(payload, upload_count, success, msg, data, status):
+    """记一条简易调用日志：关键字段 + 结果，不写完整 body。"""
+    raw = payload if isinstance(payload, dict) else {}
+    forwarded = (request.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
+    client_ip = forwarded or (request.remote_addr or '')
+    via = 'token' if (
+        request.headers.get(API_TOKEN_HEADER)
+        or session.get('user_name') == API_TOKEN_USER_NAME
+    ) else 'session'
+    record_id = (data or {}).get('ID') if success else None
+    _manual_hold_logger.log(
+        logging.INFO if success else logging.WARNING,
+        'via=%s status=%s ok=%s id=%s line=%s product=%s lot=%s wafer=%s '
+        'hold_code=%s station=%s uploads=%s emp=%s user=%s ip=%s msg=%s',
+        via,
+        status,
+        success,
+        record_id,
+        raw.get('line') or raw.get('LINE') or '',
+        raw.get('product_id') or raw.get('PRODUCT_ID') or '',
+        raw.get('lot_id') or raw.get('LOT_ID') or '',
+        raw.get('wafer_id') or raw.get('WAFER_ID') or '',
+        raw.get('hold_code') or raw.get('HOLD_CODE') or '',
+        raw.get('station') or raw.get('STATION') or '',
+        upload_count,
+        session.get('employee_no') or '',
+        session.get('user_name') or '',
+        client_ip,
+        msg or '',
+    )
 
 
 # ==========================================
@@ -186,21 +239,26 @@ def api_manual_hold():
     附件：annex_ftp_path / annex_paths，或 files/images 上传。
     工程师仅可创建所属型号。
     """
+    payload = _manual_hold_payload()
+    uploaded = _collect_upload_files()
     success, msg, data = manual_hold_ctrl.create_manual_hold(
-        _manual_hold_payload(),
-        uploaded_files=_collect_upload_files(),
+        payload,
+        uploaded_files=uploaded,
         operator=session.get('user_name') or '',
         actor_role=session.get('role'),
         actor_user_id=session.get('user_id'),
     )
     if success:
-        return jsonify({'code': 200, 'msg': msg, 'data': data})
-    if '不属于' in msg:
+        status = 200
+    elif '不属于' in msg:
         status = 403
     elif any(k in msg for k in ('须', '缺少', '要求', '不支持', '过大', '为空', '匹配', '相同', '超过')):
         status = 400
     else:
         status = 500
+    _log_manual_hold_api(payload, len(uploaded), success, msg, data, status)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
