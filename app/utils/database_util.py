@@ -564,12 +564,12 @@ def insert_hold_record_and_link(
             ID,
             PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
             HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID,
-            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM
+            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM, HOLD_WAFER_ATTR
         ) VALUES (
             :new_id,
             :product_id, :station, :equip_id, :lot_id, :wafer_id,
             :hold_code, :hold_reason, :source, :second_code, :route_id,
-            :grade_num, :record_type, :status, :hold_dttm
+            :grade_num, :record_type, :status, :hold_dttm, :hold_wafer_attr
         )
     """
 
@@ -642,6 +642,7 @@ def insert_hold_record_and_link(
                     'record_type': record['RECORD_TYPE'],
                     'status': record['STATUS'],
                     'hold_dttm': record.get('HOLD_DTTM'),
+                    'hold_wafer_attr': int(record.get('HOLD_WAFER_ATTR') or 0),
                 },
             )
 
@@ -735,12 +736,14 @@ def insert_manual_hold_record(
             ID,
             PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
             HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID,
-            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM, ANNEX_FTP_PATH
+            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM, ANNEX_FTP_PATH,
+            HOLD_WAFER_ATTR
         ) VALUES (
             :new_id,
             :product_id, :station, :equip_id, :lot_id, :wafer_id,
             :hold_code, :hold_reason, :source, :second_code, :route_id,
-            :grade_num, :record_type, :status, :hold_dttm, :annex_ftp_path
+            :grade_num, :record_type, :status, :hold_dttm, :annex_ftp_path,
+            :hold_wafer_attr
         )
     """
     lookup_owner_sql = """
@@ -801,6 +804,7 @@ def insert_manual_hold_record(
                     'status': record['STATUS'],
                     'hold_dttm': record.get('HOLD_DTTM'),
                     'annex_ftp_path': record.get('ANNEX_FTP_PATH'),
+                    'hold_wafer_attr': int(record.get('HOLD_WAFER_ATTR') or 0),
                 },
             )
 
@@ -1154,12 +1158,12 @@ def insert_hold_record_and_link_from_dirty(
             ID,
             PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
             HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID,
-            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM
+            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM, HOLD_WAFER_ATTR
         ) VALUES (
             :new_id,
             :product_id, :station, :equip_id, :lot_id, :wafer_id,
             :hold_code, :hold_reason, :source, :second_code, :route_id,
-            :grade_num, :record_type, :status, :hold_dttm
+            :grade_num, :record_type, :status, :hold_dttm, :hold_wafer_attr
         )
     """
     lookup_owner_sql = """
@@ -1229,6 +1233,7 @@ def insert_hold_record_and_link_from_dirty(
                     'record_type': record['RECORD_TYPE'],
                     'status': record['STATUS'],
                     'hold_dttm': record.get('HOLD_DTTM'),
+                    'hold_wafer_attr': int(record.get('HOLD_WAFER_ATTR') or 0),
                 },
             )
 
@@ -1334,6 +1339,61 @@ def lot_id_digit_suffix_len(lot_id) -> int:
     if suffix and suffix.isdigit():
         return len(suffix)
     return 0
+
+
+# FT_HOLD_RECORD.HOLD_WAFER_ATTR 比特位（十进制存储）
+HOLD_WAFER_ATTR_VACUUM = 1       # bit0 真空包
+HOLD_WAFER_ATTR_ZIYI = 2         # bit1 梓一合批
+HOLD_WAFER_ATTR_IQC_ATE = 4      # bit2 IQC_ATE 合批
+HOLD_WAFER_ATTR_ATE = 8          # bit3 ATE 合批
+HOLD_WAFER_ATTR_FVI = 16         # bit4 FVI 合批
+
+
+def _parse_equip_num(equip_id):
+    """EQUIP_ID 去空白后纯数字才解析，否则 None。"""
+    text = str(equip_id).strip() if equip_id is not None else ''
+    if not text or not text.isdigit():
+        return None
+    return int(text)
+
+
+def _station_is_wlt(station) -> bool:
+    """WLT 站点：以 WLT 开头或 WOQC（合批 WLT 站）。"""
+    text = str(station).strip().upper() if station is not None else ''
+    if not text:
+        return False
+    return text.startswith('WLT') or text == 'WOQC'
+
+
+def compute_hold_wafer_attr(lot_id, equip_id, station) -> int:
+    """
+    按 LOT_ID / EQUIP_ID / STATION 计算 HOLD_WAFER_ATTR（可多 bit OR）。
+    须用源 lot（WLT 合批截断前），缺省返回 0。
+    """
+    lot = str(lot_id).strip() if lot_id is not None else ''
+    if not lot:
+        return 0
+
+    attr = 0
+    has_dash = '-' in lot
+    lot_u = lot.upper()
+
+    if not has_dash:
+        if (lot_u.startswith('VSH') or lot_u.startswith('TSH')) and not _station_is_wlt(station):
+            attr |= HOLD_WAFER_ATTR_VACUUM
+        if lot_u.startswith('A'):
+            attr |= HOLD_WAFER_ATTR_ATE
+        if lot_u.startswith('I'):
+            attr |= HOLD_WAFER_ATTR_FVI
+    elif lot_id_digit_suffix_len(lot) > 2:
+        equip_num = _parse_equip_num(equip_id)
+        if equip_num is not None:
+            if equip_num >= 200:
+                attr |= HOLD_WAFER_ATTR_ZIYI
+            else:
+                attr |= HOLD_WAFER_ATTR_IQC_ATE
+
+    return attr
 
 
 def wafer_suffix(wafer_id) -> str:

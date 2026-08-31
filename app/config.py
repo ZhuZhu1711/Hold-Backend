@@ -94,7 +94,7 @@ class Config:
     # 旧系统完全下线后把下面改成 False（重启后端即停写，无需删代码）。
     # 也可不改代码：环境变量 HOLD_LEGACY_WRITEBACK=0 后重启。
     # debug 模式始终关闭，避免测试处置写入正式旧表。
-    LEGACY_DISPOSE_WRITEBACK = True
+    LEGACY_DISPOSE_WRITEBACK = False
     LEGACY_DISPOSE_WRITEBACK_ENABLED = (
         LEGACY_DISPOSE_WRITEBACK
         and (not argv_is_debug_mode())

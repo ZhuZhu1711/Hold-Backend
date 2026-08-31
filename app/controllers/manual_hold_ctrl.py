@@ -37,6 +37,7 @@ from app.utils.database_util import (
     insert_manual_hold_record,
     resolve_hold_record_table,
     update_manual_hold_annex_path,
+    compute_hold_wafer_attr,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,6 +256,7 @@ def normalize_manual_hold(raw: dict) -> tuple:
         'STATUS': _default_status(),
         'HOLD_DTTM': _parse_hold_dttm(raw.get('hold_dttm') or raw.get('HOLD_DTTM')),
         'ANNEX_FTP_PATH': annex_ftp_path,
+        'HOLD_WAFER_ATTR': compute_hold_wafer_attr(lot_id, equip_id, station),
         '_LINE': line,
     }
     return True, '', record

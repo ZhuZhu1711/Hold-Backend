@@ -29,6 +29,8 @@ FT `hold_code` 从允许列表中选，目前只有 `AQL_HOLD`；未传时默认
 
 `SOURCE`：`0` = MES 合批，`1` = 手提。流转 `DISPOSE_SOURCE` 在 `SOURCE=1` 时仍写 `JDY`（兼容旧数据）。
 
+创建时按与合批相同的规则写入 `HOLD_WAFER_ATTR`（见 [04-处置规范.md](./04-处置规范.md) §4.1）；无法判定则为 `0`。
+
 ### 附件 `ANNEX_FTP_PATH`
 
 单条记录最多 **25** 张。附件走独立 FTP（`Config.ANNEX_FTP_HOST` / `USER` / `PASSWD`），与 TESTLOG 不是同一台。按产线平铺，不再按型号/lot 分子目录：

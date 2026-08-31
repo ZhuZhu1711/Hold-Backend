@@ -30,6 +30,7 @@
 ~: 代指型号所属工程师的ID(PRODUCT_INFO.PRO_ENG_ID)
 
 > 工程师处置仅为意见：写入 CIRCULATION_HISTORY，并回写 FT_HOLD_RECORD.LAST_CIRCULATION_ID / STATUS；**不改写 GRADE_NUM**。真正落地由生产执行。
+> 旧 AutoHoldSys 表回写（`LEGACY_DISPOSE_WRITEBACK`）**默认关闭**。
 
 
 # 处置单划分
@@ -42,6 +43,7 @@
 > '*'是正则化写法，代表任意匹配  
 > 不满足表中规则的，无需转成record  
 > 手提创建（SOURCE=1）不经合批，直接写 record。AQL_HOLD 归 FT 异常反馈单，分析入口展示附件图。
+> WOQC info 的 LOT_ID 可为 `LOT.起始片号`（如 `679PK7.14`）；合批写入 record 时原样保留，分组键仍用去掉 `.NN` 后的前缀。
 
 
 # WLT 按片工程师处置（RECORD_TYPE=2）
