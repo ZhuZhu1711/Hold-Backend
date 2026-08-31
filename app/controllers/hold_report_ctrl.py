@@ -498,7 +498,8 @@ def get_hold_count_by_wafer(wafer_id, lot_id=None):
     """
     按 wafer 统计 FT_HOLD_RECORD 中的 hold 次数（记录条数）。
 
-    WLT / 合批写入的 WAFER_ID 为 #05 / #01#02 展示串、LOT_ID 为 lot 前缀。
+    WLT / 合批写入的 WAFER_ID 为 #05 / #01#02 展示串；
+    LOT_ID 为 lot 前缀或 `前缀.起始片号`（如 679PK7.14）。
     lot 对得上时，库存展示串含查询片号即计入（#01#02#05 对 05 算一次）。
     登录与 X-Hold-Token 走同一条 /admin/hold/api/hold_count。
     """

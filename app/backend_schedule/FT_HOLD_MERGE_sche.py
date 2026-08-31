@@ -23,6 +23,7 @@ from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
     auto_close_hold_records,
     build_merged_wafer_display,
+    compute_hold_wafer_attr,
     insert_hold_record_and_link,
     is_fragmented_merged_lot,
     mark_hold_infos_dirty,
@@ -316,6 +317,10 @@ class RoughHoldRecord:
             if self.lot_id_override is not None
             else first.lot_id
         )
+        # 属性用源 LOT/EQUIP/STATION（WLT 截断 LOT 前）
+        hold_wafer_attr = compute_hold_wafer_attr(
+            first.lot_id, first.equip_id, first.station
+        )
         return {
             'PRODUCT_ID': first.product_id,
             'STATION': first.station,
@@ -332,6 +337,7 @@ class RoughHoldRecord:
             'STATUS': status,
             # FT_HOLD_RECORD.HOLD_DTTM 为 DATE，取最早一条的时间
             'HOLD_DTTM': first.hold_dttm,
+            'HOLD_WAFER_ATTR': hold_wafer_attr,
         }
 
 
