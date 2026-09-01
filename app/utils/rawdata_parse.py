@@ -145,8 +145,6 @@ def parse_csv_lines(file_type: str, lines: list):
                 operation_id = 'FT'
             elif operation_id == 'FATE-RT':
                 operation_id = 'RT'
-            elif operation_id == 'FATE-FA':
-                operation_id = 'FA'
 
             if wafer_flag not in test_wafers:
                 test_wafer = TEST_WAFER(

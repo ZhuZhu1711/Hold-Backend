@@ -11,9 +11,22 @@ import json
 
 logger = logging.getLogger(__name__)
 
-# 同 lot 纵向对比：WLT + FT FA（FATE-FA 入库 remap 为 FA，此处一并兼容）
+# 同 lot 纵向对比：WLT + FT FA（旧数据 OPERATION_ID=FA，新数据 FATE-FA / VBOX-FA）
 SAME_LOT_OPERATION_IDS = ('WLT2', 'FA', 'FATE-FA', 'VBOX-FA')
 _SAME_LOT_OP_IN_SQL = "(" + ", ".join(f"'{op}'" for op in SAME_LOT_OPERATION_IDS) + ")"
+
+# 查询入参兼容：FA 与 FATE-FA 视为同一站（旧数据 FA，新数据 FATE-FA）；RT / FT 不做映射
+_FA_OPERATION_IDS = ('FATE-FA', 'FA')
+
+
+def _query_operation_ids(operation_id):
+    """实际匹配的 OPERATION_ID 列表。FA / FATE-FA 同时命中新旧写法。"""
+    op = str(operation_id).strip() if operation_id is not None else ''
+    if not op:
+        return []
+    if op in _FA_OPERATION_IDS:
+        return list(_FA_OPERATION_IDS)
+    return [op]
 
 
 def _compact_sql(sql: str) -> str:
@@ -39,17 +52,21 @@ def get_wafer_yield_and_bin(wafer_id, operation_id):
 
     Args:
         wafer_id: 晶圆ID
-        operation_id: 工序ID
+        operation_id: 工序ID（FA / FATE-FA 同时命中）
 
     Returns:
         dict: 包含良率和BIN码比率的数据
     """
+    op_ids = _query_operation_ids(operation_id)
+    if not op_ids:
+        return None
+
     # 1. 查询最新一条 wafer 记录（ID最大）
     wafer = (
         TestWafer.query
         .filter(
             TestWafer.WAFER_ID == wafer_id,
-            TestWafer.OPERATION_ID == operation_id
+            TestWafer.OPERATION_ID.in_(op_ids),
         )
         .order_by(desc(TestWafer.ID))
         .first()
@@ -88,7 +105,7 @@ def get_latest_defect_bincodes(wafer_id, operation_id, sql_trace=None):
 
     Args:
         wafer_id: 晶圆 ID
-        operation_id: 工序 ID（如 FATE-FA）
+        operation_id: 工序 ID（如 FATE-FA；传入 FA / FATE-FA 时同时命中两种写法）
         sql_trace: 可选 list，追加本次 SQL
 
     Returns:
@@ -101,8 +118,11 @@ def get_latest_defect_bincodes(wafer_id, operation_id, sql_trace=None):
         return False, '请指定 operation_id', None
 
     wafer_id = str(wafer_id).strip()
-    operation_id = str(operation_id).strip()
-    params = {'wafer_id': wafer_id, 'operation_id': operation_id}
+    op_ids = _query_operation_ids(operation_id)
+    if not op_ids:
+        return False, '请指定 operation_id', None
+
+    params = {'wafer_id': wafer_id, 'operation_ids': op_ids}
 
     sql = """
         SELECT
@@ -113,7 +133,7 @@ def get_latest_defect_bincodes(wafer_id, operation_id, sql_trace=None):
             SELECT atw.id, atw.product_id
             FROM TEST_WAFER atw
             WHERE atw.WAFER_ID = :wafer_id
-              AND atw.operation_id = :operation_id
+              AND atw.operation_id IN :operation_ids
             ORDER BY atw.id DESC
             FETCH FIRST 1 ROW ONLY
         ) latest_wafer ON atb.TEST_WAFER_SEQ = latest_wafer.id
@@ -125,8 +145,9 @@ def get_latest_defect_bincodes(wafer_id, operation_id, sql_trace=None):
     """
     _trace_sql(sql_trace, sql, params, tag='get_latest_defect_bincodes')
 
+    stmt = text(sql).bindparams(bindparam('operation_ids', expanding=True))
     try:
-        rows = db.session.execute(text(sql), params).fetchall()
+        rows = db.session.execute(stmt, params).fetchall()
     except Exception as e:
         db.session.rollback()
         return False, f'查询失败: {e}', None
@@ -163,14 +184,19 @@ def query_wafer_ids_by_prefix(prefix, operation_id=None, sql_trace=None):
         FROM TEST_WAFER atw
         WHERE atw.WAFER_ID LIKE :prefix
     """
+    stmt_kwargs = {}
     if operation_id is not None and str(operation_id).strip():
-        sql += " AND atw.OPERATION_ID = :operation_id"
-        params['operation_id'] = str(operation_id).strip()
+        op_ids = _query_operation_ids(operation_id)
+        if op_ids:
+            sql += " AND atw.OPERATION_ID IN :operation_ids"
+            params['operation_ids'] = op_ids
+            stmt_kwargs['bindparams'] = (bindparam('operation_ids', expanding=True),)
     sql += " ORDER BY atw.WAFER_ID"
     _trace_sql(sql_trace, sql, params, tag='query_wafer_ids_by_prefix')
 
     try:
-        rows = db.session.execute(text(sql), params).fetchall()
+        stmt = text(sql).bindparams(*stmt_kwargs.get('bindparams', ()))
+        rows = db.session.execute(stmt, params).fetchall()
     except Exception:
         db.session.rollback()
         return []

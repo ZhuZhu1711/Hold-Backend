@@ -17,7 +17,7 @@ def query_wafer_yield():
     
     Query参数:
         wafer_id: 晶圆ID (必填)
-        operation_id: 工序ID (必填)
+        operation_id: 工序ID (必填；FA / FATE-FA 同时命中，不支持 RT/FT)
     
     Returns:
         JSON格式的良率和BIN比率数据
@@ -54,7 +54,7 @@ def query_latest_defect_bincode():
 
     Query:
         wafer_id      必填
-        operation_id  必填（如 FATE-FA）
+        operation_id  必填（FATE-FA / VBOX-FA；传入 FA / FATE-FA 时同时命中两种写法，不支持 RT/FT）
     """
     wafer_id = request.args.get('wafer_id', '').strip()
     operation_id = request.args.get('operation_id', '').strip()
