@@ -1,5 +1,37 @@
 from app.models.product import ProductInfo
+from app import db
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
+
+
+def get_latest_software_info():
+    """
+    读取 SOFTWARE_INFO 单行配置（客户端版本卡控）。
+    表可能有多行，只取第一行；列名 "comment" 为 Oracle 带引号标识符。
+
+    Returns:
+        (True, msg, {version, comment}) 或 (False, msg, None)
+    """
+    try:
+        row = db.session.execute(
+            text(
+                'SELECT LATEST_VERSION, "comment" '
+                'FROM SOFTWARE_INFO WHERE ROWNUM = 1'
+            )
+        ).first()
+    except SQLAlchemyError as e:
+        return False, f'查询失败: {e}', None
+    except Exception as e:
+        return False, f'查询失败: {e}', None
+
+    if not row:
+        return True, 'success', {'version': '', 'comment': ''}
+
+    version = str(row[0] or '').strip()
+    comment = ''
+    if len(row) > 1 and row[1] is not None:
+        comment = str(row[1]).strip()
+    return True, 'success', {'version': version, 'comment': comment}
 
 
 def get_gross_die_value(product_id: str):

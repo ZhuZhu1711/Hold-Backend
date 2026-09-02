@@ -876,7 +876,7 @@ def _load_record(record_id: int):
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
                 r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
-                r.ANNEX_FTP_PATH
+                r.ANNEX_FTP_PATH, r.HOLD_WAFER_ATTR
             FROM {record_table} r
             WHERE r.ID = :rid
         """),

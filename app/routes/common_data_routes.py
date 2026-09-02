@@ -3,33 +3,24 @@
 产品类: 请求gross_die...
 """
 from flask import Blueprint, request, jsonify
-from app.controllers.common_data_ctrl import get_gross_die_value, get_ftp_status
+from app.controllers.common_data_ctrl import (
+    get_ftp_status,
+    get_gross_die_value,
+    get_latest_software_info,
+)
 from app.utils.auth_decorators import login_required
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import text
-from app import db
 
 
 common_data_bp = Blueprint('common_data', __name__, url_prefix='/api/common_data')
 
-# latest版本号查询接口
 @common_data_bp.route('/software/latest_version', methods=['GET'])
 def get_latest_version():
-    try:
-        version = db.session.execute(
-            text("SELECT LATEST_VERSION FROM SOFTWARE_INFO")
-        ).scalar()
-        return jsonify({
-            'code': 200,
-            'msg': 'success',
-            'data': {'version': version or "1.0.0"}
-        })
-    except Exception as e:
-        return jsonify({
-            'code': 500,
-            'msg': f'查询失败: {str(e)}',
-            'data': None
-        }), 500
+    """客户端版本卡控。无需登录。表空 / 失败时客户端应放行，勿踢人。"""
+    success, msg, data = get_latest_software_info()
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    return jsonify({'code': 500, 'msg': msg, 'data': None}), 500
 
 
 @common_data_bp.route('/ftp/status', methods=['GET'])
