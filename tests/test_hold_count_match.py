@@ -4,9 +4,11 @@ from __future__ import annotations
 import unittest
 
 from app.controllers.hold_report_ctrl import (
+    _hold_count_display_lot_params,
     _hold_count_match_spec,
     _hold_count_suffix_keys,
     _stored_wafer_matches_hold_count,
+    hold_count_match_by_lot,
 )
 
 
@@ -93,6 +95,53 @@ class StoredWaferMatchTest(unittest.TestCase):
         exact, disp = self._spec('#01#02#05', 'C196721')
         self.assertTrue(_stored_wafer_matches_hold_count('#05', exact, disp))
         self.assertFalse(_stored_wafer_matches_hold_count('#13', exact, disp))
+
+    def test_ft_merged_display_still_matches_source_wafer(self):
+        exact, disp = self._spec('C199627-13', 'C199627-1312')
+        self.assertTrue(_stored_wafer_matches_hold_count('#13', exact, disp))
+        self.assertFalse(_stored_wafer_matches_hold_count('#24', exact, disp))
+
+
+class HoldCountLotScopeTest(unittest.TestCase):
+    @staticmethod
+    def _lot_in_scope(stored_lot, lot_prefix):
+        stored = str(stored_lot or '').strip()
+        prefix = str(lot_prefix or '').strip()
+        return (
+            stored == prefix
+            or stored.startswith(f'{prefix}.')
+            or stored.startswith(f'{prefix}-')
+        )
+
+    def test_dash_pattern_covers_ft_merged_lot(self):
+        params = _hold_count_display_lot_params('C199627')
+        self.assertEqual(params['lot_like_dash'], 'C199627-%')
+        self.assertTrue(self._lot_in_scope('C199627-1312', 'C199627'))
+
+    def test_dot_and_prefix_still_in_scope(self):
+        self.assertTrue(self._lot_in_scope('C199627', 'C199627'))
+        self.assertTrue(self._lot_in_scope('C199627.14', 'C199627'))
+
+    def test_other_lot_excluded(self):
+        self.assertFalse(self._lot_in_scope('C199628-1312', 'C199627'))
+        self.assertFalse(self._lot_in_scope('C1996270-13', 'C199627'))
+
+
+class HoldCountMatchByLotTest(unittest.TestCase):
+    def test_ziyi_bit_matches_lot(self):
+        self.assertTrue(hold_count_match_by_lot(2))
+        self.assertTrue(hold_count_match_by_lot('2'))
+        self.assertTrue(hold_count_match_by_lot(3))
+
+    def test_other_attr_keeps_wafer_match(self):
+        self.assertFalse(hold_count_match_by_lot(0))
+        self.assertFalse(hold_count_match_by_lot(1))
+        self.assertFalse(hold_count_match_by_lot(4))
+        self.assertFalse(hold_count_match_by_lot(8))
+        self.assertFalse(hold_count_match_by_lot(16))
+        self.assertFalse(hold_count_match_by_lot(None))
+        self.assertFalse(hold_count_match_by_lot(''))
+        self.assertFalse(hold_count_match_by_lot('x'))
 
 
 if __name__ == '__main__':

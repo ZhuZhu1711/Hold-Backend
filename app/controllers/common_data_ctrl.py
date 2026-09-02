@@ -3,6 +3,12 @@ from app import db
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 
+from app.utils.git_changelog import (
+    COMMENT_MAX_BYTES,
+    VERSION_MAX_LEN,
+    clip_oracle_varchar,
+)
+
 
 def get_latest_software_info():
     """
@@ -32,6 +38,52 @@ def get_latest_software_info():
     if len(row) > 1 and row[1] is not None:
         comment = str(row[1]).strip()
     return True, 'success', {'version': version, 'comment': comment}
+
+
+def _utf8_len(text: str) -> int:
+    return len((text or '').encode('utf-8'))
+
+
+def update_latest_software_info(version, comment):
+    """
+    更新 SOFTWARE_INFO（按单行使用）。无行则插入。
+    version / comment 会截断到列长。
+    """
+    version = str(version or '').strip()
+    comment = str(comment or '').strip()
+    if not version:
+        return False, '请填写版本号', None
+    if len(version) > VERSION_MAX_LEN:
+        return False, f'版本号不能超过 {VERSION_MAX_LEN} 个字符', None
+    if _utf8_len(comment) > COMMENT_MAX_BYTES:
+        return False, f'发布说明过长（最多 {COMMENT_MAX_BYTES} 字节）', None
+    comment = clip_oracle_varchar(comment)
+
+    params = {'version': version, 'comment': comment}
+    try:
+        result = db.session.execute(
+            text(
+                'UPDATE SOFTWARE_INFO '
+                'SET LATEST_VERSION = :version, "comment" = :comment'
+            ),
+            params,
+        )
+        if int(result.rowcount or 0) <= 0:
+            db.session.execute(
+                text(
+                    'INSERT INTO SOFTWARE_INFO (LATEST_VERSION, "comment") '
+                    'VALUES (:version, :comment)'
+                ),
+                params,
+            )
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return False, f'保存失败: {e}', None
+    except Exception as e:
+        db.session.rollback()
+        return False, f'保存失败: {e}', None
+    return True, '保存成功', {'version': version, 'comment': comment}
 
 
 def get_gross_die_value(product_id: str):

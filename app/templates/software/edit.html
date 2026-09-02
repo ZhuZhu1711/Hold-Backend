@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>客户端版本</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05); max-width: 760px;
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; line-height: 1.6; }
+        .warn {
+            background: #fff8e1; border: 1px solid #ffe082; color: #8d6e00;
+            padding: 10px 12px; border-radius: 4px; font-size: 13px; margin-bottom: 18px;
+        }
+        .meta {
+            display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px;
+            font-size: 13px; margin-bottom: 18px; background: #f8f9fa;
+            padding: 12px; border-radius: 6px;
+        }
+        .meta dt { color: #666; }
+        .meta dd { color: #222; word-break: break-word; white-space: pre-wrap; }
+        .form-row { margin-bottom: 14px; }
+        .form-row label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .form-row input, .form-row textarea {
+            width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px; font-family: inherit;
+        }
+        .form-row textarea { min-height: 220px; resize: vertical; line-height: 1.5; }
+        .hint { font-size: 12px; color: #888; margin-top: 4px; }
+        .git-row {
+            display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+            margin-bottom: 12px; font-size: 13px; color: #444;
+        }
+        .git-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+        .git-row input[type="number"] {
+            width: 72px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px;
+        }
+        .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            color: #fff; font-size: 14px;
+        }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-primary { background: #007bff; }
+        .btn-primary:hover { background: #0069d9; }
+        .btn-ok { background: #28a745; }
+        .btn-ok:hover { background: #218838; }
+        .btn-ghost { background: #e9ecef; color: #333; }
+        .btn-ghost:hover { background: #dee2e6; }
+        .status { margin-top: 12px; font-size: 13px; min-height: 18px; }
+        .status.ok { color: #2e7d32; }
+        .status.err { color: #c62828; }
+        .commits {
+            margin-top: 18px; font-size: 12px; color: #555;
+            max-height: 220px; overflow: auto; border: 1px solid #eee; border-radius: 4px;
+        }
+        .commits table { width: 100%; border-collapse: collapse; }
+        .commits th, .commits td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
+        .commits th { background: #f8f9fa; position: sticky; top: 0; }
+    </style>
+</head>
+<body>
+    {% set active_menu = 'software' %}
+    {% include '_admin_sidebar.html' %}
+
+    <main class="main">
+        <div class="card">
+            <h1>客户端版本</h1>
+            <p class="sub">
+                写入 <code>SOFTWARE_INFO</code>。release 客户端落后于此处版本号时会强制退出，并展示发布说明。
+                可从本机 git 提交历史生成说明草稿，保存前请再改一版给用户看的文字。
+            </p>
+            <div class="warn">
+                请先把新包发到软件中心、客户端 <code>APP_VERSION</code> 与此处一致后再保存。
+                生产服务器若没有旁边的 git 仓库，「从 Git 生成」会失败，改为手写即可。
+            </div>
+
+            <dl class="meta">
+                <dt>库中当前版本</dt>
+                <dd id="current-version">加载中…</dd>
+                <dt>库中发布说明</dt>
+                <dd id="current-comment">-</dd>
+                <dt>客户端代码版本</dt>
+                <dd id="code-version">-</dd>
+            </dl>
+
+            <div class="form-row">
+                <label>新版本号</label>
+                <input id="version-input" maxlength="100" placeholder="例如 2.0.8" />
+                <p class="hint" id="suggest-hint"></p>
+            </div>
+            <div class="form-row">
+                <label>发布说明</label>
+                <textarea id="comment-input" placeholder="用户更新时看到的说明，可从 Git 生成后再改。"></textarea>
+                <p class="hint" id="comment-hint">最多 2048 字节（约一屏中文）。</p>
+            </div>
+
+            <div class="git-row">
+                <label><input type="checkbox" id="git-client" checked /> 客户端仓库</label>
+                <label><input type="checkbox" id="git-backend" /> 后台仓库</label>
+                <label>条数 <input type="number" id="git-count" min="1" max="40" value="12" /></label>
+            </div>
+            <div class="actions">
+                <button class="btn btn-primary" id="btn-git" type="button" onclick="fillFromGit()">从 Git 生成说明</button>
+                <button class="btn btn-ghost" id="btn-reload" type="button" onclick="loadCurrent()">还原当前值</button>
+                <button class="btn btn-ok" id="btn-save" type="button" onclick="saveSoftware()">保存</button>
+            </div>
+            <p class="status" id="status"></p>
+            <div class="commits" id="commit-box" style="display:none;">
+                <table>
+                    <thead>
+                        <tr><th>来源</th><th>日期</th><th>说明</th></tr>
+                    </thead>
+                    <tbody id="commit-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+    <script>
+        function setStatus(text, ok) {
+            const el = document.getElementById('status');
+            el.textContent = text || '';
+            el.className = 'status ' + (ok === true ? 'ok' : ok === false ? 'err' : '');
+        }
+        function setBusy(busy) {
+            ['btn-git', 'btn-reload', 'btn-save'].forEach((id) => {
+                document.getElementById(id).disabled = !!busy;
+            });
+        }
+        function dash(text) {
+            const t = (text || '').trim();
+            return t || '-';
+        }
+        async function loadCurrent() {
+            setBusy(true);
+            setStatus('加载中…');
+            try {
+                const resp = await fetch('/admin/software/api');
+                const payload = await resp.json();
+                if (!resp.ok || payload.code !== 200) {
+                    throw new Error(payload.msg || '加载失败');
+                }
+                const data = payload.data || {};
+                document.getElementById('current-version').textContent = dash(data.version);
+                document.getElementById('current-comment').textContent = dash(data.comment);
+                document.getElementById('code-version').textContent = dash(data.client_code_version);
+                document.getElementById('version-input').value = data.suggested_version || data.version || '';
+                document.getElementById('comment-input').value = data.comment || '';
+                const bits = [];
+                if (data.suggested_version) bits.push('建议下一版 ' + data.suggested_version);
+                if (data.client_code_version) bits.push('代码里是 ' + data.client_code_version);
+                document.getElementById('suggest-hint').textContent = bits.join('；');
+                setStatus('');
+            } catch (err) {
+                setStatus(err.message || String(err), false);
+            } finally {
+                setBusy(false);
+            }
+        }
+        function renderCommits(sources) {
+            const box = document.getElementById('commit-box');
+            const body = document.getElementById('commit-body');
+            body.innerHTML = '';
+            const rows = [];
+            (sources || []).forEach((src) => {
+                const label = src.label || '';
+                (src.commits || []).forEach((c) => {
+                    rows.push({ label, date: c.date || '', subject: c.subject || '' });
+                });
+            });
+            if (!rows.length) {
+                box.style.display = 'none';
+                return;
+            }
+            rows.forEach((row) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.subject)}</td>`;
+                body.appendChild(tr);
+            });
+            box.style.display = 'block';
+        }
+        function escapeHtml(text) {
+            return String(text || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+        async function fillFromGit() {
+            setBusy(true);
+            setStatus('正在读取 git…');
+            const client = document.getElementById('git-client').checked ? '1' : '0';
+            const backend = document.getElementById('git-backend').checked ? '1' : '0';
+            const maxCount = document.getElementById('git-count').value || '12';
+            try {
+                const resp = await fetch(
+                    `/admin/software/api/changelog?client=${client}&backend=${backend}&max_count=${encodeURIComponent(maxCount)}`
+                );
+                const payload = await resp.json();
+                const data = payload.data || {};
+                renderCommits(data.sources);
+                if (data.comment_draft) {
+                    document.getElementById('comment-input').value = data.comment_draft;
+                }
+                if (data.client_code_version && !document.getElementById('version-input').value.trim()) {
+                    document.getElementById('version-input').value = data.client_code_version;
+                }
+                if (data.available) {
+                    setStatus(payload.msg === 'success' ? '已填入 Git 草稿，请检查后再保存' : payload.msg, true);
+                } else {
+                    setStatus(payload.msg || data.hint || '无法读取 git，请手动填写', false);
+                }
+            } catch (err) {
+                setStatus(err.message || String(err), false);
+            } finally {
+                setBusy(false);
+            }
+        }
+        async function saveSoftware() {
+            const version = document.getElementById('version-input').value.trim();
+            const comment = document.getElementById('comment-input').value;
+            if (!version) {
+                setStatus('请填写版本号', false);
+                return;
+            }
+            if (!confirm(`确认发布版本 ${version}？\nrelease 客户端落后此版本将无法继续使用。`)) {
+                return;
+            }
+            setBusy(true);
+            setStatus('保存中…');
+            try {
+                const resp = await fetch('/admin/software/api', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ version, comment }),
+                });
+                const payload = await resp.json();
+                if (!resp.ok || payload.code !== 200) {
+                    throw new Error(payload.msg || '保存失败');
+                }
+                setStatus(payload.msg || '保存成功', true);
+                const data = payload.data || {};
+                document.getElementById('current-version').textContent = dash(data.version);
+                document.getElementById('current-comment').textContent = dash(data.comment);
+            } catch (err) {
+                setStatus(err.message || String(err), false);
+            } finally {
+                setBusy(false);
+            }
+        }
+        loadCurrent();
+    </script>
+</body>
+</html>

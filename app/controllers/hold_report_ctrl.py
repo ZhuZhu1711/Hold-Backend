@@ -23,6 +23,7 @@ from app.utils.database_util import (
     resolve_hold_record_table,
 )
 from app.utils.database_util import (
+    HOLD_WAFER_ATTR_ZIYI,
     expand_display_wafer_ids,
     format_wafer_id_display,
     is_merged_wafer_id,
@@ -495,20 +496,73 @@ def _stored_wafer_matches_hold_count(stored, exact_ids, display_tokens):
     return bool(query_keys and stored_keys and (query_keys & stored_keys))
 
 
-def get_hold_count_by_wafer(wafer_id, lot_id=None):
+def _hold_count_display_lot_params(lot_prefix):
+    """展示串查询时的 LOT_ID 收窄：前缀、WLT 点号、FT 合批短横。"""
+    return {
+        'wafer_display_like': '#%',
+        'lot_prefix': lot_prefix,
+        'lot_like_dot': f'{lot_prefix}.%',
+        'lot_like_dash': f'{lot_prefix}-%',
+    }
+
+
+def _parse_hold_wafer_attr(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def hold_count_match_by_lot(hold_wafer_attr) -> bool:
+    """梓一合批（ATTR bit1）按 LOT_ID 精确计数；其它类型仍按片号。"""
+    return bool(_parse_hold_wafer_attr(hold_wafer_attr) & HOLD_WAFER_ATTR_ZIYI)
+
+
+def get_hold_count_by_wafer(wafer_id, lot_id=None, hold_wafer_attr=None):
     """
     按 wafer 统计 FT_HOLD_RECORD 中的 hold 次数（记录条数）。
 
-    WLT / 合批写入的 WAFER_ID 为 #05 / #01#02 展示串；
-    LOT_ID 为 lot 前缀或 `前缀.起始片号`（如 679PK7.14）。
+    梓一合批（HOLD_WAFER_ATTR bit1）：按 TRIM(LOT_ID) 精确匹配，不按片号展开。
+    其它类型：WLT / 合批写入的 WAFER_ID 为 #05 / #01#02 展示串；
+    LOT_ID 为 lot 前缀、`前缀.起始片号`（WLT，如 679PK7.14）、
+    或 `前缀-起始片号片数`（FT 合批，如 C199627-1312）。
     lot 对得上时，库存展示串含查询片号即计入（#01#02#05 对 05 算一次）。
     登录与 X-Hold-Token 走同一条 /admin/hold/api/hold_count。
     """
-    if wafer_id is None or not str(wafer_id).strip():
+    wafer_id = str(wafer_id or '').strip()
+    lot_id = str(lot_id).strip() if lot_id is not None else ''
+
+    if hold_count_match_by_lot(hold_wafer_attr):
+        if not lot_id:
+            return False, '梓一合批请指定 lot_id', None
+        try:
+            _, record_table, _, _ = _table_names()
+            stmt = text(
+                f"""
+                    SELECT COUNT(1)
+                    FROM {record_table}
+                    WHERE TRIM(LOT_ID) = :lot_id
+                """
+            )
+            count = db.session.execute(stmt, {'lot_id': lot_id}).scalar()
+            return True, '获取成功', {
+                'wafer_id': wafer_id or None,
+                'lot_id': lot_id,
+                'hold_count': int(count or 0),
+                'match_by': 'lot',
+            }
+        except ValueError as e:
+            return False, str(e), None
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            return False, f'数据库查询异常: {e}', None
+        except Exception as e:
+            db.session.rollback()
+            return False, f'查询失败: {e}', None
+
+    if not wafer_id:
         return False, '请指定 wafer_id', None
 
-    wafer_id = str(wafer_id).strip()
-    lot_id = str(lot_id).strip() if lot_id is not None else ''
     exact_ids, lot_prefix, display_tokens = _hold_count_match_spec(
         wafer_id, lot_id or None,
     )
@@ -522,19 +576,19 @@ def get_hold_count_by_wafer(wafer_id, lot_id=None):
             params['exact_ids'] = exact_ids
             expanding.append('exact_ids')
         if lot_prefix and display_tokens:
-            # 该 lot 下所有展示串（#05 / #01#02#05），片号包含在 Python 侧判定
+            # 该 lot 下所有展示串（#05 / #01#02#05），片号包含在 Python 侧判定。
+            # LOT_ID 三种写法：前缀、WLT 点号（C199627.14）、FT 合批短横（C199627-1312）。
             where_sql.append(
                 '('
                 'TRIM(WAFER_ID) LIKE :wafer_display_like'
                 ' AND ('
                 'TRIM(LOT_ID) = :lot_prefix'
                 ' OR TRIM(LOT_ID) LIKE :lot_like_dot'
+                ' OR TRIM(LOT_ID) LIKE :lot_like_dash'
                 ')'
                 ')'
             )
-            params['wafer_display_like'] = '#%'
-            params['lot_prefix'] = lot_prefix
-            params['lot_like_dot'] = f'{lot_prefix}.%'
+            params.update(_hold_count_display_lot_params(lot_prefix))
 
         if not where_sql:
             count = 0
