@@ -173,7 +173,7 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
 
     仅捞取满足 dispose_api.md「处置单划分」的候选行：
-      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,AQL_HOLD), STATION∉(FAOIFINISH,FFVI)
+      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,028,AQL_HOLD), STATION∉(FAOIFINISH,FFVI)
       FVI : HOLD_CODE=023, STATION∈(FAOIFINISH,FFVI)
       WLT : PRODUCT_ID LIKE '%-2.6', HOLD_CODE∈(004,022), STATION=WOQC
     精确 RECORD_TYPE 仍由调用方按同样规则判定后写入 FT_HOLD_RECORD。
@@ -202,7 +202,7 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
             AND (
                 (
                     PRODUCT_ID LIKE '%-3.5'
-                    AND HOLD_CODE IN ('023', '024', '025', '027', 'AQL_HOLD')
+                    AND HOLD_CODE IN ('023', '024', '025', '027', '028', 'AQL_HOLD')
                     AND STATION NOT IN ('FAOIFINISH', 'FFVI')
                 )
                 OR (
@@ -1545,6 +1545,72 @@ def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
     except Exception as e:
         logger.error(
             f"查询 FVI 缺陷明细失败 lot_id={lot_id}: {e}",
+            exc_info=True,
+        )
+        return None
+    finally:
+        connection.close()
+
+
+def query_mes_defect_bin_qty(lot_id: str, line_type: str = 'FT', bin_name: str = 'F'):
+    """
+    MES 缺陷 BIN 数量（DB link）。
+    SELECT DEFECT_CODE, QTY
+      FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
+     WHERE d.LOT_RRN = (
+           SELECT l.LOT_RRN FROM MESPROD.LOT@MES16019 l
+            WHERE l.LOT_ID = :lot_id AND l.LINE_TYPE = :line_type
+     )
+       AND d.BIN_NAME = :bin_name
+
+    返回 list[{defect_code, qty}]（未去重）；失败返回 None。
+    """
+    lot_id = (lot_id or '').strip()
+    if not lot_id:
+        logger.warning("query_mes_defect_bin_qty: lot_id 为空")
+        return None
+
+    line_type = (line_type or 'FT').strip() or 'FT'
+    bin_name = (bin_name or 'F').strip() or 'F'
+    sql = """
+        SELECT DEFECT_CODE, QTY
+        FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
+        WHERE d.LOT_RRN = (
+            SELECT l.LOT_RRN
+            FROM MESPROD.LOT@MES16019 l
+            WHERE l.LOT_ID = :lot_id
+              AND l.LINE_TYPE = :line_type
+        )
+          AND d.BIN_NAME = :bin_name
+        ORDER BY QTY DESC NULLS LAST, DEFECT_CODE
+    """
+    params = {
+        'lot_id': lot_id,
+        'line_type': line_type,
+        'bin_name': bin_name,
+    }
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            result = []
+            for code_raw, qty in rows:
+                if code_raw is None:
+                    continue
+                code = str(code_raw).strip()
+                if not code:
+                    continue
+                result.append({
+                    'defect_code': code,
+                    'qty': int(qty) if qty is not None else 0,
+                })
+            return result
+    except Exception as e:
+        logger.error(
+            f"查询 MES 缺陷 BIN 失败 lot_id={lot_id} line_type={line_type} "
+            f"bin_name={bin_name}: {e}",
             exc_info=True,
         )
         return None

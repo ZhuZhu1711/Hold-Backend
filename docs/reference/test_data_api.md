@@ -208,8 +208,62 @@ FTP 下载 FTP_PATH 对应文件到本地临时目录
 
 ---
 
-## 6. 变更说明
+## 7. 相关：`/api/raw_data`（无需登录）
+
+路由：`app/routes/rawdata_routes.py`。与 bysite 一样当前无 Session 校验。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/raw_data/yield` | 本地 `TEST_WAFER` 良率 / BIN 比率 |
+| GET | `/api/raw_data/defect_bincode` | 本地最新测试缺陷 BIN |
+| GET | `/api/raw_data/mes_defect_bin` | MES `DEFECT_BIN_RELATION_H` 缺陷 BIN（code + qty） |
+
+`yield` / `defect_bincode`：Query `wafer_id`、`operation_id` 必填。传入 `FA` 或 `FATE-FA` 时同时命中库中两种写法（取 ID 最新一条）。`VBOX-FA` 精确匹配。`RT` / `FT` 无别名。
+
+### 7.1 `GET /api/raw_data/mes_defect_bin`
+
+MES：`LOT_ID` + `LINE_TYPE` → `LOT_RRN`，再筛 `BIN_NAME`（默认 `F`），只返回 `DEFECT_CODE`、`QTY`。同一 code 多行保留第一条；`has_duplicate` / `duplicate_codes` 告知调用方是否出现过重复。
+
+**Query**
+
+| 参数 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `lot_id` | 是 | | MES `LOT_ID`，如 `C200161-027` |
+| `line_type` | 否 | `FT` | MES `LINE_TYPE` |
+| `bin_name` | 否 | `F` | MES `BIN_NAME` |
+
+```http
+GET /api/raw_data/mes_defect_bin?lot_id=C200161-027 HTTP/1.1
+```
+
+成功 HTTP `200`：
+
+```json
+{
+  "code": 200,
+  "msg": "获取成功",
+  "data": {
+    "lot_id": "C200161-027",
+    "line_type": "FT",
+    "bin_name": "F",
+    "qty": 12,
+    "items": [
+      {"defect_code": "xxx", "qty": 7},
+      {"defect_code": "yyy", "qty": 5}
+    ],
+    "has_duplicate": false,
+    "duplicate_codes": []
+  }
+}
+```
+
+`qty` 为去重后数量之和。缺 `lot_id` → HTTP 400；MES 查询失败 → HTTP 500。
+
+---
+
+## 8. 变更说明
 
 | 日期 | 说明 |
 | --- | --- |
+| 2026-09-02 | 增加 `/api/raw_data/mes_defect_bin`；附录补充 yield / defect_bincode |
 | 2026-08-03 | 初版：补充 `/api/test_data/bysite` 对接说明 |

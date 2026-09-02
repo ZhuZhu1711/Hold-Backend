@@ -4,6 +4,7 @@
 from flask import Blueprint, request, jsonify
 from app.controllers.rawdata_ctrl import (
     get_latest_defect_bincodes,
+    get_mes_defect_bin_qty,
     get_wafer_yield_and_bin,
 )
 
@@ -60,6 +61,31 @@ def query_latest_defect_bincode():
     operation_id = request.args.get('operation_id', '').strip()
 
     success, msg, data = get_latest_defect_bincodes(wafer_id, operation_id)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data}), 200
+
+    status = 400 if '请指定' in msg else 500
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@rawdata_bp.route('/mes_defect_bin', methods=['GET'])
+def query_mes_defect_bin():
+    """
+    从 MES 查询缺陷 BIN 数量（仅 DEFECT_CODE + QTY，BIN_NAME 默认 F）。
+    按 code 去重；has_duplicate / duplicate_codes 标明是否出现过重复。
+
+    Query:
+        lot_id     必填（MES LOT_ID，如 C200161-027）
+        line_type  可选，默认 FT
+        bin_name   可选，默认 F
+    """
+    lot_id = request.args.get('lot_id', '').strip()
+    line_type = request.args.get('line_type', 'FT').strip() or 'FT'
+    bin_name = request.args.get('bin_name', 'F').strip() or 'F'
+
+    success, msg, data = get_mes_defect_bin_qty(
+        lot_id, line_type=line_type, bin_name=bin_name,
+    )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data}), 200
 

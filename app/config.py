@@ -104,8 +104,8 @@ class Config:
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30
-    # MES 已解 hold 但 record 未关闭时，合并任务内自动关闭（每轮上限）
-    HOLD_AUTO_CLOSE_ENABLED = True
+    # MES 已解 hold 但 record 未关闭时，合并任务内自动关闭（已关闭，不再按 HOLDING 结单）
+    HOLD_AUTO_CLOSE_ENABLED = False
     HOLD_AUTO_CLOSE_BATCH_SIZE = 200
     # 写入 FT_HOLD_RECORD 时 STATUS 默认值（表字段 NOT NULL）
     # RECORD_TYPE 由 dispose_api.md「处置单划分」按 PRODUCT_ID/HOLD_CODE/STATION 判定：

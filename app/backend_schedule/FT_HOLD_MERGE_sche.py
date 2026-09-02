@@ -21,7 +21,6 @@ from typing import List, Optional, Tuple
 from app.config import Config
 from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
-    auto_close_hold_records,
     build_merged_wafer_display,
     compute_hold_wafer_attr,
     insert_hold_record_and_link,
@@ -29,19 +28,24 @@ from app.utils.database_util import (
     mark_hold_infos_dirty,
     normalize_lot_id,
     query_online_hold_info,
-    query_released_unclosed_hold_records,
 )
 
 # 处置单划分（见 dispose_api.md）：
-#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,AQL_HOLD}, STATION∉{FAOIFINISH,FFVI}
+#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,028,AQL_HOLD}, STATION∉{FAOIFINISH,FFVI}
 #   FVI异常反馈单 RECORD_TYPE=1  PRODUCT_ID *,     HOLD_CODE=023,               STATION∈{FAOIFINISH,FFVI}
 #   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_ID *-2.6, HOLD_CODE∈{004,022},         STATION=WOQC
 # 不满足以上规则的 hold_info 不转成 record。
-_FT_HOLD_CODES = frozenset({'023', '024', '025', '027', 'AQL_HOLD'})
+# 028（重码风险）仍为 RECORD_TYPE=0，但与同片/同批良率、缺陷率 hold 分列，不拼进同一条 record。
+# FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD 的 info 不参与合批。
+_FT_HOLD_CODES = frozenset({'023', '024', '025', '027', '028', 'AQL_HOLD'})
+_FT_DUPCODE_HOLD_CODE = '028'
 _FVI_HOLD_CODES = frozenset({'023'})
 _WLT_HOLD_CODES = frozenset({'004', '022'})
 _FVI_STATIONS = frozenset({'FAOIFINISH', 'FFVI'})
 _WLT_STATIONS = frozenset({'WOQC'})
+_FPQC_FUTURE_HOLD_CODE = '025'
+_FPQC_FUTURE_HOLD_STATION = 'FPQC'
+_FPQC_FUTURE_HOLD_REASON = 'FUTURE HOLD'
 
 RECORD_TYPE_FT = 0
 RECORD_TYPE_FVI = 1
@@ -80,6 +84,28 @@ def resolve_record_type(
         return RECORD_TYPE_WLT
 
     return None
+
+
+def _is_fpqc_future_hold(info: 'HoldInfo') -> bool:
+    """FPQC 站点 025 且 HOLD_REASON 含 FUTURE HOLD：预 hold，不参与合批。"""
+    code = (info.hold_code or '').strip()
+    station = (info.station or '').strip().upper()
+    reason = info.hold_reason or ''
+    return (
+        code == _FPQC_FUTURE_HOLD_CODE
+        and station == _FPQC_FUTURE_HOLD_STATION
+        and _FPQC_FUTURE_HOLD_REASON in reason.upper()
+    )
+
+
+def _merge_code_bucket(record_type: int, hold_code: str) -> str:
+    """
+    合批分组附加键：FT 重码(028)单独成桶，避免与 023/024/025/027 等拼成一条 record。
+    """
+    if record_type == RECORD_TYPE_FT and (hold_code or '').strip() == _FT_DUPCODE_HOLD_CODE:
+        return _FT_DUPCODE_HOLD_CODE
+    return ''
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -236,9 +262,10 @@ class HoldInfo:
 @dataclass
 class RoughHoldRecord:
     """
-    普通：按 (WAFER_ID, RECORD_TYPE) 分组；
-    分片合批（LOT_ID!=WAFER_ID 且 LOT 后缀数字>2位）：按 (LOT_ID, RECORD_TYPE) 分组；
+    普通：按 (WAFER_ID, RECORD_TYPE, 重码桶) 分组；
+    分片合批（LOT_ID!=WAFER_ID 且 LOT 后缀数字>2位）：按 (LOT_ID, RECORD_TYPE, 重码桶) 分组；
     WLT：同 lot（wafer/lot 中 '-' 前文本相同）合并，按 (lot_prefix, RECORD_TYPE) 分组。
+    FT 重码(028) 与同片/同批良率、缺陷率 hold 分列。
     并对 (WAFER_ID, STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
     items 为去重后用于拼装 FT_HOLD_RECORD 的条目；
     all_source_ids 含去重前全部源 ID，写入成功后一并回写 HOLD_RECORD_ID。
@@ -384,13 +411,14 @@ def build_rough_hold_records(
     查询结果 → 按处置单划分判定 RECORD_TYPE → 分组 → 去重 → 粗糙 hold record。
 
     分组键：
-      - WLT：('wlt_lot', lot_prefix, record_type)，lot_prefix 为 wafer/lot 中 '-' 前文本
-      - 分片合批（LOT!=WAFER 且 LOT 后缀数字>2位）：('lot', exact_lot_id, record_type)
-      - 其它：('wafer', wafer_id, record_type)
+      - WLT：('wlt_lot', lot_prefix, record_type, '')，lot_prefix 为 wafer/lot 中 '-' 前文本
+      - 分片合批（LOT!=WAFER 且 LOT 后缀数字>2位）：('lot', exact_lot_id, record_type, bucket)
+      - 其它：('wafer', wafer_id, record_type, bucket)
+      bucket：FT 的 028 为 '028'，其余为空。同 lot/wafer 上良率、缺陷率与重码拆成两条 record。
 
     返回 (records, skipped_ids)：
       records     可写入的 RoughHoldRecord
-      skipped_ids 不满足处置单划分、无需转成 record 的源 hold_info ID
+      skipped_ids 不满足处置单划分、或 FPQC 025 FUTURE HOLD 排除、无需转成 record 的源 hold_info ID
     """
     by_key = defaultdict(list)
     skipped_ids: List[int] = []
@@ -399,6 +427,15 @@ def build_rough_hold_records(
         info = HoldInfo.from_row(row)
         if not info.wafer_id:
             logger.warning(f"跳过无 WAFER_ID 的 hold_info id={info.id}")
+            if info.id is not None:
+                skipped_ids.append(info.id)
+            continue
+
+        if _is_fpqc_future_hold(info):
+            logger.info(
+                f"hold_info id={info.id} 为 FPQC 025 FUTURE HOLD，不参与合批 "
+                f"(wafer={info.wafer_id}, reason={info.hold_reason!r})"
+            )
             if info.id is not None:
                 skipped_ids.append(info.id)
             continue
@@ -414,6 +451,7 @@ def build_rough_hold_records(
                 skipped_ids.append(info.id)
             continue
 
+        bucket = _merge_code_bucket(rtype, info.hold_code)
         if rtype == RECORD_TYPE_WLT:
             # 同 lot（'-' 前相同）的 wafer 合并为一条；优先取 wafer 前缀
             lot_prefix = (
@@ -428,23 +466,24 @@ def build_rough_hold_records(
                 if info.id is not None:
                     skipped_ids.append(info.id)
                 continue
-            group_key = ('wlt_lot', lot_prefix, rtype)
+            group_key = ('wlt_lot', lot_prefix, rtype, bucket)
         elif is_fragmented_merged_lot(info.lot_id, info.wafer_id):
-            group_key = ('lot', info.lot_id, rtype)
+            group_key = ('lot', info.lot_id, rtype, bucket)
         else:
-            group_key = ('wafer', info.wafer_id, rtype)
+            group_key = ('wafer', info.wafer_id, rtype, bucket)
         by_key[group_key].append(info)
 
     records: List[RoughHoldRecord] = []
-    for group_key in sorted(by_key.keys(), key=lambda k: (k[0], k[1], k[2])):
-        mode, key_id, rtype = group_key
+    for group_key in sorted(by_key.keys(), key=lambda k: (k[0], k[1], k[2], k[3])):
+        mode, key_id, rtype, bucket = group_key
         raw_items = by_key[group_key]
         all_source_ids = [i.id for i in raw_items if i.id is not None]
         deduped = dedupe_hold_infos(raw_items, window=window)
         multi_wafer = mode in ('lot', 'wlt_lot')
         if len(deduped) < len(raw_items):
+            bucket_part = f" bucket={bucket}" if bucket else ''
             logger.info(
-                f"mode={mode} key={key_id} record_type={rtype}: "
+                f"mode={mode} key={key_id} record_type={rtype}{bucket_part}: "
                 f"{len(raw_items)} → {len(deduped)} "
                 f"（去掉 {len(raw_items) - len(deduped)} 条重复）"
             )
@@ -471,8 +510,8 @@ def build_rough_hold_records(
 class HoldMergeScheduler(threading.Thread):
     """
     定时将 FT_HOLD_INFO 中满足处置单划分的在线 hold 合并写入 FT_HOLD_RECORD：
-      - 普通：按 (WAFER_ID, RECORD_TYPE)
-      - 分片合批：按 (LOT_ID, RECORD_TYPE)
+      - 普通：按 (WAFER_ID, RECORD_TYPE)；FT 028 与良率/缺陷率分列
+      - 分片合批：按 (LOT_ID, RECORD_TYPE)；FT 028 同样分列
       - WLT：按 (lot_prefix, RECORD_TYPE)，LOT_ID 截取 '-' 前，WAFER_ID 为 #01#02
     """
 
@@ -511,14 +550,14 @@ class HoldMergeScheduler(threading.Thread):
                 hold_infos, window=self.dedup_window
             )
             if skipped_ids:
-                # 不满足划分规则：标记 -1，避免轮询反复捞取
+                # 不满足划分规则 / FUTURE HOLD 排除：标记 -1，避免轮询反复捞取
                 mark_hold_infos_dirty(
                     skipped_ids,
                     info_table=self.hold_info_table,
-                    reason='不满足处置单划分，无需转成 record',
+                    reason='无需转成 record（不满足划分或 FPQC 025 FUTURE HOLD）',
                 )
                 self.logger.info(
-                    f"跳过 {len(skipped_ids)} 条不满足处置单划分的 hold_info，"
+                    f"跳过 {len(skipped_ids)} 条无需合批的 hold_info，"
                     f"已标记 HOLD_RECORD_ID=-1"
                 )
 
@@ -569,48 +608,9 @@ class HoldMergeScheduler(threading.Thread):
                 f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"
                 f"跳过 {len(skipped_ids)}"
             )
-
-            self._run_auto_close()
         except Exception as e:
             self.logger.error(f"Hold 合并定时任务执行出错: {e}", exc_info=True)
             notify_severe_error('Hold 合并定时任务整轮失败', str(e), exc=e)
-
-    def _run_auto_close(self):
-        """MES 已解 hold（全部关联 info HOLDING≠0）但 record 未关闭 → 系统自动关闭。"""
-        enabled = getattr(self.config, 'HOLD_AUTO_CLOSE_ENABLED', True)
-        if not enabled:
-            self.logger.info("自动关闭已禁用（HOLD_AUTO_CLOSE_ENABLED=False），跳过")
-            return
-
-        batch_size = getattr(self.config, 'HOLD_AUTO_CLOSE_BATCH_SIZE', 200)
-        system_user_id = getattr(self.config, 'SYSTEM_USER_ID', 1)
-
-        self.logger.info(
-            f">>> Hold 自动关闭开始（batch_size={batch_size}, "
-            f"actor_user_id={system_user_id}）..."
-        )
-        record_ids = query_released_unclosed_hold_records(
-            info_table=self.hold_info_table,
-            record_table=self.hold_record_table,
-            limit=batch_size,
-        )
-        if record_ids is None:
-            self.logger.error("查询待自动关闭 hold_record 失败")
-            return
-
-        self.logger.info(f"待自动关闭 hold_record {len(record_ids)} 条")
-        if not record_ids:
-            self.logger.info("<<< Hold 自动关闭完毕：无待关闭记录")
-            return
-
-        close_ok, close_fail = auto_close_hold_records(
-            record_ids,
-            record_table=self.hold_record_table,
-            actor_user_id=system_user_id,
-        )
-        self.logger.info(
-            f"<<< Hold 自动关闭完毕：成功 {close_ok}，失败 {close_fail}"
-        )
 
     def run(self):
         self.logger.info(

@@ -40,7 +40,7 @@
 
 - [dispose_api.md](./reference/dispose_api.md) — 处置码与流转规则
 - [hold_record_api.md](./reference/hold_record_api.md) — Hold Record HTTP 接口
-- [test_data_api.md](./reference/test_data_api.md) — 测试日志查询
+- [test_data_api.md](./reference/test_data_api.md) — 测试日志 / raw_data（含 MES 缺陷 BIN）
 
 ## 概念区分
 

@@ -6,6 +6,7 @@ import logging
 from app import db
 from sqlalchemy import bindparam, desc, text
 from app.models.rawdata import TestWafer, TestBincode
+from app.utils.database_util import query_mes_defect_bin_qty
 import json
 
 
@@ -160,6 +161,54 @@ def get_latest_defect_bincodes(wafer_id, operation_id, sql_trace=None):
         data[str(int(bin_code))] = int(bin_code_qty) if bin_code_qty is not None else 0
 
     return True, '获取成功', data
+
+
+def get_mes_defect_bin_qty(lot_id, line_type='FT', bin_name='F'):
+    """
+    从 MES 查询指定 lot 的缺陷 BIN 数量（BIN_NAME 默认 F）。
+    按 DEFECT_CODE 去重，重复时保留第一条；has_duplicate 标明是否出现过重复。
+
+    Returns:
+        (True, msg, data) 或 (False, msg, None)
+        data: {lot_id, line_type, bin_name, qty, items, has_duplicate, duplicate_codes}
+    """
+    if lot_id is None or not str(lot_id).strip():
+        return False, '请指定 lot_id', None
+
+    lot_id = str(lot_id).strip()
+    line_type = (str(line_type).strip() if line_type is not None else '') or 'FT'
+    bin_name = (str(bin_name).strip() if bin_name is not None else '') or 'F'
+
+    rows = query_mes_defect_bin_qty(lot_id, line_type=line_type, bin_name=bin_name)
+    if rows is None:
+        return False, '查询 MES 缺陷 BIN 失败', None
+
+    seen = {}
+    duplicate_codes = []
+    for item in rows:
+        code = item.get('defect_code') or ''
+        if not code:
+            continue
+        if code in seen:
+            if code not in duplicate_codes:
+                duplicate_codes.append(code)
+            continue
+        seen[code] = {
+            'defect_code': code,
+            'qty': int(item.get('qty') or 0),
+        }
+
+    items = list(seen.values())
+    qty = sum(int(item.get('qty') or 0) for item in items)
+    return True, '获取成功', {
+        'lot_id': lot_id,
+        'line_type': line_type,
+        'bin_name': bin_name,
+        'qty': qty,
+        'items': items,
+        'has_duplicate': bool(duplicate_codes),
+        'duplicate_codes': duplicate_codes,
+    }
 
 
 def query_wafer_ids_by_prefix(prefix, operation_id=None, sql_trace=None):
