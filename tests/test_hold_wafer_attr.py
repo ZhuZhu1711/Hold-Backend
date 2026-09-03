@@ -50,8 +50,26 @@ class ComputeHoldWaferAttrTest(unittest.TestCase):
     def test_fragment_suffix_not_long_enough(self):
         self.assertEqual(compute_hold_wafer_attr('C123456-03', '250', 'FIQC'), 0)
 
-    def test_non_numeric_equip_skips_merge_bits(self):
-        self.assertEqual(compute_hold_wafer_attr('C123456-033', 'ATE201', 'FIQC'), 0)
+    def test_prefixed_equip_uses_digits(self):
+        self.assertEqual(
+            compute_hold_wafer_attr('C193407-0112', 'FATE203', 'FATE-FA'),
+            HOLD_WAFER_ATTR_ZIYI,
+        )
+        self.assertEqual(
+            compute_hold_wafer_attr('C123456-033', 'ATE201', 'FIQC'),
+            HOLD_WAFER_ATTR_ZIYI,
+        )
+        self.assertEqual(
+            compute_hold_wafer_attr('C123456-033', 'FATE163', 'FATE-FA'),
+            HOLD_WAFER_ATTR_IQC_ATE,
+        )
+        self.assertEqual(
+            compute_hold_wafer_attr('C123456-033', 'ATE015', 'FIQC'),
+            HOLD_WAFER_ATTR_IQC_ATE,
+        )
+
+    def test_equip_without_digits_skips_merge_bits(self):
+        self.assertEqual(compute_hold_wafer_attr('C123456-033', 'MANUAL', 'FIQC'), 0)
         self.assertEqual(compute_hold_wafer_attr('C123456-033', '', 'FIQC'), 0)
 
     def test_ate_and_fvi(self):

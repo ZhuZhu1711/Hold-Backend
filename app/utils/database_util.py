@@ -1350,11 +1350,14 @@ HOLD_WAFER_ATTR_FVI = 16         # bit4 FVI 合批
 
 
 def _parse_equip_num(equip_id):
-    """EQUIP_ID 去空白后纯数字才解析，否则 None。"""
+    """从 EQUIP_ID 抽出数字（FATE203 → 203，ATE015 → 15）。无数字则 None。"""
     text = str(equip_id).strip() if equip_id is not None else ''
-    if not text or not text.isdigit():
+    if not text:
         return None
-    return int(text)
+    digits = ''.join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return None
+    return int(digits)
 
 
 def _station_is_wlt(station) -> bool:
