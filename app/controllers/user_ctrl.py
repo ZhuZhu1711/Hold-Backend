@@ -1,7 +1,8 @@
 from app import db
 from app.models import User
-from app.controllers.auth_ctrl import normalize_login_password
+from app.controllers.auth_ctrl import normalize_login_password, password_matches
 from app.utils.auth_decorators import ROLE_NAMES
+from app.utils.password_policy import user_must_change_password, validate_new_password
 
 ALLOWED_ROLES = set(ROLE_NAMES.keys())
 EMPLOYEE_NO_MAX = 20
@@ -12,8 +13,6 @@ def login(employee_no, password_input):
     """
     登录逻辑
     """
-    from app.controllers.auth_ctrl import password_matches
-
     user = User.query.filter_by(EMPLOYEE_NO=employee_no).first()
     
     if not user:
@@ -23,7 +22,8 @@ def login(employee_no, password_input):
         return True, f"欢迎 {user.NAME}", {
             "id": user.ID,
             "name": user.NAME,
-            "role": user.ROLE
+            "role": user.ROLE,
+            "must_change_password": user_must_change_password(user),
         }
     else:
         return False, "密码错误", None
@@ -34,8 +34,6 @@ def login_logic(employee_no, password_input):
     password_input：客户端应传 MD5(明文) 的 32 位 hex，避免明文上送。
     :return: (bool: 是否成功, str: 消息, dict: 用户信息或None)
     """
-    from app.controllers.auth_ctrl import password_matches
-
     user = User.query.filter_by(EMPLOYEE_NO=employee_no).first()
 
     if not user:
@@ -46,20 +44,25 @@ def login_logic(employee_no, password_input):
             "id": user.ID,
             "name": user.NAME,
             "role": user.ROLE,
-            "employee_no": user.EMPLOYEE_NO
+            "employee_no": user.EMPLOYEE_NO,
+            "must_change_password": user_must_change_password(user),
         }
     return False, "密码错误", None
 
 def create_user(employee_no, name, password, role=1):
     """
-    创建用户逻辑。密码按登录约定存 MD5 hex。
+    创建用户逻辑。密码须明文，校验通过后存 MD5 hex。
     """
+    ok, msg = validate_new_password(employee_no, password)
+    if not ok:
+        return False, msg
     if User.query.filter_by(EMPLOYEE_NO=employee_no).first():
         return False, "用户已存在"
 
     new_user = User(EMPLOYEE_NO=employee_no, NAME=name, ROLE=role)
     try:
         new_user.set_password(password)
+        new_user.MUST_CHANGE_PWD = 0
         db.session.add(new_user)
         db.session.commit()
         return True, "创建成功"
@@ -111,7 +114,7 @@ def get_all_users(search="", sort_by="employee_no", order="asc"):
   
 def add_user(data):
     """
-    新增用户。密码按登录约定存 MD5 hex（兼容明文或已 MD5 的 hex）。
+    新增用户。密码须明文，校验字母+数字且至少 6 位后存 MD5 hex。
     """
     data = data or {}
     employee_no = str(data.get('employee_no') or '').strip()
@@ -135,6 +138,9 @@ def add_user(data):
         return False, '角色无效'
     if role not in ALLOWED_ROLES:
         return False, '角色无效，须为超级管理员 / 产品工程师 / 质量部 / 生产'
+    ok, policy_msg = validate_new_password(employee_no, password)
+    if not ok:
+        return False, policy_msg
 
     try:
         existing_user = User.query.filter_by(EMPLOYEE_NO=employee_no).first()
@@ -145,6 +151,7 @@ def add_user(data):
         new_user.EMPLOYEE_NO = employee_no
         new_user.NAME = name
         new_user.ROLE = role
+        new_user.MUST_CHANGE_PWD = 0
         new_user.set_password(password)
 
         db.session.add(new_user)
@@ -172,6 +179,35 @@ def remove_user(user_id):
         db.session.commit()
         
         return True, "删除成功"
+    except Exception as e:
+        db.session.rollback()
+        return False, str(e)
+
+
+def change_password(user_id, old_password, new_password):
+    """
+    已登录用户修改自己的密码。新密码须明文。
+    """
+    if not user_id:
+        return False, '请先登录'
+    if new_password is None or str(new_password) == '':
+        return False, '请填写新密码'
+
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return False, '用户不存在'
+        if not password_matches(user.PASSWORD, old_password):
+            return False, '原密码错误'
+        ok, policy_msg = validate_new_password(user.EMPLOYEE_NO, new_password)
+        if not ok:
+            return False, policy_msg
+        if password_matches(user.PASSWORD, new_password):
+            return False, '新密码不能与原密码相同'
+        user.set_password(new_password)
+        user.MUST_CHANGE_PWD = 0
+        db.session.commit()
+        return True, '密码已修改'
     except Exception as e:
         db.session.rollback()
         return False, str(e)

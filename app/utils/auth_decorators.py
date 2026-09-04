@@ -87,6 +87,37 @@ def _wants_json():
     return 'application/json' in accept and 'text/html' not in accept
 
 
+MUST_CHANGE_ALLOWED_ENDPOINTS = frozenset({
+    'auth.change_password_page',
+    'auth.api_change_password',
+    'auth.logout',
+})
+MUST_CHANGE_MSG = '请先在网页修改密码'
+
+
+def session_must_change_password():
+    """升级前的持久 Cookie 没有该键，视为必须改密。"""
+    if 'must_change_password' not in session:
+        return True
+    return bool(session.get('must_change_password'))
+
+
+def _reject_if_must_change():
+    """未改密用户只能访问改密页 / 改密 API / 登出。"""
+    if not session_must_change_password():
+        return None
+    if request.endpoint in MUST_CHANGE_ALLOWED_ENDPOINTS:
+        return None
+    if _wants_json():
+        return jsonify({
+            'code': 403,
+            'msg': MUST_CHANGE_MSG,
+            'data': {'must_change_password': True},
+        }), 403
+    flash(MUST_CHANGE_MSG, 'warning')
+    return redirect(url_for('auth.change_password_page'))
+
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -97,6 +128,9 @@ def login_required(f):
                 return jsonify({'code': 401, 'msg': '请先登录'}), 401
             flash('请先登录', 'warning')
             return redirect(url_for('auth.login_page'))
+        blocked = _reject_if_must_change()
+        if blocked is not None:
+            return blocked
         return f(*args, **kwargs)
     return decorated_function
 
@@ -127,6 +161,9 @@ def role_required(*allowed_roles):
                 flash('权限不足', 'danger')
                 return redirect(url_for('auth.login_page'))
 
+            blocked = _reject_if_must_change()
+            if blocked is not None:
+                return blocked
             return f(*args, **kwargs)
         return decorated_function
     return decorator

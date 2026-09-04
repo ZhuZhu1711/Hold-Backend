@@ -38,7 +38,9 @@ FT `hold_code` 从允许列表中选，目前只有 `AQL_HOLD`；未传时默认
 - FT：`/JDY_UPLOAD/FT_MANUAL/`
 - WLT：`/JDY_UPLOAD/WLT_MANUAL/`
 
-服务端上传文件名：`{recordId}_{n}.ext`（如 `188_1.jpg`）。`ANNEX_FTP_PATH` 存相对名 `@188_1.jpg@188_2.jpg`，下载时再拼根目录，避免 VARCHAR2(1024) 写满。已带 `/` 的绝对路径仍按原样下载。
+服务端上传文件名：`{recordId}_{n}.ext`（如 `188_1.jpg`）。`ANNEX_FTP_PATH` 存相对名 `@188_1.jpg@188_2.jpg`，下载时再拼对应产线根目录，避免 VARCHAR2(1024) 写满。
+
+读写都只允许这两个目录下的图片（jpg/jpeg/png/gif/bmp/webp）。带 `/` 的绝对路径必须落在上述根目录内，入库时改存相对文件名。`..`、其它目录（如 `/RAW_DATA/`）或非图片扩展名一律拒绝，避免把应用当成内网 FTP 任意读通道。
 
 多图路径以 `@` 引导拼接，例如：
 
@@ -86,7 +88,7 @@ WLT 示例：
 }
 ```
 
-写入 `STATION=WLT2`，`WAFER_ID=#01#03#13`。也可直接传 `"wafer_id":"#01#03#13"`。`annex_paths: ["/a.jpg","/b.jpg"]` 同样支持。
+写入 `STATION=WLT2`，`WAFER_ID=#01#03#13`。也可直接传 `"wafer_id":"#01#03#13"`。`annex_paths: ["a.jpg","b.jpg"]` 同样支持（须为当前产线 MANUAL 目录下的图片文件名，或该目录下的绝对路径）。
 
 `multipart/form-data`：同样字段 + `files`（或多张 `images`）。先插入 Record，再把文件平铺存到 `/JDY_UPLOAD/FT_MANUAL/` 或 `/JDY_UPLOAD/WLT_MANUAL/`，文件名为 `{recordId}_{n}.ext`。库内 `ANNEX_FTP_PATH` 存相对名以控制 1024 长度。
 
@@ -100,8 +102,13 @@ WLT 示例：
 
 - Auth：`@login_required`
 - 只返回该 record 的 `ANNEX_FTP_PATH` 第 `index` 张（从 0 起），禁止任意 FTP 路径
+- 实际 FTP 读取前会校验路径落在 `FT_MANUAL` / `WLT_MANUAL` 且为图片；否则 400
 - 成功：图片 bytes；无图 / 越界：404
 
 `HOLD_CODE` 含 `AQL_HOLD` 时：**不要**调 `/api/analysis`。客户端/Web「分析」改为展示附件；`ANNEX_COUNT=0` 则不显示图。
 
 WLT 手提（004/022）仍走原 bysite/binmap；若同时有附件，分析页额外展示。
+
+### `GET /admin/hold/api/annex_zip?record_id=`
+
+打包该 record 全部附件，路径规则与 `annex_image` 相同（仅 MANUAL 目录下的图片）。

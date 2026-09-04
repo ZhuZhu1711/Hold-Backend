@@ -77,6 +77,7 @@ class ApiTokenAuthTest(unittest.TestCase):
             sess['user_id'] = 12
             sess['role'] = ROLE_ENGINEER
             sess['user_name'] = '张三'
+            sess['must_change_password'] = False
         resp = client.get('/api/need-login')
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
@@ -89,8 +90,19 @@ class ApiTokenAuthTest(unittest.TestCase):
         with client.session_transaction() as sess:
             sess['user_id'] = 12
             sess['role'] = ROLE_ENGINEER
+            sess['must_change_password'] = False
         resp = client.get('/api/eng-only')
         self.assertEqual(resp.status_code, 200)
+
+    def test_legacy_session_without_flag_must_change(self):
+        app = _make_app('correct-token')
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = 12
+            sess['role'] = ROLE_ENGINEER
+        resp = client.get('/api/need-login')
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(resp.get_json()['data']['must_change_password'])
 
     def test_session_non_engineer_still_403_without_token(self):
         app = _make_app('correct-token')
@@ -98,9 +110,33 @@ class ApiTokenAuthTest(unittest.TestCase):
         with client.session_transaction() as sess:
             sess['user_id'] = 99
             sess['role'] = 9
+            sess['must_change_password'] = False
         resp = client.get('/api/eng-only')
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(resp.get_json()['code'], 403)
+
+    def test_must_change_blocks_json_api(self):
+        app = _make_app('correct-token')
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = 12
+            sess['role'] = ROLE_ENGINEER
+            sess['must_change_password'] = True
+        resp = client.get('/api/need-login')
+        self.assertEqual(resp.status_code, 403)
+        body = resp.get_json()
+        self.assertEqual(body['code'], 403)
+        self.assertTrue(body['data']['must_change_password'])
+
+    def test_token_bypasses_must_change(self):
+        app = _make_app('correct-token')
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = 12
+            sess['role'] = ROLE_ENGINEER
+            sess['must_change_password'] = True
+        resp = client.get('/api/need-login', headers={'X-Hold-Token': 'correct-token'})
+        self.assertEqual(resp.status_code, 200)
 
     def test_no_header_is_401(self):
         client = _make_app('correct-token').test_client()

@@ -53,7 +53,7 @@ def create_user():
     """
     新增用户
     URL: /admin/users/api
-    数据格式: { "employee_no": "E1001", "name": "张三", "password": "123456", "role": 1 }
+    数据格式: { "employee_no": "E1001", "name": "张三", "password": "明文（字母+数字至少6位）", "role": 1 }
     """
     data = request.get_json()
     

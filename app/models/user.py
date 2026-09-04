@@ -10,6 +10,7 @@ class User(db.Model):
     NAME = Column(String(20), nullable=False)
     PASSWORD = Column(String(100), nullable=False)
     ROLE = Column(Integer, nullable=False, default=1)
+    MUST_CHANGE_PWD = Column(Integer, nullable=False, default=1)
 
     products = db.relationship('ProductInfo', back_populates='owner', lazy=True)
 

@@ -42,7 +42,7 @@ class AddUserValidationTest(unittest.TestCase):
         ok, msg = add_user({
             'employee_no': 'A1',
             'name': '张三',
-            'password': '123456',
+            'password': 'Hold26',
             'role': 2,
         })
         self.assertFalse(ok)
@@ -52,10 +52,37 @@ class AddUserValidationTest(unittest.TestCase):
         ok, msg = add_user({
             'employee_no': 'A1',
             'name': 'N' * 21,
-            'password': '123456',
+            'password': 'Hold26',
         })
         self.assertFalse(ok)
         self.assertIn('姓名最长', msg)
+
+    def test_weak_password_rejected(self):
+        ok, msg = add_user({
+            'employee_no': 'A1',
+            'name': '张三',
+            'password': '123456',
+        })
+        self.assertFalse(ok)
+        self.assertIn('字母和数字', msg)
+
+    def test_employee_no_as_password_rejected(self):
+        ok, msg = add_user({
+            'employee_no': 'Hold26',
+            'name': '张三',
+            'password': 'Hold26',
+        })
+        self.assertFalse(ok)
+        self.assertIn('工号', msg)
+
+    def test_abc123_rejected(self):
+        ok, msg = add_user({
+            'employee_no': 'A1',
+            'name': '张三',
+            'password': 'abc123',
+        })
+        self.assertFalse(ok)
+        self.assertIn('过于简单', msg)
 
 
 if __name__ == '__main__':

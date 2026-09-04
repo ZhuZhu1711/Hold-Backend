@@ -31,6 +31,7 @@ from app.utils.annex_util import (
     parse_annex_ftp_paths,
     parse_wlt_wafer_nos,
     product_suffix_for_line,
+    sanitize_client_annex_paths,
     upload_annex_files,
 )
 from app.utils.database_util import (
@@ -236,8 +237,12 @@ def normalize_manual_hold(raw: dict) -> tuple:
     extra = raw.get('annex_paths') or raw.get('ANNEX_PATHS')
     if isinstance(extra, list):
         annex_paths.extend(str(p).strip() for p in extra if str(p).strip())
+    try:
+        annex_paths = sanitize_client_annex_paths(annex_paths, line=line)
+    except ValueError as e:
+        return False, str(e), None
     annex_ftp_path = join_annex_ftp_paths(annex_paths)
-    if len(parse_annex_ftp_paths(annex_ftp_path)) > ANNEX_MAX_FILES:
+    if len(annex_paths) > ANNEX_MAX_FILES:
         return False, f'图片最多 {ANNEX_MAX_FILES} 张', None
 
     record = {
@@ -465,9 +470,12 @@ def get_annex_image(record_id, index=0) -> tuple:
     except ValueError as e:
         return False, str(e), None
     name = ftp_path.replace('\\', '/').rsplit('/', 1)[-1] or f'annex_{idx}'
+    mime = annex_mimetype(name)
+    if not mime.startswith('image/'):
+        return False, '附件须为图片', None
     return True, 'ok', {
         'bytes': data,
-        'mimetype': annex_mimetype(ftp_path),
+        'mimetype': mime,
         'filename': name,
         'path': ftp_path,
     }
@@ -506,6 +514,8 @@ def get_annex_zip(record_id) -> tuple:
             for idx, ftp_path in enumerate(paths):
                 data = download_annex_bytes(ftp_path, line=line)
                 name = str(ftp_path).replace('\\', '/').rsplit('/', 1)[-1] or f'annex_{idx}'
+                if not annex_mimetype(name).startswith('image/'):
+                    raise ValueError('附件须为图片')
                 if name in used:
                     stem, dot, ext = name.rpartition('.')
                     name = f'{stem or name}_{idx}{dot}{ext}'

@@ -27,6 +27,7 @@
 | [FT_HOLD_PREDICT_DDL.sql](./ddl/FT_HOLD_PREDICT_DDL.sql) | `FT_HOLD_PREDICT` |
 | [FT_CLIENT_ERROR_DDL.sql](./ddl/FT_CLIENT_ERROR_DDL.sql) | `FT_CLIENT_ERROR` |
 | [SOFTWARE_INFO_DDL.sql](./ddl/SOFTWARE_INFO_DDL.sql) | `SOFTWARE_INFO`（客户端版本卡控） |
+| [USERS_MUST_CHANGE_PWD.sql](./ddl/USERS_MUST_CHANGE_PWD.sql) | 给已有 `USERS` 增加 `MUST_CHANGE_PWD`（debug/release 共用表，执行一次；**先跑脚本再部署代码**） |
 
 新环境建议顺序：旧表（若仍对接）→ `DEFECT_CODE` / `FT_ENG_NOTES` → `FT_HOLD_RECORD`（及 TEST）→ `CIRCULATION_HISTORY` → 其余。
 

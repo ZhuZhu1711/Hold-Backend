@@ -257,7 +257,7 @@ def api_manual_hold():
         status = 200
     elif '不属于' in msg:
         status = 403
-    elif any(k in msg for k in ('须', '缺少', '要求', '不支持', '过大', '为空', '匹配', '相同', '超过')):
+    elif any(k in msg for k in ('须', '缺少', '要求', '不支持', '过大', '为空', '匹配', '相同', '超过', '允许', '图片', '无效')):
         status = 400
     else:
         status = 500
@@ -313,16 +313,19 @@ def api_annex_image():
         request.args.get('index', 0),
     )
     if success:
+        mime = payload.get('mimetype') or ''
+        if not str(mime).startswith('image/'):
+            return jsonify({'code': 400, 'msg': '附件须为图片', 'data': None}), 400
         as_attachment = str(request.args.get('download') or '').lower() in ('1', 'true', 'yes')
         return send_file(
             io.BytesIO(payload['bytes']),
-            mimetype=payload.get('mimetype') or 'application/octet-stream',
+            mimetype=mime,
             download_name=payload.get('filename') or 'annex',
             as_attachment=as_attachment,
         )
     if '不存在' in msg or '无附件' in msg or '超出' in msg:
         status = 404
-    elif any(k in msg for k in ('无效', '须为')):
+    elif any(k in msg for k in ('无效', '须为', '允许', '图片')):
         status = 400
     else:
         status = 500
@@ -343,7 +346,7 @@ def api_annex_zip():
         )
     if '不存在' in msg or '无附件' in msg:
         status = 404
-    elif any(k in msg for k in ('无效', '须为')):
+    elif any(k in msg for k in ('无效', '须为', '允许', '图片')):
         status = 400
     else:
         status = 500

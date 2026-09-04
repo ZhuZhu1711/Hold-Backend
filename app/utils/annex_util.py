@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import os
+import posixpath
 import re
 
 from app.config import Config
@@ -125,7 +126,7 @@ def join_annex_ftp_paths(paths) -> str | None:
 
 def annex_mimetype(ftp_path: str) -> str:
     ext = os.path.splitext(str(ftp_path or ''))[1].lower()
-    return _MIME_BY_EXT.get(ext, 'application/octet-stream')
+    return _MIME_BY_EXT.get(ext, '')
 
 
 def annex_line_from_record(record) -> str:
@@ -140,16 +141,6 @@ def annex_line_from_record(record) -> str:
     return 'WLT' if pid.endswith('-2.6') else 'FT'
 
 
-def resolve_annex_ftp_path(stored, line='') -> str:
-    """相对名（如 12_1.jpg）补上产线根目录；已是绝对路径则原样。"""
-    path = str(stored or '').strip().lstrip('@').strip()
-    if not path:
-        return ''
-    if path.startswith('/'):
-        return path
-    return annex_root_dir(line) + path.lstrip('/')
-
-
 def annex_root_dir(line='') -> str:
     is_wlt = str(line or '').upper() == 'WLT'
     key = 'ANNEX_FTP_WLT_DIR' if is_wlt else 'ANNEX_FTP_FT_DIR'
@@ -158,6 +149,101 @@ def annex_root_dir(line='') -> str:
     if not root.startswith('/'):
         root = '/' + root
     return root.rstrip('/') + '/'
+
+
+def annex_allowed_roots() -> tuple[str, str]:
+    return (_norm_root(annex_root_dir('FT')), _norm_root(annex_root_dir('WLT')))
+
+
+def _norm_root(root: str) -> str:
+    text = posixpath.normpath(str(root or '').replace('\\', '/'))
+    if not text.startswith('/'):
+        text = '/' + text
+    if text == '/':
+        return '/'
+    return text.rstrip('/') + '/'
+
+
+def _posix_abs(path: str) -> str:
+    text = str(path or '').replace('\\', '/').strip()
+    if not text.startswith('/'):
+        text = '/' + text
+    norm = posixpath.normpath(text)
+    if not norm.startswith('/'):
+        norm = '/' + norm
+    return norm
+
+
+def _is_under_root(norm: str, root: str) -> bool:
+    prefix = _norm_root(root)
+    if prefix == '/' or not norm.startswith(prefix):
+        return False
+    rest = norm[len(prefix):]
+    return bool(rest) and not rest.endswith('/')
+
+
+def resolve_annex_ftp_path(stored, line='') -> str:
+    """相对名（如 12_1.jpg）补上产线根目录；已是绝对路径则保持绝对。"""
+    path = str(stored or '').strip().lstrip('@').strip()
+    if not path:
+        return ''
+    path = path.replace('\\', '/')
+    if path.startswith('/'):
+        return path
+    return annex_root_dir(line) + path.lstrip('/')
+
+
+def canonicalize_annex_path(stored, line='', *, require_line_root: bool = False) -> str:
+    """
+    规范为绝对 posix 路径，且必须落在 FT_MANUAL / WLT_MANUAL 下的图片文件。
+    require_line_root=True 时还须落在当前产线根目录（创建入库用）。
+    """
+    raw = str(stored or '').strip().lstrip('@').strip()
+    if not raw:
+        raise ValueError('附件路径为空')
+    if '\x00' in raw or '@' in raw:
+        raise ValueError('附件路径无效')
+    joined = resolve_annex_ftp_path(raw, line)
+    if not joined:
+        raise ValueError('附件路径为空')
+    norm = _posix_abs(joined)
+    name = norm.rsplit('/', 1)[-1]
+    if not name or name in ('.', '..'):
+        raise ValueError('附件路径不在允许目录')
+    if '\x00' in name or '@' in name:
+        raise ValueError('附件路径无效')
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in ANNEX_ALLOWED_EXT:
+        raise ValueError('附件须为图片')
+    if require_line_root:
+        if not _is_under_root(norm, annex_root_dir(line)):
+            raise ValueError('附件路径不在允许目录')
+    elif not any(_is_under_root(norm, root) for root in annex_allowed_roots()):
+        raise ValueError('附件路径不在允许目录')
+    return norm
+
+
+def annex_relname_for_store(canonical: str) -> str:
+    """绝对规范路径 → 相对允许根目录的文件名（可含子路径）。"""
+    norm = _posix_abs(canonical)
+    for root in annex_allowed_roots():
+        if _is_under_root(norm, root):
+            return norm[len(root):]
+    raise ValueError('附件路径不在允许目录')
+
+
+def sanitize_client_annex_paths(paths, line='') -> list[str]:
+    """创建接口：校验客户端路径，返回可入库的相对名。"""
+    out = []
+    seen = set()
+    for raw in paths or []:
+        canonical = canonicalize_annex_path(raw, line=line, require_line_root=True)
+        rel = annex_relname_for_store(canonical)
+        if rel in seen:
+            continue
+        seen.add(rel)
+        out.append(rel)
+    return out
 
 
 def _ftp_makedirs(ftp, directory: str) -> None:
@@ -226,7 +312,9 @@ def upload_annex_files(files, line='', record_id=None) -> list:
     if len(items) > ANNEX_MAX_FILES:
         raise ValueError(f'图片最多 {ANNEX_MAX_FILES} 张')
 
-    dest_dir = annex_root_dir(line).rstrip('/')
+    dest_dir = _norm_root(annex_root_dir(line)).rstrip('/')
+    if dest_dir not in {r.rstrip('/') for r in annex_allowed_roots()}:
+        raise ValueError('附件路径不在允许目录')
     ftp = None
     stored_names = []
     try:
@@ -251,9 +339,7 @@ def upload_annex_files(files, line='', record_id=None) -> list:
 
 
 def download_annex_bytes(ftp_path: str, line='') -> bytes:
-    path = resolve_annex_ftp_path(ftp_path, line)
-    if not path:
-        raise ValueError('附件路径为空')
+    path = canonicalize_annex_path(ftp_path, line)
     ftp = None
     try:
         ftp = annex_ftp_pool.get_conn()
@@ -274,31 +360,20 @@ def download_annex_bytes(ftp_path: str, line='') -> bytes:
 
 
 def _retr_annex_bytes(ftp, path: str) -> bytes:
-    """先 cwd 到目录再按文件名下载；失败再试绝对路径。"""
-    text = str(path or '').replace('\\', '/').strip()
+    """只按已收口的目录 + 文件名下载，不再尝试目录外绝对路径。"""
+    text = canonicalize_annex_path(path)
     directory, _, name = text.rpartition('/')
-    errors = []
-    if name:
-        try:
-            if directory:
-                _ftp_cwd(ftp, directory)
-            buf = io.BytesIO()
-            ftp.retrbinary(f'RETR {name}', buf.write)
-            data = buf.getvalue()
-            if data:
-                return data
-        except Exception as e:
-            errors.append(str(e))
-            _ftp_reset_home(ftp)
-    for cand in (text, text.lstrip('/'), '/' + text.lstrip('/')):
-        if not cand:
-            continue
-        try:
-            buf = io.BytesIO()
-            ftp.retrbinary(f'RETR {cand}', buf.write)
-            data = buf.getvalue()
-            if data:
-                return data
-        except Exception as e:
-            errors.append(str(e))
-    raise ValueError('下载附件失败: ' + (errors[-1] if errors else '未知错误'))
+    if not name or not directory:
+        raise ValueError('附件路径无效')
+    try:
+        _ftp_cwd(ftp, directory)
+        buf = io.BytesIO()
+        ftp.retrbinary(f'RETR {name}', buf.write)
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f'下载附件失败: {e}') from e
+    data = buf.getvalue()
+    if not data:
+        raise ValueError('附件为空')
+    return data

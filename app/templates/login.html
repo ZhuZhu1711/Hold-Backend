@@ -189,9 +189,13 @@
 
                 if (data.code === 200) {
                     errorMsg.style.color = 'green';
-                    errorMsg.textContent = remember
-                        ? '登录成功，已开启自动登录...'
-                        : '登录成功，跳转中...';
+                    if (data.data && data.data.must_change_password) {
+                        errorMsg.textContent = '登录成功，请先修改密码...';
+                    } else {
+                        errorMsg.textContent = remember
+                            ? '登录成功，已开启自动登录...'
+                            : '登录成功，跳转中...';
+                    }
                     const redirect = (data.data && data.data.redirect) || '/dashboard';
                     setTimeout(() => {
                         window.location.href = redirect;
