@@ -173,8 +173,10 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
 
     仅捞取满足 dispose_api.md「处置单划分」的候选行：
-      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,028,AQL_HOLD), STATION∉(FAOIFINISH,FFVI)
-      FVI : HOLD_CODE=023, STATION∈(FAOIFINISH,FFVI)
+      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,028,AQL_HOLD),
+            STATION∉(FAOIFINISH,FFVI)，且排除 (AQL_HOLD + FAOI-BACK)
+      FVI : HOLD_CODE=023 + STATION∈(FAOIFINISH,FFVI)
+            或 HOLD_CODE=AQL_HOLD + STATION=FAOI-BACK
       WLT : PRODUCT_ID LIKE '%-2.6', HOLD_CODE∈(004,022), STATION=WOQC
     精确 RECORD_TYPE 仍由调用方按同样规则判定后写入 FT_HOLD_RECORD。
 
@@ -204,10 +206,15 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
                     PRODUCT_ID LIKE '%-3.5'
                     AND HOLD_CODE IN ('023', '024', '025', '027', '028', 'AQL_HOLD')
                     AND STATION NOT IN ('FAOIFINISH', 'FFVI')
+                    AND NOT (HOLD_CODE = 'AQL_HOLD' AND STATION = 'FAOI-BACK')
                 )
                 OR (
                     HOLD_CODE = '023'
                     AND STATION IN ('FAOIFINISH', 'FFVI')
+                )
+                OR (
+                    HOLD_CODE = 'AQL_HOLD'
+                    AND STATION = 'FAOI-BACK'
                 )
                 OR (
                     PRODUCT_ID LIKE '%-2.6'

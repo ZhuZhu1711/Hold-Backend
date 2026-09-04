@@ -5,6 +5,7 @@ import unittest
 
 from app.backend_schedule.FT_HOLD_MERGE_sche import (
     RECORD_TYPE_FT,
+    RECORD_TYPE_FVI,
     build_rough_hold_records,
     resolve_record_type,
 )
@@ -100,6 +101,42 @@ class FpqcFutureHoldSkipTest(unittest.TestCase):
         self.assertEqual(skipped, [])
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].items[0].hold_code, '025')
+
+
+class FaoiBackAqlHoldFviTest(unittest.TestCase):
+    def test_aql_faoi_back_is_fvi_regardless_of_product(self):
+        self.assertEqual(
+            resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FAOI-BACK'),
+            RECORD_TYPE_FVI,
+        )
+        self.assertEqual(
+            resolve_record_type('OTHER', 'AQL_HOLD', 'faoi-back'),
+            RECORD_TYPE_FVI,
+        )
+
+    def test_aql_other_station_still_ft(self):
+        self.assertEqual(
+            resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FATE-FA'),
+            RECORD_TYPE_FT,
+        )
+
+    def test_023_faoi_back_stays_ft(self):
+        self.assertEqual(
+            resolve_record_type('PROD-3.5', '023', 'FAOI-BACK'),
+            RECORD_TYPE_FT,
+        )
+
+    def test_aql_faoi_back_builds_fvi_record(self):
+        records, skipped = build_rough_hold_records([
+            _row(1, 'AQL_HOLD', station='FAOI-BACK'),
+        ])
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].record_type, RECORD_TYPE_FVI)
+        row = records[0].to_record_dict()
+        self.assertEqual(row['RECORD_TYPE'], RECORD_TYPE_FVI)
+        self.assertEqual(row['HOLD_CODE'], 'AQL_HOLD')
+        self.assertEqual(row['STATION'], 'FAOI-BACK')
 
 
 if __name__ == '__main__':

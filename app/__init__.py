@@ -41,6 +41,18 @@ def create_app():
     # 4. 将 db 实例与 app 绑定
     db.init_app(app)
 
+    @app.after_request
+    def _set_frame_guard_headers(response):
+        """禁止第三方站点用 iframe 嵌套本站页面，缓解点击劫持。"""
+        response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+        csp = response.headers.get('Content-Security-Policy', '')
+        if 'frame-ancestors' not in csp:
+            extra = "frame-ancestors 'self'"
+            response.headers['Content-Security-Policy'] = (
+                f'{csp}; {extra}' if csp else extra
+            )
+        return response
+
     from app.utils.mail_alert import install_severe_error_hooks
     install_severe_error_hooks()
     

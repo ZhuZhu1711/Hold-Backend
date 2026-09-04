@@ -31,9 +31,11 @@ from app.utils.database_util import (
 )
 
 # 处置单划分（见 dispose_api.md）：
-#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,028,AQL_HOLD}, STATION∉{FAOIFINISH,FFVI}
-#   FVI异常反馈单 RECORD_TYPE=1  PRODUCT_ID *,     HOLD_CODE=023,               STATION∈{FAOIFINISH,FFVI}
-#   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_ID *-2.6, HOLD_CODE∈{004,022},         STATION=WOQC
+#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,028,AQL_HOLD},
+#                 STATION∉{FAOIFINISH,FFVI}，且排除 (AQL_HOLD + FAOI-BACK)
+#   FVI异常反馈单 RECORD_TYPE=1  HOLD_CODE=023 + STATION∈{FAOIFINISH,FFVI}
+#                               或 HOLD_CODE=AQL_HOLD + STATION=FAOI-BACK
+#   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_ID *-2.6, HOLD_CODE∈{004,022}, STATION=WOQC
 # 不满足以上规则的 hold_info 不转成 record。
 # 028（重码风险）仍为 RECORD_TYPE=0，但与同片/同批良率、缺陷率 hold 分列，不拼进同一条 record。
 # FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD 的 info 不参与合批。
@@ -42,6 +44,8 @@ _FT_DUPCODE_HOLD_CODE = '028'
 _FVI_HOLD_CODES = frozenset({'023'})
 _WLT_HOLD_CODES = frozenset({'004', '022'})
 _FVI_STATIONS = frozenset({'FAOIFINISH', 'FFVI'})
+_FVI_AQL_HOLD_CODE = 'AQL_HOLD'
+_FVI_AQL_STATION = 'FAOI-BACK'
 _WLT_STATIONS = frozenset({'WOQC'})
 _FPQC_FUTURE_HOLD_CODE = '025'
 _FPQC_FUTURE_HOLD_STATION = 'FPQC'
@@ -67,6 +71,8 @@ def resolve_record_type(
 
     # FVI：先判站点限定规则，避免与 FT 的「站点排除」交叉误伤
     if code in _FVI_HOLD_CODES and sta in _FVI_STATIONS:
+        return RECORD_TYPE_FVI
+    if code == _FVI_AQL_HOLD_CODE and sta == _FVI_AQL_STATION:
         return RECORD_TYPE_FVI
 
     if (
