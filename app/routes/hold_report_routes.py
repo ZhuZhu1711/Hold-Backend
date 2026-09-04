@@ -110,13 +110,18 @@ def merge_failed_page():
 
 
 @hold_report_bp.route('/export')
-@root_required
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
 def hold_info_export_page():
-    """FT_HOLD_RECORD 按型号+时间导出 FT ATE Hold Lot（root）"""
+    """FT_HOLD_RECORD 按型号+时间导出 FT ATE Hold Lot（root 全量 / 工程师仅所属型号）"""
+    nav_area = 'eng' if session.get('role') == ROLE_ENGINEER else 'admin'
     return render_template(
         'hold/export.html',
         user_name=session.get('user_name'),
         role_name=current_role_name(),
+        nav_area=nav_area,
+        products_api=(
+            '/eng/api/products' if nav_area == 'eng' else '/admin/hold/api/products'
+        ),
     )
 
 
@@ -561,6 +566,7 @@ def _export_query_args():
     return {
         'product_id': request.args.get('product_id', '').strip(),
         'lot_id': request.args.get('lot_id', '').strip(),
+        'route_id': request.args.get('route_id', '').strip(),
         'start_dttm': request.args.get('start_dttm', '').strip(),
         'end_dttm': request.args.get('end_dttm', '').strip(),
         'sub_customer': request.args.get('sub_customer', '').strip(),
@@ -570,25 +576,45 @@ def _export_query_args():
     }
 
 
+def _export_owner_eng_id():
+    if session.get('role') == ROLE_ENGINEER:
+        return session.get('user_id')
+    return None
+
+
+def _hold_info_export_status(msg):
+    if '不属于' in msg:
+        return 403
+    if any(k in msg for k in ('请指定', '不能早于', '无效')):
+        return 400
+    return 500
+
+
 @hold_report_bp.route('/api/hold_info_export', methods=['GET'])
-@root_required
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_preview():
-    """预览 FT_HOLD_RECORD 导出结果（最多 100 条）。"""
-    success, msg, data = hold_info_export_ctrl.preview_hold_info_export(**_export_query_args())
+    """预览 FT_HOLD_RECORD 导出结果（最多 100 条）。工程师仅所属型号。"""
+    success, msg, data = hold_info_export_ctrl.preview_hold_info_export(
+        owner_eng_id=_export_owner_eng_id(),
+        **_export_query_args(),
+    )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
-    status = 400 if any(k in msg for k in ('请指定', '不能早于', '无效')) else 500
+    status = _hold_info_export_status(msg)
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
 @hold_report_bp.route('/api/hold_info_export/xlsx', methods=['GET'])
-@root_required
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_xlsx():
-    """导出 FT_HOLD_RECORD 为 FT ATE Hold Lot xlsx（最多 5000 条）。"""
+    """导出 FT_HOLD_RECORD 为 FT ATE Hold Lot xlsx（最多 5000 条）。工程师仅所属型号。"""
     args = _export_query_args()
-    success, msg, content = hold_info_export_ctrl.export_hold_info_xlsx(**args)
+    success, msg, content = hold_info_export_ctrl.export_hold_info_xlsx(
+        owner_eng_id=_export_owner_eng_id(),
+        **args,
+    )
     if not success:
-        status = 400 if any(k in msg for k in ('请指定', '不能早于', '无效')) else 500
+        status = _hold_info_export_status(msg)
         return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
     product = _safe_filename(args.get('product_id') or 'hold')

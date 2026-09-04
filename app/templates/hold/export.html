@@ -7,6 +7,16 @@
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; min-height: 100vh; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active a { background: #007bff; color: #fff; }
         .main { flex: 1; padding: 24px; overflow: auto; }
         .card {
             background: #fff; border-radius: 8px; padding: 20px;
@@ -45,8 +55,28 @@
     </style>
 </head>
 <body>
+    {% set nav_area = nav_area|default('admin') %}
+    {% if nav_area == 'eng' %}
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>产品工程师</h2>
+            <p>{{ user_name }} · {{ role_name }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/eng/">工作台</a></li>
+            <li><a href="/eng/defects">缺陷 / BSL</a></li>
+            <li><a href="/eng/notes">工程备注</a></li>
+            <li><a href="/eng/holds">Hold Record</a></li>
+            <li><a href="/eng/manual">手提 Hold 料</a></li>
+            <li class="active"><a href="/eng/export">Hold Info 导出</a></li>
+            <li><a href="/eng/circulations">Hold 流转</a></li>
+            <li><a href="/logout">退出</a></li>
+        </ul>
+    </nav>
+    {% else %}
     {% set active_menu = 'export' %}
     {% include '_admin_sidebar.html' %}
+    {% endif %}
 
     <main class="main">
         <div class="card">
@@ -54,6 +84,7 @@
             <p class="sub">
                 按型号与时间从 FT_HOLD_RECORD 导出 FT ATE Hold Lot 表。
                 合批片会还原源 lot / wafer，并补测试程序。
+                {% if nav_area == 'eng' %}产品工程师仅可导出自己负责的型号。{% endif %}
             </p>
 
             <div class="filters">
@@ -63,6 +94,9 @@
                 </label>
                 <label>Lot ID
                     <input id="lot_id" placeholder="可选，如 C196717" />
+                </label>
+                <label>Route ID
+                    <input id="route_id" placeholder="可选，如 MP / ENG / FT-MP" />
                 </label>
                 <label>开始时间
                     <input id="start_dttm" type="datetime-local" />
@@ -106,6 +140,7 @@
     </main>
 
     <script>
+        const PRODUCTS_API = {{ (products_api or '/admin/hold/api/products')|tojson }};
         function pad(n) { return String(n).padStart(2, '0'); }
         function toLocalInput(d) {
             return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
@@ -127,6 +162,7 @@
             const params = new URLSearchParams({
                 product_id: document.getElementById('product_id').value.trim(),
                 lot_id: document.getElementById('lot_id').value.trim(),
+                route_id: document.getElementById('route_id').value.trim(),
                 start_dttm: document.getElementById('start_dttm').value.trim(),
                 end_dttm: document.getElementById('end_dttm').value.trim(),
             });
@@ -144,10 +180,11 @@
         async function loadProducts() {
             const listEl = document.getElementById('product_list');
             try {
-                const resp = await fetch('/admin/hold/api/products');
+                const resp = await fetch(PRODUCTS_API);
                 const json = await resp.json();
                 const list = json.data || [];
-                listEl.innerHTML = list.map(p => `<option value="${esc(p)}"></option>`).join('');
+                const values = list.map(p => typeof p === 'string' ? p : (p.product_id || ''));
+                listEl.innerHTML = values.filter(Boolean).map(p => `<option value="${esc(p)}"></option>`).join('');
             } catch (e) {
                 listEl.innerHTML = '';
             }
@@ -178,6 +215,7 @@
                 const items = data.items || [];
                 let note = `${data.product_id} · ${data.start_dttm} ~ ${data.end_dttm}`;
                 if (data.lot_id) note += ` · Lot ${data.lot_id}`;
+                if (data.route_id) note += ` · Route ${data.route_id}`;
                 note += ` · 合计 ${data.total} 条`;
                 if (data.truncated) note += `（预览前 ${data.shown} 条）`;
                 meta.className = 'meta';
@@ -190,7 +228,7 @@
                     <td>${esc(r.WAFER_ID)}</td>
                     <td>${esc(r.PRODUCT_ID)}</td>
                     <td>${esc(r.EQUIP_ID)}</td>
-                    <td>${esc(r.ROUTE_TYPE)}</td>
+                    <td>${esc(r.ROUTE_TYPE)}${r.ROUTE_ID ? ' / ' + esc(r.ROUTE_ID) : ''}</td>
                     <td>${esc(r.LOT_STR)}</td>
                     <td class="wafer-list">${esc(r.HOLD_WAFER_LIST)}</td>
                     <td class="wafer-list">${esc(r.WAFER_LIST)}</td>

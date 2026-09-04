@@ -46,6 +46,7 @@
             <li><a href="/eng/notes">工程备注</a></li>
             <li><a href="/eng/holds">Hold Record</a></li>
             <li><a href="/eng/manual">手提 Hold 料</a></li>
+            <li><a href="/eng/export">Hold Info 导出</a></li>
             <li><a href="/eng/circulations">Hold 流转</a></li>
             <li><a href="/logout">退出</a></li>
         </ul>
@@ -56,12 +57,13 @@
             {% include '_ftp_status.html' %}
             <h1>你好，{{ user_name }}</h1>
             <p>当前角色：<strong>{{ role_name }}</strong>。仅可操作与查看自己负责的型号。</p>
-            <p>可维护所属型号的缺陷 Code / BSL、工程备注，查看并处置所属型号 Hold，以及全量流转查询。</p>
+            <p>可维护所属型号的缺陷 Code / BSL、工程备注，查看并处置所属型号 Hold，导出所属型号 Hold Info，以及全量流转查询。</p>
             <div class="links">
                 <a href="/eng/defects">维护缺陷 / BSL</a>
                 <a class="secondary" href="/eng/notes">工程备注</a>
                 <a class="secondary" href="/eng/holds">Hold Record / 处置</a>
                 <a class="secondary" href="/eng/manual">手提 Hold 料</a>
+                <a class="secondary" href="/eng/export">Hold Info 导出</a>
                 <a class="secondary" href="/eng/circulations">Hold 流转查询</a>
             </div>
         </div>

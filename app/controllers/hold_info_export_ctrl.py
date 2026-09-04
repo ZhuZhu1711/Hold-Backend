@@ -97,7 +97,9 @@ def format_wafer_list(wafer_list):
     return '/'.join(groups)
 
 
-def _query_hold_records(cursor, product_id, start_dttm, end_dttm, lot_id=''):
+def _query_hold_records(
+    cursor, product_id, start_dttm, end_dttm, lot_id='', route_id='',
+):
     record_table = _record_table()
     sql = f"""
         SELECT
@@ -110,7 +112,8 @@ def _query_hold_records(cursor, product_id, start_dttm, end_dttm, lot_id=''):
                 WHEN r.ROUTE_ID LIKE '%MP%' THEN 'PRODUCTION'
                 WHEN r.ROUTE_ID LIKE '%ENG%' THEN 'ENG'
             END AS ROUTE_TYPE,
-            r.LOT_ID
+            r.LOT_ID,
+            r.ROUTE_ID
         FROM {record_table} r
         WHERE r.PRODUCT_ID = :device
           AND r.HOLD_DTTM >= TO_DATE(:start_dttm, 'YYYY-MM-DD HH24:MI:SS')
@@ -124,6 +127,9 @@ def _query_hold_records(cursor, product_id, start_dttm, end_dttm, lot_id=''):
     if lot_id:
         sql += " AND UPPER(r.LOT_ID) LIKE UPPER(:lot_id)"
         params['lot_id'] = f'%{lot_id}%'
+    if route_id:
+        sql += " AND UPPER(NVL(r.ROUTE_ID, '')) LIKE UPPER(:route_id)"
+        params['route_id'] = f'%{route_id}%'
     sql += " ORDER BY r.WAFER_ID, r.HOLD_DTTM, r.ID"
     cursor.execute(sql, params)
     return cursor.fetchall()
@@ -207,6 +213,7 @@ def _process_hold(cursor, hold, caches, extras):
     reason = hold[4] or ''
     route = hold[5]
     lot_id = str(hold[6] or '').strip()
+    route_id = str(hold[7] or '').strip() if len(hold) > 7 else ''
 
     product = product_id.split('-')[0] if product_id else ''
     expanded = expand_display_wafer_ids(wafer_id, lot_id)
@@ -279,6 +286,7 @@ def _process_hold(cursor, hold, caches, extras):
         'HOLD_DATETIME': hold_date,
         'REASON': reason,
         'ROUTE_TYPE': route or '',
+        'ROUTE_ID': route_id,
         'LOT_STR': lot_str,
         'HOLD_WAFER_LIST': hold_wafer_list_str,
         'WAFER_LIST': wafer_list_str,
@@ -287,9 +295,10 @@ def _process_hold(cursor, hold, caches, extras):
     return row, preview
 
 
-def _parse_filters(product_id, start_dttm, end_dttm, lot_id=''):
+def _parse_filters(product_id, start_dttm, end_dttm, lot_id='', route_id=''):
     product_id = (product_id or '').strip()
     lot_id = (lot_id or '').strip()
+    route_id = (route_id or '').strip()
     start = normalize_dttm(start_dttm, is_end=False)
     end = normalize_dttm(end_dttm, is_end=True)
     if not product_id:
@@ -303,15 +312,28 @@ def _parse_filters(product_id, start_dttm, end_dttm, lot_id=''):
         return False, '时间格式无效', None
     if end_dt < start_dt:
         return False, '结束时间不能早于开始时间', None
-    return True, 'ok', (product_id, start, end, lot_id)
+    return True, 'ok', (product_id, start, end, lot_id, route_id)
 
 
-def _collect_rows(product_id, start_dttm, end_dttm, extras, limit, lot_id=''):
+def _ensure_owned_product(product_id, owner_eng_id=None):
+    """root: owner_eng_id=None 不限制；工程师必须所属型号。"""
+    if owner_eng_id is None:
+        return True, 'ok'
+    from app.controllers.engineer_ctrl import engineer_owns_product
+    if engineer_owns_product(owner_eng_id, product_id):
+        return True, 'ok'
+    return False, '不属于您负责的型号'
+
+
+def _collect_rows(
+    product_id, start_dttm, end_dttm, extras, limit, lot_id='', route_id='',
+):
     conn = _connect()
     try:
         cursor = conn.cursor()
         holds = _query_hold_records(
-            cursor, product_id, start_dttm, end_dttm, lot_id=lot_id,
+            cursor, product_id, start_dttm, end_dttm,
+            lot_id=lot_id, route_id=route_id,
         )
         total = len(holds)
         truncated = total > limit
@@ -330,6 +352,7 @@ def _collect_rows(product_id, start_dttm, end_dttm, extras, limit, lot_id=''):
             'truncated': truncated,
             'product_id': product_id,
             'lot_id': lot_id,
+            'route_id': route_id,
             'start_dttm': start_dttm,
             'end_dttm': end_dttm,
         }
@@ -340,13 +363,22 @@ def _collect_rows(product_id, start_dttm, end_dttm, extras, limit, lot_id=''):
         conn.close()
 
 
-def preview_hold_info_export(product_id, start_dttm, end_dttm, lot_id='', **extras):
-    ok, msg, parsed = _parse_filters(product_id, start_dttm, end_dttm, lot_id=lot_id)
+def preview_hold_info_export(
+    product_id, start_dttm, end_dttm, lot_id='', route_id='',
+    owner_eng_id=None, **extras,
+):
+    ok, msg, parsed = _parse_filters(
+        product_id, start_dttm, end_dttm, lot_id=lot_id, route_id=route_id,
+    )
     if not ok:
         return False, msg, None
-    product_id, start, end, lot_id = parsed
+    product_id, start, end, lot_id, route_id = parsed
+    ok, msg = _ensure_owned_product(product_id, owner_eng_id)
+    if not ok:
+        return False, msg, None
     ok, msg, payload = _collect_rows(
-        product_id, start, end, extras, PREVIEW_MAX_ROWS, lot_id=lot_id,
+        product_id, start, end, extras, PREVIEW_MAX_ROWS,
+        lot_id=lot_id, route_id=route_id,
     )
     if not ok:
         return False, msg, None
@@ -357,6 +389,7 @@ def preview_hold_info_export(product_id, start_dttm, end_dttm, lot_id='', **extr
         'truncated': payload['truncated'],
         'product_id': product_id,
         'lot_id': lot_id,
+        'route_id': route_id,
         'start_dttm': start,
         'end_dttm': end,
     }
@@ -377,13 +410,22 @@ def _find_template():
     return None
 
 
-def export_hold_info_xlsx(product_id, start_dttm, end_dttm, lot_id='', **extras):
-    ok, msg, parsed = _parse_filters(product_id, start_dttm, end_dttm, lot_id=lot_id)
+def export_hold_info_xlsx(
+    product_id, start_dttm, end_dttm, lot_id='', route_id='',
+    owner_eng_id=None, **extras,
+):
+    ok, msg, parsed = _parse_filters(
+        product_id, start_dttm, end_dttm, lot_id=lot_id, route_id=route_id,
+    )
     if not ok:
         return False, msg, None
-    product_id, start, end, lot_id = parsed
+    product_id, start, end, lot_id, route_id = parsed
+    ok, msg = _ensure_owned_product(product_id, owner_eng_id)
+    if not ok:
+        return False, msg, None
     ok, msg, payload = _collect_rows(
-        product_id, start, end, extras, EXPORT_MAX_ROWS, lot_id=lot_id,
+        product_id, start, end, extras, EXPORT_MAX_ROWS,
+        lot_id=lot_id, route_id=route_id,
     )
     if not ok:
         return False, msg, None

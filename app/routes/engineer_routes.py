@@ -6,6 +6,7 @@
   1. 维护所属型号缺陷 code / BSL
   2. 查看所属型号 Hold Record
   3. 手提 Hold 料（所属型号）
+  4. 导出所属型号 Hold Info
 """
 from flask import Blueprint, render_template, request, jsonify, session
 
@@ -85,6 +86,16 @@ def manual_hold_page():
     return render_template(
         'hold/manual_hold.html',
         **_page_ctx(nav_area='eng', **manual_hold_ctrl.manual_hold_page_options()),
+    )
+
+
+@engineer_bp.route('/export')
+@engineer_required
+def hold_info_export_page():
+    """Hold Info 导出：仅所属型号。"""
+    return render_template(
+        'hold/export.html',
+        **_page_ctx(nav_area='eng', products_api='/eng/api/products'),
     )
 
 

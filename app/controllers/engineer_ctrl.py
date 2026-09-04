@@ -59,6 +59,15 @@ def _owned_product_by_code(eng_user_id, product_code):
     )
 
 
+def engineer_owns_product(eng_user_id, product_code):
+    """True if PRODUCT_INFO.PRODUCT_ID belongs to this engineer."""
+    try:
+        eng_user_id = int(eng_user_id)
+    except (TypeError, ValueError):
+        return False
+    return _owned_product_by_code(eng_user_id, product_code) is not None
+
+
 def _owned_product_by_pk(eng_user_id, product_pk):
     """按 PRODUCT_INFO.ID 取所属产品。"""
     try:
