@@ -21,12 +21,16 @@ from typing import List, Optional, Tuple
 from app.config import Config
 from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
+    HOLD_WAFER_ATTR_ZIYI,
+    append_hold_infos_to_record,
     build_merged_wafer_display,
     compute_hold_wafer_attr,
+    find_existing_ziyi_hold_record,
     insert_hold_record_and_link,
     is_fragmented_merged_lot,
     mark_hold_infos_dirty,
     normalize_lot_id,
+    query_hold_infos_by_record_id,
     query_online_hold_info,
 )
 
@@ -284,6 +288,8 @@ class RoughHoldRecord:
     fragmented_merged: bool = False
     # WLT：写入 record 时 LOT_ID 用 '-' 前截取结果；其它模式为 None
     lot_id_override: Optional[str] = None
+    # FT 重码桶：'028' 或 ''
+    merge_code_bucket: str = ''
 
     @property
     def source_ids(self) -> List[int]:
@@ -508,9 +514,59 @@ def build_rough_hold_records(
                 all_source_ids=all_source_ids,
                 fragmented_merged=multi_wafer,
                 lot_id_override=key_id if mode == 'wlt_lot' else None,
+                merge_code_bucket=bucket,
             )
         )
     return records, skipped_ids
+
+
+def is_ziyi_append_candidate(rec: RoughHoldRecord) -> bool:
+    """
+    梓一合批才走跨周期追加：分片合批、非 WLT、ATTR 含梓一 bit。
+    IQC_ATE / 普通单片不合此条件。
+    """
+    if rec.record_type == RECORD_TYPE_WLT:
+        return False
+    if rec.lot_id_override is not None:
+        return False
+    if not rec.fragmented_merged or not rec.items:
+        return False
+    first = rec.items[0]
+    attr = compute_hold_wafer_attr(first.lot_id, first.equip_id, first.station)
+    return bool(attr & HOLD_WAFER_ATTR_ZIYI)
+
+
+def build_ziyi_append_updates(
+    existing_rows: List[dict],
+    new_record: RoughHoldRecord,
+    window: timedelta,
+    status: int = 0,
+) -> Optional[dict]:
+    """已挂 info + 本轮新 info 重算 WAFER_ID / HOLD_CODE / HOLD_REASON / GRADE_NUM / HOLD_DTTM。"""
+    existing_infos = [HoldInfo.from_row(r) for r in existing_rows or []]
+    combined_items = dedupe_hold_infos(
+        existing_infos + list(new_record.items),
+        window=window,
+    )
+    combined = RoughHoldRecord(
+        wafer_id=new_record.wafer_id,
+        record_type=new_record.record_type,
+        items=combined_items,
+        all_source_ids=list(new_record.source_ids),
+        fragmented_merged=True,
+        lot_id_override=None,
+        merge_code_bucket=new_record.merge_code_bucket,
+    )
+    row = combined.to_record_dict(status=status)
+    if not row:
+        return None
+    return {
+        'WAFER_ID': row['WAFER_ID'],
+        'HOLD_CODE': row['HOLD_CODE'],
+        'HOLD_REASON': row['HOLD_REASON'],
+        'GRADE_NUM': row.get('GRADE_NUM'),
+        'HOLD_DTTM': row.get('HOLD_DTTM'),
+    }
 
 
 class HoldMergeScheduler(threading.Thread):
@@ -518,6 +574,7 @@ class HoldMergeScheduler(threading.Thread):
     定时将 FT_HOLD_INFO 中满足处置单划分的在线 hold 合并写入 FT_HOLD_RECORD：
       - 普通：按 (WAFER_ID, RECORD_TYPE)；FT 028 与良率/缺陷率分列
       - 分片合批：按 (LOT_ID, RECORD_TYPE)；FT 028 同样分列
+      - 梓一合批：同 LOT 已有 MES record 且 HOLD_DTTM 在合批间隔（默认 30 分钟）回看窗口内则追加，不按 STATUS
       - WLT：按 (lot_prefix, RECORD_TYPE)，LOT_ID 截取 '-' 前，WAFER_ID 为 #01#02
     """
 
@@ -537,6 +594,110 @@ class HoldMergeScheduler(threading.Thread):
     def stop(self):
         self.logger.info("正在停止 Hold 合并调度器...")
         self._stop_event.set()
+
+    def _persist_rough_record(self, rec: RoughHoldRecord) -> Optional[int]:
+        """
+        写入或追加一条 rough record。
+        梓一且同 LOT 已有单的 HOLD_DTTM 在合批间隔回看窗口内 → append；否则 insert。
+        成功返回 hold_record ID；失败返回 None（源 info 已标 -1）。
+        """
+        row = rec.to_record_dict(status=self.record_status)
+        if not row:
+            mark_hold_infos_dirty(
+                rec.source_ids,
+                info_table=self.hold_info_table,
+                reason=f"wafer={rec.wafer_id} 无有效 items",
+            )
+            self.logger.warning(
+                f"wafer={rec.wafer_id} 无有效 items，已标记 HOLD_RECORD_ID=-1"
+            )
+            return None
+
+        if is_ziyi_append_candidate(rec):
+            existing = find_existing_ziyi_hold_record(
+                lot_id=row['LOT_ID'],
+                record_type=rec.record_type,
+                is_028_bucket=(rec.merge_code_bucket == _FT_DUPCODE_HOLD_CODE),
+                record_table=self.hold_record_table,
+                ref_dttm=row.get('HOLD_DTTM'),
+                window_minutes=self.interval_minutes,
+            )
+            if existing is not None:
+                existing_id = existing.get('ID')
+                existing_rows = query_hold_infos_by_record_id(
+                    existing_id,
+                    info_table=self.hold_info_table,
+                )
+                if existing_rows is None:
+                    mark_hold_infos_dirty(
+                        rec.source_ids,
+                        info_table=self.hold_info_table,
+                        reason=f"梓一追加：查询已有 info 失败 record={existing_id}",
+                    )
+                    self.logger.error(
+                        f"梓一追加失败 lot={row['LOT_ID']} 已有 record={existing_id}："
+                        f"查询已挂 info 失败，已标记 HOLD_RECORD_ID=-1"
+                    )
+                    return None
+                updates = build_ziyi_append_updates(
+                    existing_rows,
+                    rec,
+                    window=self.dedup_window,
+                    status=self.record_status,
+                )
+                if not updates:
+                    mark_hold_infos_dirty(
+                        rec.source_ids,
+                        info_table=self.hold_info_table,
+                        reason=f"梓一追加：无法重算字段 record={existing_id}",
+                    )
+                    self.logger.error(
+                        f"梓一追加失败 lot={row['LOT_ID']} record={existing_id}："
+                        f"无法重算展示字段，已标记 HOLD_RECORD_ID=-1"
+                    )
+                    return None
+                appended_id = append_hold_infos_to_record(
+                    existing_id,
+                    updates,
+                    rec.source_ids,
+                    info_table=self.hold_info_table,
+                    record_table=self.hold_record_table,
+                )
+                if appended_id is None:
+                    self.logger.error(
+                        f"梓一追加写入失败 lot={row['LOT_ID']} "
+                        f"record={existing_id} wafer={updates.get('WAFER_ID')}，"
+                        f"已标记 HOLD_RECORD_ID=-1"
+                    )
+                    return None
+                self.logger.info(
+                    f"梓一追加成功 lot={row['LOT_ID']} → "
+                    f"{self.hold_record_table}.ID={appended_id}, "
+                    f"WAFER_ID={updates.get('WAFER_ID')}, "
+                    f"HOLD_CODE={updates.get('HOLD_CODE')}"
+                )
+                return appended_id
+
+        new_id = insert_hold_record_and_link(
+            row,
+            rec.source_ids,
+            info_table=self.hold_info_table,
+            record_table=self.hold_record_table,
+        )
+        if new_id is None:
+            self.logger.error(
+                f"写入失败 wafer={rec.wafer_id} "
+                f"record_type={row.get('RECORD_TYPE')} "
+                f"codes={row.get('HOLD_CODE')}，已标记 HOLD_RECORD_ID=-1"
+            )
+            return None
+        self.logger.info(
+            f"写入成功 wafer={rec.wafer_id} → "
+            f"{self.hold_record_table}.ID={new_id}, "
+            f"RECORD_TYPE={row.get('RECORD_TYPE')}, "
+            f"HOLD_CODE={row.get('HOLD_CODE')}"
+        )
+        return new_id
 
     def _run_job(self):
         try:
@@ -575,40 +736,10 @@ class HoldMergeScheduler(threading.Thread):
             ok, fail = 0, 0
             for rec in rough_records:
                 self.logger.info(f"  - {rec.summary()}")
-                row = rec.to_record_dict(status=self.record_status)
-                if not row:
-                    mark_hold_infos_dirty(
-                        rec.source_ids,
-                        info_table=self.hold_info_table,
-                        reason=f"wafer={rec.wafer_id} 无有效 items",
-                    )
-                    self.logger.warning(
-                        f"wafer={rec.wafer_id} 无有效 items，已标记 HOLD_RECORD_ID=-1"
-                    )
+                if self._persist_rough_record(rec) is None:
                     fail += 1
-                    continue
-                new_id = insert_hold_record_and_link(
-                    row,
-                    rec.source_ids,
-                    info_table=self.hold_info_table,
-                    record_table=self.hold_record_table,
-                )
-                if new_id is None:
-                    # insert_hold_record_and_link 失败时已置 HOLD_RECORD_ID=-1
-                    fail += 1
-                    self.logger.error(
-                        f"写入失败 wafer={rec.wafer_id} "
-                        f"record_type={row.get('RECORD_TYPE')} "
-                        f"codes={row.get('HOLD_CODE')}，已标记 HOLD_RECORD_ID=-1"
-                    )
                 else:
                     ok += 1
-                    self.logger.info(
-                        f"写入成功 wafer={rec.wafer_id} → "
-                        f"{self.hold_record_table}.ID={new_id}, "
-                        f"RECORD_TYPE={row.get('RECORD_TYPE')}, "
-                        f"HOLD_CODE={row.get('HOLD_CODE')}"
-                    )
 
             self.logger.info(
                 f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"

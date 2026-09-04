@@ -1,5 +1,5 @@
 import oracledb
-from datetime import date
+from datetime import date, datetime, timedelta
 import logging
 import os
 import re
@@ -711,6 +711,279 @@ def insert_hold_record_and_link(
         connection.close()
 
 
+_HOLD_DTTM_PARSE_FORMATS = (
+    '%Y-%m-%d %H:%M:%S',
+    '%Y/%m/%d %H:%M:%S',
+    '%Y-%m-%d %H:%M:%S.%f',
+    '%Y/%m/%d %H:%M:%S.%f',
+    '%Y%m%d%H%M%S',
+    '%Y-%m-%dT%H:%M:%S',
+    '%Y-%m-%dT%H:%M:%S.%f',
+)
+
+
+def coerce_hold_dttm(raw):
+    """将 HOLD_DTTM（DATE / datetime / 常见字符串）转为 datetime；失败返回 None。"""
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return None
+    for fmt in _HOLD_DTTM_PARSE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def find_existing_ziyi_hold_record(
+    lot_id,
+    record_type,
+    is_028_bucket: bool = False,
+    record_table: str = 'FT_HOLD_RECORD',
+    ref_dttm=None,
+    window_minutes: int = 30,
+):
+    """
+    查找同 LOT_ID + RECORD_TYPE 的已有梓一 MES record。
+    以 ref_dttm（本轮最早 HOLD_DTTM）为基准回看 window_minutes（默认 30），
+    已有单 HOLD_DTTM 落在该闭区间内则追加（不看 STATUS）。
+    028 分桶与 is_028_bucket 必须一致。多笔时取 ID 最小。
+    ref_dttm 为空则不匹配。成功返回 record 行 dict；无匹配或查询失败返回 None。
+    """
+    record_tbl = (record_table or '').upper()
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return None
+
+    lot = str(lot_id).strip() if lot_id is not None else ''
+    if not lot:
+        return None
+    try:
+        rtype = int(record_type)
+    except (TypeError, ValueError):
+        logger.error(f"find_existing_ziyi_hold_record: 非法 RECORD_TYPE {record_type!r}")
+        return None
+
+    ref = coerce_hold_dttm(ref_dttm)
+    if ref is None:
+        return None
+    try:
+        minutes = int(window_minutes)
+    except (TypeError, ValueError):
+        minutes = 30
+    if minutes <= 0:
+        return None
+    since = ref - timedelta(minutes=minutes)
+
+    sql = f"""
+        SELECT
+            ID, PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
+            HOLD_CODE, HOLD_REASON, SOURCE, GRADE_NUM, RECORD_TYPE, STATUS,
+            HOLD_DTTM, HOLD_WAFER_ATTR
+        FROM {record_tbl}
+        WHERE TRIM(LOT_ID) = :lot_id
+          AND RECORD_TYPE = :record_type
+          AND NVL(SOURCE, 0) <> 1
+          AND HOLD_DTTM >= :since_dttm
+          AND HOLD_DTTM <= :ref_dttm
+        ORDER BY ID ASC
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                {
+                    'lot_id': lot,
+                    'record_type': rtype,
+                    'since_dttm': since,
+                    'ref_dttm': ref,
+                },
+            )
+            cols = [d[0].upper() for d in cursor.description]
+            rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+        picked = select_earliest_ziyi_record(
+            rows,
+            is_028_bucket=is_028_bucket,
+            ref_dttm=ref,
+            window=timedelta(minutes=minutes),
+        )
+        if picked is not None:
+            logger.info(
+                f"梓一合批命中已有 record id={picked.get('ID')} "
+                f"lot={lot} record_type={rtype} 028={bool(is_028_bucket)} "
+                f"window={minutes}min ref={ref}"
+            )
+        return picked
+    except Exception as e:
+        logger.error(f"查询已有梓一 hold_record 失败: {e}", exc_info=True)
+        return None
+    finally:
+        connection.close()
+
+
+def query_hold_infos_by_record_id(
+    hold_record_id,
+    info_table: str = 'FT_HOLD_INFO_TEST',
+):
+    """
+    查询已挂到指定 hold_record 的 hold_info。
+    成功返回 list[dict]；失败返回 None。
+    """
+    info_tbl = (info_table or '').upper()
+    if info_tbl not in _ALLOWED_HOLD_INFO_TABLES:
+        logger.error(f"非法 hold_info 表名: {info_table}")
+        return None
+    try:
+        rid = int(hold_record_id)
+    except (TypeError, ValueError):
+        logger.error(f"query_hold_infos_by_record_id: 非法 ID {hold_record_id!r}")
+        return None
+    if rid <= 0:
+        return []
+
+    sql = f"""
+        SELECT
+            ID, HOLD_DTTM, STATION, EQUIP_ID, PRODUCT_ID, LOT_ID, WAFER_ID,
+            HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID, GRADE_NUM,
+            HOLD_RECORD_ID, HOLDING, REMARK
+        FROM {info_tbl}
+        WHERE HOLD_RECORD_ID = :record_id
+        ORDER BY HOLD_DTTM, ID
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, {'record_id': rid})
+            cols = [d[0].upper() for d in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"按 HOLD_RECORD_ID 查询 hold_info 失败: {e}", exc_info=True)
+        return None
+    finally:
+        connection.close()
+
+
+def append_hold_infos_to_record(
+    record_id,
+    updates: dict,
+    source_info_ids,
+    info_table: str = 'FT_HOLD_INFO_TEST',
+    record_table: str = 'FT_HOLD_RECORD',
+):
+    """
+    同一事务内：更新已有 FT_HOLD_RECORD 的展示字段，并回写新 hold_info 的 HOLD_RECORD_ID。
+    不插流转、不改 STATUS / LAST_CIRCULATION_ID / LOT_ID / STATION / EQUIP_ID。
+    成功返回 record_id；失败将本轮新 info 标 -1（不动已关联行），返回 None。
+    """
+    info_tbl = (info_table or '').upper()
+    record_tbl = (record_table or '').upper()
+    if info_tbl not in _ALLOWED_HOLD_INFO_TABLES:
+        logger.error(f"非法 hold_info 表名: {info_table}")
+        return None
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return None
+
+    ids = [int(i) for i in (source_info_ids or []) if i is not None]
+    if not ids:
+        logger.error("append_hold_infos_to_record: 无源 hold_info ID，跳过")
+        return None
+    try:
+        rid = int(record_id)
+    except (TypeError, ValueError):
+        logger.error(f"append_hold_infos_to_record: 非法 record_id {record_id!r}")
+        return None
+    if rid <= 0:
+        logger.error(f"append_hold_infos_to_record: 非法 record_id {record_id!r}")
+        return None
+
+    def _fail(reason: str):
+        mark_hold_infos_dirty(ids, info_table=info_tbl, reason=reason)
+        return None
+
+    patch = updates or {}
+    if not patch.get('WAFER_ID'):
+        logger.error("append_hold_infos_to_record: 缺少 WAFER_ID")
+        return _fail("梓一追加缺少 WAFER_ID")
+
+    update_record_sql = f"""
+        UPDATE {record_tbl}
+        SET WAFER_ID = :wafer_id,
+            HOLD_CODE = :hold_code,
+            HOLD_REASON = :hold_reason,
+            GRADE_NUM = :grade_num,
+            HOLD_DTTM = :hold_dttm
+        WHERE ID = :record_id
+    """
+
+    id_binds = {f'id{i}': v for i, v in enumerate(ids)}
+    id_ph = ', '.join(f':id{i}' for i in range(len(ids)))
+    update_info_sql = f"""
+        UPDATE {info_tbl}
+        SET HOLD_RECORD_ID = :record_id
+        WHERE ID IN ({id_ph})
+          AND NVL(HOLD_RECORD_ID, 0) = 0
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                update_record_sql,
+                {
+                    'wafer_id': patch.get('WAFER_ID'),
+                    'hold_code': patch.get('HOLD_CODE'),
+                    'hold_reason': patch.get('HOLD_REASON'),
+                    'grade_num': patch.get('GRADE_NUM'),
+                    'hold_dttm': patch.get('HOLD_DTTM'),
+                    'record_id': rid,
+                },
+            )
+            if (cursor.rowcount or 0) <= 0:
+                connection.rollback()
+                logger.error(
+                    f"梓一追加：hold_record id={rid} 不存在，已回滚"
+                )
+                return _fail(f"梓一追加目标 record id={rid} 不存在")
+
+            cursor.execute(
+                update_info_sql,
+                {'record_id': rid, **id_binds},
+            )
+            linked = cursor.rowcount or 0
+            if linked <= 0:
+                connection.rollback()
+                logger.error(
+                    f"梓一追加 hold_record id={rid}：回写源表 "
+                    f"{info_tbl} HOLD_RECORD_ID 影响 0 行，已回滚"
+                )
+                return _fail("梓一追加回写源表 HOLD_RECORD_ID 影响 0 行")
+
+            connection.commit()
+            logger.info(
+                f"梓一追加 {record_tbl} id={rid}, wafer={patch.get('WAFER_ID')}, "
+                f"HOLD_CODE={patch.get('HOLD_CODE')}, "
+                f"回写 {info_tbl} {linked}/{len(ids)} 行 HOLD_RECORD_ID"
+            )
+            return rid
+    except Exception as e:
+        connection.rollback()
+        logger.error(
+            f"梓一追加 hold_record / 回写 HOLD_RECORD_ID 失败: {e}",
+            exc_info=True,
+        )
+        return _fail(str(e))
+    finally:
+        connection.close()
+
+
 def insert_manual_hold_record(
     record: dict,
     record_table: str = 'FT_HOLD_RECORD',
@@ -1404,6 +1677,83 @@ def compute_hold_wafer_attr(lot_id, equip_id, station) -> int:
                 attr |= HOLD_WAFER_ATTR_IQC_ATE
 
     return attr
+
+
+def hold_code_is_028_bucket(hold_code) -> bool:
+    """HOLD_CODE 是否为 FT 重码桶（仅 028，允许 028@028）。"""
+    tokens = [t.strip() for t in str(hold_code or '').split('@') if t.strip()]
+    return bool(tokens) and all(t == '028' for t in tokens)
+
+
+def record_row_is_ziyi(row) -> bool:
+    """
+    判定一条 FT_HOLD_RECORD 是否梓一合批。
+    优先 HOLD_WAFER_ATTR bit1；缺 ATTR 或为 0 时用 LOT/EQUIP/STATION 兜底。
+    已打其它 ATTR（如 IQC_ATE）且无梓一 bit 的不算。
+    """
+    raw = (row or {}).get('HOLD_WAFER_ATTR')
+    if raw is not None:
+        try:
+            attr = int(raw)
+        except (TypeError, ValueError):
+            attr = None
+        else:
+            if attr & HOLD_WAFER_ATTR_ZIYI:
+                return True
+            if attr != 0:
+                return False
+    computed = compute_hold_wafer_attr(
+        (row or {}).get('LOT_ID'),
+        (row or {}).get('EQUIP_ID'),
+        (row or {}).get('STATION'),
+    )
+    return bool(computed & HOLD_WAFER_ATTR_ZIYI)
+
+
+def select_earliest_ziyi_record(
+    candidates,
+    is_028_bucket: bool,
+    ref_dttm=None,
+    window=None,
+):
+    """
+    从同 LOT + RECORD_TYPE 的 MES record 候选中挑梓一、028 分桶一致、
+    且 HOLD_DTTM 落在 [ref_dttm - window, ref_dttm] 的最早一条。
+    不看 STATUS。跳过 SOURCE=1 手提、无法解析 HOLD_DTTM 的行。
+    ref_dttm 为空则无匹配。
+    """
+    ref = coerce_hold_dttm(ref_dttm)
+    if ref is None:
+        return None
+    if window is None:
+        lookback = timedelta(minutes=30)
+    elif isinstance(window, timedelta):
+        lookback = window
+    else:
+        try:
+            lookback = timedelta(minutes=int(window))
+        except (TypeError, ValueError):
+            lookback = timedelta(minutes=30)
+    since = ref - lookback
+
+    want_028 = bool(is_028_bucket)
+    matched = []
+    for row in candidates or []:
+        if int((row or {}).get('SOURCE') or 0) == 1:
+            continue
+        hold_dttm = coerce_hold_dttm((row or {}).get('HOLD_DTTM'))
+        if hold_dttm is None:
+            continue
+        if hold_dttm < since or hold_dttm > ref:
+            continue
+        if not record_row_is_ziyi(row):
+            continue
+        if hold_code_is_028_bucket((row or {}).get('HOLD_CODE')) != want_028:
+            continue
+        matched.append(row)
+    if not matched:
+        return None
+    return min(matched, key=lambda r: int(r.get('ID') or 0))
 
 
 def wafer_suffix(wafer_id) -> str:
