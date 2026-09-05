@@ -90,6 +90,7 @@ def _wants_json():
 MUST_CHANGE_ALLOWED_ENDPOINTS = frozenset({
     'auth.change_password_page',
     'auth.api_change_password',
+    'auth.api_web_sso_ticket',
     'auth.logout',
 })
 MUST_CHANGE_MSG = '请先在网页修改密码'
@@ -103,7 +104,7 @@ def session_must_change_password():
 
 
 def _reject_if_must_change():
-    """未改密用户只能访问改密页 / 改密 API / 登出。"""
+    """未改密用户只能访问改密页 / 改密 API / Web SSO 票据 / 登出。"""
     if not session_must_change_password():
         return None
     if request.endpoint in MUST_CHANGE_ALLOWED_ENDPOINTS:

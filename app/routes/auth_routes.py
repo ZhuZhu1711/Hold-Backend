@@ -65,6 +65,27 @@ def _post_login_path(role=None, must_change_password=None):
     return _home_path_for_role(role)
 
 
+def _web_sso_ticket_data(user_id, user_name, employee_no, role):
+    """签发一次性 Web SSO 票据，供客户端打开浏览器。"""
+    max_age = int(getattr(Config, 'WEB_SSO_TICKET_MAX_AGE', 60))
+    ticket = issue_ticket(
+        current_app.config['SECRET_KEY'],
+        {
+            'user_id': user_id,
+            'user_name': user_name,
+            'employee_no': employee_no,
+            'role': role,
+        },
+        max_age=max_age,
+    )
+    return {
+        'ticket': ticket,
+        'path': url_for('auth.web_sso', ticket=ticket),
+        'url': url_for('auth.web_sso', ticket=ticket, _external=True),
+        'expires_in': max_age,
+    }
+
+
 def _login_rate_block(employee_no):
     limited, retry_after = check_login_rate(client_ip_from_request(request), employee_no)
     if not limited:
@@ -181,15 +202,24 @@ def api_login():
         must_change_password=must_change,
     )
     redirect_url = _post_login_path(role, must_change)
+    payload = {
+        **user_data,
+        'must_change_password': must_change,
+        'remember': bool(remember),
+        'redirect': redirect_url,
+    }
+    if must_change:
+        sso = _web_sso_ticket_data(
+            user_data['id'],
+            user_data['name'],
+            user_data.get('employee_no'),
+            role,
+        )
+        payload['change_password_url'] = sso['url']
     return jsonify({
         'code': 200,
         'msg': '请先修改密码' if must_change else msg,
-        'data': {
-            **user_data,
-            'must_change_password': must_change,
-            'remember': bool(remember),
-            'redirect': redirect_url,
-        },
+        'data': payload,
     })
 
 
@@ -200,27 +230,15 @@ def api_web_sso_ticket():
     已登录客户端申请打开 Web 后台的一次性票据。
     URL: /api/web-sso-ticket
     """
-    max_age = int(getattr(Config, 'WEB_SSO_TICKET_MAX_AGE', 60))
-    ticket = issue_ticket(
-        current_app.config['SECRET_KEY'],
-        {
-            'user_id': session.get('user_id'),
-            'user_name': session.get('user_name'),
-            'employee_no': session.get('employee_no'),
-            'role': session.get('role'),
-        },
-        max_age=max_age,
-    )
-    path = url_for('auth.web_sso', ticket=ticket)
     return jsonify({
         'code': 200,
         'msg': 'ok',
-        'data': {
-            'ticket': ticket,
-            'path': path,
-            'url': url_for('auth.web_sso', ticket=ticket, _external=True),
-            'expires_in': max_age,
-        },
+        'data': _web_sso_ticket_data(
+            session.get('user_id'),
+            session.get('user_name'),
+            session.get('employee_no'),
+            session.get('role'),
+        ),
     })
 
 
