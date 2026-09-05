@@ -1,5 +1,7 @@
 # 07 手提 Hold / 外部创建 API
 
+> **已下架（2026-09-04）。** 创建页、`POST /admin/hold/api/manual_hold`、附件 FTP 上传以及 `GET /admin/hold/api/annex_image` / `annex_zip` 下载一律返回 **HTTP 410**。数据分析用 testlog FTP 探活 `GET /api/common_data/ftp/status` **仍可用**。下文为下架前约定，仅供对照历史数据（`SOURCE=1`）。
+
 手提 Hold **直接插入** `FT_HOLD_RECORD`（`SOURCE=1`），不写 `FT_HOLD_INFO`，也不走合批任务。创建时同时写入 `CIRCULATION_HISTORY`（`DISPOSE=0`），`NEXT_OWNER_ID` 取型号工程师。
 
 后台页：

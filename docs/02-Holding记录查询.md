@@ -117,7 +117,7 @@ Auth：全部为工程师 Session（`@engineer_required`）。
 
 - `WAFER_ID`、`LOT_ID`（展示串 `#..` 时 lot 必填）
 - `RECORD_TYPE`、`STATION`
-- 若 `IS_AQL_HOLD`：改调 `GET /admin/hold/api/annex_image?record_id={ID}&index=`，**不要**调 `/api/analysis`；`ANNEX_COUNT=0` 则不显示图片
+- 若 `IS_AQL_HOLD`：**不要**调 `/api/analysis`；桌面端按 `ANNEX_FTP_PATH` 直连附件 FTP 取图（后端 `annex_image` 已下架）
 
 进入处置时：
 

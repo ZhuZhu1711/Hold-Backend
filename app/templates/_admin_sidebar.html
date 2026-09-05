@@ -35,8 +35,8 @@
             <li class="{% if menu == 'dashboard' %}active{% endif %}">
                 <a href="/dashboard">仪表盘</a>
             </li>
-            <li class="nav-group {% if menu in ['holding', 'history', 'circulations', 'merge_failed', 'export', 'manual'] %}has-active{% endif %}">
-                <details {% if menu in ['holding', 'history', 'circulations', 'merge_failed', 'export', 'manual'] %}open{% endif %}>
+            <li class="nav-group {% if menu in ['holding', 'history', 'circulations', 'merge_failed', 'export'] %}has-active{% endif %}">
+                <details {% if menu in ['holding', 'history', 'circulations', 'merge_failed', 'export'] %}open{% endif %}>
                     <summary>Hold 报表</summary>
                     <ul class="nav-sub">
                         <li class="{% if menu == 'holding' %}active{% endif %}">
@@ -50,9 +50,6 @@
                         </li>
                         <li class="{% if menu == 'merge_failed' %}active{% endif %}">
                             <a href="/admin/hold/merge_failed">Merge 失败</a>
-                        </li>
-                        <li class="{% if menu == 'manual' %}active{% endif %}">
-                            <a href="/admin/hold/manual">手提 Hold 料</a>
                         </li>
                         <li class="{% if menu == 'export' %}active{% endif %}">
                             <a href="/admin/hold/export">Hold Info 导出</a>

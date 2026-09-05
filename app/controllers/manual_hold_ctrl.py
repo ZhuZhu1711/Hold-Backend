@@ -1,4 +1,8 @@
-"""手提 Hold Record 创建（后台页 + 外部 API）。"""
+"""手提 Hold Record 创建（后台页 + 外部 API）。
+
+当前已下架：创建 / 附件 FTP 上传下载接口返回 410。
+探活 `GET /api/common_data/ftp/status` 不受影响。
+"""
 from datetime import datetime
 import io
 import logging
@@ -43,8 +47,20 @@ from app.utils.database_util import (
 
 logger = logging.getLogger(__name__)
 
+# 手提 Hold / 附件 FTP 上传下载已下架；探活接口不走这里。
+TAKEN_DOWN = True
+TAKEN_DOWN_MSG = '手提 Hold 功能已下架'
+ANNEX_FTP_TAKEN_DOWN_MSG = '附件 FTP 上传/下载已关闭'
+
 _LINE_FT = 'FT'
 _LINE_WLT = 'WLT'
+
+
+def gone_response(msg=None):
+    """HTTP 410 JSON，供路由直接返回。"""
+    from flask import jsonify
+    text = msg or TAKEN_DOWN_MSG
+    return jsonify({'code': 410, 'msg': text, 'data': None}), 410
 
 
 def _s(raw, key, default=None):
@@ -103,6 +119,8 @@ def _product_candidates(line, keyword='', owner_eng_id=None) -> list:
 
 
 def list_manual_hold_products(line, keyword='', owner_eng_id=None) -> tuple:
+    if TAKEN_DOWN:
+        return False, TAKEN_DOWN_MSG, []
     line_u = (line or '').strip().upper()
     if line_u not in (_LINE_FT, _LINE_WLT):
         return False, 'line 须为 FT 或 WLT', []
@@ -292,6 +310,8 @@ def create_manual_hold(raw: dict, uploaded_files=None, operator='', actor_role=N
     uploaded_files: list[(filename, bytes)]
     成功 (True, msg, data)；失败 (False, msg, None)。
     """
+    if TAKEN_DOWN:
+        return False, TAKEN_DOWN_MSG, None
     payload = dict(raw or {})
     line = (_s(payload, 'line') or _s(payload, 'LINE') or '').upper()
     owner_eng_id = None
@@ -367,6 +387,8 @@ def create_manual_hold(raw: dict, uploaded_files=None, operator='', actor_role=N
 
 
 def list_recent_manual_holds(limit=20, owner_eng_id=None) -> tuple:
+    if TAKEN_DOWN:
+        return False, TAKEN_DOWN_MSG, []
     try:
         limit_n = max(1, min(int(limit or 20), 100))
     except (TypeError, ValueError):
@@ -431,6 +453,8 @@ def get_annex_image(record_id, index=0) -> tuple:
     成功 (True, msg, {'bytes': ..., 'mimetype': ..., 'filename': ...})
     失败 (False, msg, None)
     """
+    if TAKEN_DOWN:
+        return False, ANNEX_FTP_TAKEN_DOWN_MSG, None
     try:
         rid = int(record_id)
     except (TypeError, ValueError):
@@ -483,6 +507,8 @@ def get_annex_image(record_id, index=0) -> tuple:
 
 def get_annex_zip(record_id) -> tuple:
     """打包全部附件。成功 (True, msg, {'bytes','filename'})。"""
+    if TAKEN_DOWN:
+        return False, ANNEX_FTP_TAKEN_DOWN_MSG, None
     try:
         rid = int(record_id)
     except (TypeError, ValueError):

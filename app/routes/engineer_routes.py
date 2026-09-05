@@ -5,8 +5,8 @@
 功能：
   1. 维护所属型号缺陷 code / BSL
   2. 查看所属型号 Hold Record
-  3. 手提 Hold 料（所属型号）
-  4. 导出所属型号 Hold Info
+  3. 导出所属型号 Hold Info
+  手提 Hold 料已下架。
 """
 from flask import Blueprint, render_template, request, jsonify, session
 
@@ -82,11 +82,8 @@ def notes_page():
 @engineer_bp.route('/manual')
 @engineer_required
 def manual_hold_page():
-    """手提 Hold 料：仅所属型号。"""
-    return render_template(
-        'hold/manual_hold.html',
-        **_page_ctx(nav_area='eng', **manual_hold_ctrl.manual_hold_page_options()),
-    )
+    """手提 Hold 料。已下架。"""
+    return manual_hold_ctrl.gone_response()
 
 
 @engineer_bp.route('/export')

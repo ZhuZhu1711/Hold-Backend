@@ -57,11 +57,8 @@ def circulations_page():
 @production_bp.route('/manual')
 @production_required
 def manual_hold_page():
-    """手提 Hold 料创建。"""
-    return render_template(
-        'hold/manual_hold.html',
-        **_page_ctx(nav_area='prod', **manual_hold_ctrl.manual_hold_page_options()),
-    )
+    """手提 Hold 料创建。已下架。"""
+    return manual_hold_ctrl.gone_response()
 
 
 # ==========================================

@@ -458,21 +458,11 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 
 ---
 
-## 5.4 手提创建 Hold Record（外部对接）
+## 5.4 手提创建 Hold Record（已下架）
 
-`POST /admin/hold/api/manual_hold`
+`POST /admin/hold/api/manual_hold`、`GET /admin/hold/api/manual_hold/products`、`GET /admin/hold/api/annex_image`、`GET /admin/hold/api/annex_zip` 均返回 **HTTP 410**（`手提 Hold 功能已下架` / `附件 FTP 上传/下载已关闭`）。testlog FTP 探活 `GET /api/common_data/ftp/status` 仍可用。
 
-权限：root、产品工程师或生产。工程师仅可操作所属型号。完整字段、附件路径约定见 [`docs/07-手提Hold.md`](./docs/07-手提Hold.md)。
-
-型号匹配：`GET /admin/hold/api/manual_hold/products?line=FT|WLT`。FT 站点从合批列表选；WLT 站点固定 `WLT2`。附件最多 25 张。
-
-附件图：`GET /admin/hold/api/annex_image?record_id=&index=`（已登录即可）。仅回读 `FT_MANUAL` / `WLT_MANUAL` 下的图片，拒绝目录外路径。`AQL_HOLD` 不要调 analysis。
-
-```bash
-curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
-  -H "Content-Type: application/json" \
-  -d "{\"line\":\"FT\",\"product_id\":\"XX-3.5\",\"station\":\"FIQC_MERGE\",\"equip_id\":\"MANUAL\",\"lot_id\":\"ABC01\",\"wafer_id\":\"ABC01\",\"hold_code\":\"AQL_HOLD\",\"hold_reason\":\"AQL\",\"annex_ftp_path\":\"@/JDY_UPLOAD/FT_MANUAL/a.jpg\"}"
-```
+下架前字段约定见 [`docs/07-手提Hold.md`](./docs/07-手提Hold.md)。
 
 ---
 
@@ -537,10 +527,10 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
 | GET | `/admin/hold/api/dispose_actions` | root/工程师 | 处置码说明 |
 | POST | `/admin/hold/api/dispose` | root/工程师 | 工程师侧处置 |
 | POST | `/admin/hold/api/production/dispose` | 登录(生产OP/root) | **生产侧处置（外部对接）** |
-| POST | `/admin/hold/api/manual_hold` | root/工程师/生产 | **手提创建 Hold Record（外部对接）** |
-| GET | `/admin/hold/api/manual_hold/products` | root/工程师/生产 | 手提型号匹配 |
-| GET | `/admin/hold/api/annex_image` | 登录 | 按 record 下载附件图（仅 MANUAL 目录图片） |
-| GET | `/admin/hold/api/annex_zip` | 登录 | 打包该 record 附件（同上路径限制） |
+| POST | `/admin/hold/api/manual_hold` | — | **已下架（410）** |
+| GET | `/admin/hold/api/manual_hold/products` | — | **已下架（410）** |
+| GET | `/admin/hold/api/annex_image` | — | **已下架（410）**，附件 FTP 下载关闭 |
+| GET | `/admin/hold/api/annex_zip` | — | **已下架（410）**，附件 FTP 下载关闭 |
 | GET | `/eng/api/holding_records` | 工程师 | 所属型号 hold |
 | POST | `/eng/api/dispose` | 工程师 | 工程师处置 |
 
@@ -550,7 +540,7 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/manual_hold" \
 
 | 日期 | 说明 |
 | --- | --- |
-| 2026-09-04 | 附件 FTP 回读仅允许 FT_MANUAL / WLT_MANUAL 下的图片 |
+| 2026-09-04 | 下架手提 Hold 与附件 FTP 上传/下载（410）；探活 `/api/common_data/ftp/status` 保留 |
 | 2026-08-19 | 手提 Hold：型号智能匹配、FT 选站点、WLT 固定 WLT2 / LOT.NO / 勾选片号，附件上限 25 |
 | 2026-08-19 | 手提 Hold 创建 API、AQL_HOLD、ANNEX_FTP_PATH 附件图 |
 | 2026-08-03 | 初版：整理 Hold Record 查询 / 流转 / 处置对接接口 |
