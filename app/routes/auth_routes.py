@@ -65,7 +65,18 @@ def _post_login_path(role=None, must_change_password=None):
     return _home_path_for_role(role)
 
 
-def _web_sso_ticket_data(user_id, user_name, employee_no, role):
+_SSO_NEXT_ALLOWED = frozenset({'/release-notes'})
+
+
+def _safe_next_path(raw):
+    """只放行已知站内路径，避免开放重定向。"""
+    text = str(raw or '').strip()
+    if text in _SSO_NEXT_ALLOWED:
+        return text
+    return None
+
+
+def _web_sso_ticket_data(user_id, user_name, employee_no, role, next_path=None):
     """签发一次性 Web SSO 票据，供客户端打开浏览器。"""
     max_age = int(getattr(Config, 'WEB_SSO_TICKET_MAX_AGE', 60))
     ticket = issue_ticket(
@@ -78,10 +89,14 @@ def _web_sso_ticket_data(user_id, user_name, employee_no, role):
         },
         max_age=max_age,
     )
+    params = {'ticket': ticket}
+    safe_next = _safe_next_path(next_path)
+    if safe_next:
+        params['next'] = safe_next
     return {
         'ticket': ticket,
-        'path': url_for('auth.web_sso', ticket=ticket),
-        'url': url_for('auth.web_sso', ticket=ticket, _external=True),
+        'path': url_for('auth.web_sso', **params),
+        'url': url_for('auth.web_sso', **params, _external=True),
         'expires_in': max_age,
     }
 
@@ -229,7 +244,10 @@ def api_web_sso_ticket():
     """
     已登录客户端申请打开 Web 后台的一次性票据。
     URL: /api/web-sso-ticket
+    可选 JSON / query `next`：登录后跳到站内路径（如 /release-notes）。
     """
+    body = request.get_json(silent=True) or {}
+    next_path = request.args.get('next') or body.get('next')
     return jsonify({
         'code': 200,
         'msg': 'ok',
@@ -238,6 +256,7 @@ def api_web_sso_ticket():
             session.get('user_name'),
             session.get('employee_no'),
             session.get('role'),
+            next_path=next_path,
         ),
     })
 
@@ -248,7 +267,10 @@ def web_sso():
     浏览器消费一次性票据，写入 hold_session 后按角色进入后台。
     URL: /web-sso?ticket=...
     """
+    next_path = _safe_next_path(request.args.get('next'))
     if session.get('user_id'):
+        if next_path and not session_must_change_password():
+            return redirect(next_path)
         return redirect(_post_login_path(session.get('role')))
 
     max_age = int(getattr(Config, 'WEB_SSO_TICKET_MAX_AGE', 60))
@@ -276,6 +298,8 @@ def web_sso():
         remember=True,
         must_change_password=must_change,
     )
+    if next_path and not must_change:
+        return redirect(next_path)
     return redirect(_post_login_path(user['role'], must_change))
 
 

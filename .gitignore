@@ -5,6 +5,15 @@ __pycache__/
 *$py.class
 *.so
 
+# 版本说明（root 按版本上传）
+data/release_notes/
+data/release_notes_test/
+data/release_notes.md
+data/release_notes.meta.json
+data/release_notes_test.md
+data/release_notes_test.meta.json
+data/*.tmp
+
 # --- 日志文件 ---
 # 忽略 logs 目录下的所有文件，但保留目录本身
 logs/*

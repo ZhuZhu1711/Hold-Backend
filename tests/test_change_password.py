@@ -126,6 +126,29 @@ class ChangePasswordPageTest(unittest.TestCase):
         url = body['data']['url']
         self.assertIn('/web-sso?ticket=', url)
 
+    def test_web_sso_ticket_keeps_safe_next(self):
+        self._login_session(must_change_password=False)
+        resp = self.client.post('/api/web-sso-ticket', json={'next': '/release-notes'})
+        self.assertEqual(resp.status_code, 200)
+        url = resp.get_json()['data']['url']
+        self.assertIn('next=', url)
+        self.assertIn('release-notes', url)
+
+    def test_web_sso_ticket_drops_external_next(self):
+        self._login_session(must_change_password=False)
+        resp = self.client.post('/api/web-sso-ticket', json={'next': '//evil.example'})
+        self.assertEqual(resp.status_code, 200)
+        url = resp.get_json()['data']['url']
+        self.assertNotIn('evil', url)
+
+    def test_web_sso_ticket_drops_tab_open_redirect(self):
+        self._login_session(must_change_password=False)
+        resp = self.client.post('/api/web-sso-ticket', json={'next': '/\t//evil.example'})
+        self.assertEqual(resp.status_code, 200)
+        url = resp.get_json()['data']['url']
+        self.assertNotIn('evil', url)
+        self.assertNotIn('next=', url)
+
 
 class ApiLoginMustChangeTest(unittest.TestCase):
     def setUp(self):

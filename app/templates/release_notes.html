@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>版本说明</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; min-height: 100vh; }
+        .sidebar-header { padding: 20px; text-align: center; background: #212529; }
+        .sidebar-header h2 { font-size: 18px; margin-bottom: 4px; }
+        .sidebar-header p { font-size: 12px; color: #adb5bd; }
+        .nav-links { list-style: none; padding-top: 16px; }
+        .nav-links li a {
+            display: block; padding: 14px 20px; color: #cfd8dc; text-decoration: none;
+        }
+        .nav-links li a:hover { background: #495057; color: #fff; }
+        .nav-links li.active > a { background: #007bff; color: #fff; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05); max-width: 920px;
+        }
+        h1 { font-size: 22px; margin-bottom: 16px; color: #222; }
+        .meta { font-size: 13px; color: #666; }
+        .upload input[type="text"] {
+            width: 140px; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px;
+        }
+        .note {
+            border-top: 1px solid #eee; padding-top: 18px; margin-top: 18px;
+        }
+        .note:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+        .note-head {
+            display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline;
+            margin-bottom: 12px;
+        }
+        .note-head h2 { font-size: 18px; color: #1f2328; }
+        .upload {
+            background: #f8f9fa; border: 1px dashed #ced4da; border-radius: 6px;
+            padding: 14px; margin-bottom: 18px;
+        }
+        .upload .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .upload input[type="file"] { font-size: 13px; }
+        .hint { font-size: 12px; color: #888; margin-top: 8px; }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            color: #fff; font-size: 14px; background: #007bff;
+        }
+        .btn:hover { background: #0069d9; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .status { margin-top: 8px; font-size: 13px; min-height: 18px; }
+        .status.ok { color: #2e7d32; }
+        .status.err { color: #c62828; }
+        .empty { padding: 36px 12px; text-align: center; color: #888; font-size: 14px; }
+        .md-body { font-size: 15px; line-height: 1.7; color: #24292f; word-break: break-word; }
+        .md-body > *:first-child { margin-top: 0; }
+        .md-body h1, .md-body h2, .md-body h3, .md-body h4, .md-body h5, .md-body h6 {
+            margin: 1.4em 0 0.6em; line-height: 1.3; color: #1f2328;
+        }
+        .md-body h1 { font-size: 26px; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+        .md-body h2 { font-size: 22px; border-bottom: 1px solid #f0f0f0; padding-bottom: 6px; }
+        .md-body h3 { font-size: 18px; }
+        .md-body p, .md-body ul, .md-body ol, .md-body blockquote, .md-body table, .md-body pre {
+            margin: 0 0 12px;
+        }
+        .md-body ul, .md-body ol { padding-left: 1.6em; }
+        .md-body li { margin: 4px 0; }
+        .md-body blockquote {
+            border-left: 4px solid #d0d7de; padding: 4px 12px; color: #57606a; background: #f6f8fa;
+        }
+        .md-body code {
+            font-family: Consolas, 'Courier New', monospace; font-size: 13px;
+            background: #f6f8fa; padding: 1px 5px; border-radius: 4px;
+        }
+        .md-body pre {
+            background: #f6f8fa; border: 1px solid #eee; border-radius: 6px;
+            padding: 12px 14px; overflow: auto;
+        }
+        .md-body pre code { background: none; padding: 0; font-size: 13px; }
+        .md-body a { color: #0969da; }
+        .md-body hr { border: 0; border-top: 1px solid #d8dee4; margin: 20px 0; }
+        .md-body table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .md-body th, .md-body td {
+            border: 1px solid #d8dee4; padding: 8px 10px; text-align: left;
+        }
+        .md-body th { background: #f6f8fa; }
+        .md-body del { color: #888; }
+    </style>
+</head>
+<body>
+    {% set nav_area = nav_area|default('admin') %}
+    {% set active_menu = 'release_notes' %}
+    {% if nav_area == 'eng' %}
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>产品工程师</h2>
+            <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/eng/">工作台</a></li>
+            <li><a href="/eng/defects">缺陷 / BSL</a></li>
+            <li><a href="/eng/notes">工程备注</a></li>
+            <li><a href="/eng/holds">Hold Record</a></li>
+            <li><a href="/eng/export">Hold Info 导出</a></li>
+            <li><a href="/eng/circulations">Hold 流转</a></li>
+            {% include '_account_links.html' %}
+        </ul>
+    </nav>
+    {% elif nav_area == 'prod' %}
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>生产</h2>
+            <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/prod/">工作台</a></li>
+            <li><a href="/prod/holds">Hold Record</a></li>
+            <li><a href="/prod/circulations">Hold 流转</a></li>
+            {% include '_account_links.html' %}
+        </ul>
+    </nav>
+    {% elif nav_area == 'qa' %}
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>质量部</h2>
+            <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/qa/disposes">物料处置报表</a></li>
+            {% include '_account_links.html' %}
+        </ul>
+    </nav>
+    {% else %}
+    {% include '_admin_sidebar.html' %}
+    {% endif %}
+
+    <main class="main">
+        <div class="card">
+            <h1>版本说明</h1>
+
+            {% if can_upload %}
+            <div class="upload">
+                <div class="row">
+                    <input id="version-input" type="text" maxlength="32" placeholder="版本号，如 2.0.9" />
+                    <input id="file-input" type="file" accept=".md,.markdown,text/markdown" />
+                    <button class="btn" id="btn-upload" type="button" onclick="uploadNotes()">发布</button>
+                </div>
+                <p class="hint">每个版本一份 Markdown。发布新版本不会覆盖旧版本；同一版本再次发布只更新该版本。</p>
+                <p class="status" id="status"></p>
+            </div>
+            {% endif %}
+
+            <p class="meta" id="meta">加载中…</p>
+            <div id="empty" class="empty" style="display:none;">暂无版本说明。</div>
+            <div id="list"></div>
+        </div>
+    </main>
+    <script>
+        function setStatus(text, ok) {
+            const el = document.getElementById('status');
+            if (!el) return;
+            el.textContent = text || '';
+            el.className = 'status ' + (ok === true ? 'ok' : ok === false ? 'err' : '');
+        }
+        function versionFromName(name) {
+            const base = String(name || '').split(/[\\/]/).pop() || '';
+            const stem = base.replace(/\.(md|markdown)$/i, '');
+            const m = stem.match(/^v?(\d+(?:\.\d+){1,4})$/i);
+            return m ? m[1] : '';
+        }
+        function renderPayload(data) {
+            const items = (data && data.items) || [];
+            const meta = document.getElementById('meta');
+            const empty = document.getElementById('empty');
+            const list = document.getElementById('list');
+            list.innerHTML = '';
+            if (!items.length) {
+                meta.textContent = '';
+                empty.style.display = 'block';
+                return;
+            }
+            meta.textContent = items.length === 1 ? '共 1 个版本' : ('共 ' + items.length + ' 个版本');
+            empty.style.display = 'none';
+            items.forEach((item) => {
+                const section = document.createElement('section');
+                section.className = 'note';
+                const head = document.createElement('div');
+                head.className = 'note-head';
+                const title = document.createElement('h2');
+                title.textContent = item.version || '';
+                const info = document.createElement('p');
+                info.className = 'meta';
+                const bits = [];
+                if (item.uploaded_by) bits.push('上传人 ' + item.uploaded_by);
+                if (item.uploaded_at) bits.push(item.uploaded_at);
+                info.textContent = bits.join(' · ');
+                head.appendChild(title);
+                head.appendChild(info);
+                const article = document.createElement('article');
+                article.className = 'md-body';
+                article.innerHTML = item.html || '';
+                section.appendChild(head);
+                section.appendChild(article);
+                list.appendChild(section);
+            });
+        }
+        async function loadNotes() {
+            try {
+                const resp = await fetch('/release-notes/api', { credentials: 'same-origin' });
+                const payload = await resp.json();
+                if (!resp.ok || payload.code !== 200) {
+                    throw new Error(payload.msg || '加载失败');
+                }
+                renderPayload(payload.data || {});
+            } catch (err) {
+                document.getElementById('meta').textContent = err.message || String(err);
+                document.getElementById('empty').style.display = 'block';
+                document.getElementById('list').innerHTML = '';
+            }
+        }
+        async function uploadNotes() {
+            const input = document.getElementById('file-input');
+            const versionEl = document.getElementById('version-input');
+            const btn = document.getElementById('btn-upload');
+            if (!input || !input.files || !input.files[0]) {
+                setStatus('请先选择 Markdown 文件', false);
+                return;
+            }
+            const file = input.files[0];
+            const name = (file.name || '').toLowerCase();
+            if (!name.endsWith('.md') && !name.endsWith('.markdown')) {
+                setStatus('只接受 .md / .markdown 文件', false);
+                return;
+            }
+            const version = ((versionEl && versionEl.value) || '').trim() || versionFromName(file.name);
+            if (!version) {
+                setStatus('请填写版本号，或把文件命名为 2.0.9.md', false);
+                return;
+            }
+            const form = new FormData();
+            form.append('file', file);
+            form.append('version', version);
+            btn.disabled = true;
+            setStatus('发布中…');
+            try {
+                const resp = await fetch('/release-notes/api', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: form,
+                });
+                const payload = await resp.json();
+                if (!resp.ok || payload.code !== 200) {
+                    throw new Error(payload.msg || '发布失败');
+                }
+                setStatus(payload.msg || '已发布', true);
+                renderPayload(payload.data || {});
+                input.value = '';
+            } catch (err) {
+                setStatus(err.message || String(err), false);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        (function bindFile() {
+            const input = document.getElementById('file-input');
+            const versionEl = document.getElementById('version-input');
+            if (!input || !versionEl) return;
+            input.addEventListener('change', () => {
+                if (versionEl.value.trim()) return;
+                const file = input.files && input.files[0];
+                const guessed = versionFromName(file && file.name);
+                if (guessed) versionEl.value = guessed;
+            });
+        })();
+        loadNotes();
+    </script>
+</body>
+</html>
