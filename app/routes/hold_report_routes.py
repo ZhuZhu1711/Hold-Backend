@@ -223,8 +223,37 @@ def _manual_hold_payload():
 @hold_report_bp.route('/api/manual_hold', methods=['POST'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION)
 def api_manual_hold():
-    """创建手提 Hold Record。已下架。"""
-    return manual_hold_ctrl.gone_response()
+    """
+    创建手提 Hold Record（SOURCE=1）。
+    JSON 或 multipart：line=FT|WLT，product_id / station / equip_id / lot_id /
+    wafer_id / hold_reason；WLT 须 hold_code=004|022，STATION 固定 WLT2。
+    附件：annex_ftp_path / annex_paths，或 files/images 上传。
+    工程师仅可创建所属型号。
+    """
+    payload = _manual_hold_payload()
+    uploaded = _collect_upload_files()
+    success, msg, data = manual_hold_ctrl.create_manual_hold(
+        payload,
+        uploaded_files=uploaded,
+        operator=session.get('user_name') or '',
+        actor_role=session.get('role'),
+        actor_user_id=session.get('user_id'),
+    )
+    if success:
+        status = 200
+    elif '不属于' in msg:
+        status = 403
+    elif any(k in msg for k in (
+        '须', '缺少', '要求', '不支持', '过大', '为空',
+        '匹配', '相同', '超过', '允许', '图片', '无效',
+    )):
+        status = 400
+    else:
+        status = 500
+    _log_manual_hold_api(payload, len(uploaded), success, msg, data, status)
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
 @hold_report_bp.route('/api/manual_hold/recent', methods=['GET'])

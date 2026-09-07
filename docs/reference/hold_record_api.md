@@ -458,11 +458,11 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 
 ---
 
-## 5.4 手提创建 Hold Record（已下架）
+## 5.4 手提创建 Hold Record
 
-`POST /admin/hold/api/manual_hold`、`GET /admin/hold/api/manual_hold/products`、`GET /admin/hold/api/annex_image`、`GET /admin/hold/api/annex_zip` 均返回 **HTTP 410**（`手提 Hold 功能已下架` / `附件 FTP 上传/下载已关闭`）。testlog FTP 探活 `GET /api/common_data/ftp/status` 仍可用。
+`POST /admin/hold/api/manual_hold` **已恢复**（登录 Cookie 或 `X-Hold-Token`）。字段约定见 [`docs/07-手提Hold.md`](../07-手提Hold.md)。
 
-下架前字段约定见 [`docs/07-手提Hold.md`](./docs/07-手提Hold.md)。
+`GET /admin/hold/api/manual_hold/products`、`GET /admin/hold/api/annex_image`、`GET /admin/hold/api/annex_zip` 仍返回 **HTTP 410**（`手提 Hold 功能已下架` / `附件 FTP 上传/下载已关闭`）。testlog FTP 探活 `GET /api/common_data/ftp/status` 仍可用。
 
 ---
 
@@ -527,7 +527,7 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 | GET | `/admin/hold/api/dispose_actions` | root/工程师 | 处置码说明 |
 | POST | `/admin/hold/api/dispose` | root/工程师 | 工程师侧处置 |
 | POST | `/admin/hold/api/production/dispose` | 登录(生产OP/root) | **生产侧处置（外部对接）** |
-| POST | `/admin/hold/api/manual_hold` | — | **已下架（410）** |
+| POST | `/admin/hold/api/manual_hold` | root / 工程师 / 生产 / Token | 手提创建 Hold Record |
 | GET | `/admin/hold/api/manual_hold/products` | — | **已下架（410）** |
 | GET | `/admin/hold/api/annex_image` | — | **已下架（410）**，附件 FTP 下载关闭 |
 | GET | `/admin/hold/api/annex_zip` | — | **已下架（410）**，附件 FTP 下载关闭 |
@@ -540,6 +540,7 @@ curl -b cookies.txt -X POST "http://{host}:50001/admin/hold/api/production/dispo
 
 | 日期 | 说明 |
 | --- | --- |
+| 2026-09-05 | 恢复 `POST /admin/hold/api/manual_hold`；创建页 / 型号列表 / 附件下载仍 410 |
 | 2026-09-04 | 下架手提 Hold 与附件 FTP 上传/下载（410）；探活 `/api/common_data/ftp/status` 保留 |
 | 2026-08-19 | 手提 Hold：型号智能匹配、FT 选站点、WLT 固定 WLT2 / LOT.NO / 勾选片号，附件上限 25 |
 | 2026-08-19 | 手提 Hold 创建 API、AQL_HOLD、ANNEX_FTP_PATH 附件图 |

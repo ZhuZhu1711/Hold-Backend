@@ -33,7 +33,7 @@
 4. [04-处置规范.md](./04-处置规范.md)（重点）
 5. [05-处置接口与示例.md](./05-处置接口与示例.md)（重点）
 6. [06-客户端集成流程.md](./06-客户端集成流程.md)
-7. [07-手提Hold.md](./07-手提Hold.md)（外部创建 API / AQL 附件，**已下架**）
+7. [07-手提Hold.md](./07-手提Hold.md)（外部创建 API 已恢复；页面 / 附件下载仍下架）
 
 ## 仓库文档结构
 
@@ -65,4 +65,4 @@
 | 工程师 API | `app/routes/engineer_routes.py`、`app/controllers/engineer_ctrl.py` |
 | 处置 | `app/controllers/dispose_ctrl.py` |
 | 数据分析 | `app/controllers/hold_report_ctrl.py` → `get_hold_analysis` |
-| 手提 Hold | `app/controllers/manual_hold_ctrl.py`（已下架）；附件上传/下载 410，探活 `/api/common_data/ftp/status` 仍可用 |
+| 手提 Hold | `app/controllers/manual_hold_ctrl.py`（创建 API 已恢复）；附件下载 410，探活 `/api/common_data/ftp/status` 仍可用 |

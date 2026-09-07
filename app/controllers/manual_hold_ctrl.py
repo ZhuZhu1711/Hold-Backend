@@ -1,6 +1,7 @@
 """手提 Hold Record 创建（后台页 + 外部 API）。
 
-当前已下架：创建 / 附件 FTP 上传下载接口返回 410。
+`POST /admin/hold/api/manual_hold` 已恢复。
+创建页、型号列表、最近记录、附件 FTP 下载仍返回 410。
 探活 `GET /api/common_data/ftp/status` 不受影响。
 """
 from datetime import datetime
@@ -47,7 +48,7 @@ from app.utils.database_util import (
 
 logger = logging.getLogger(__name__)
 
-# 手提 Hold / 附件 FTP 上传下载已下架；探活接口不走这里。
+# 创建 API 已恢复；页面 / 列表 / 附件下载仍下架。探活接口不走这里。
 TAKEN_DOWN = True
 TAKEN_DOWN_MSG = '手提 Hold 功能已下架'
 ANNEX_FTP_TAKEN_DOWN_MSG = '附件 FTP 上传/下载已关闭'
@@ -310,8 +311,6 @@ def create_manual_hold(raw: dict, uploaded_files=None, operator='', actor_role=N
     uploaded_files: list[(filename, bytes)]
     成功 (True, msg, data)；失败 (False, msg, None)。
     """
-    if TAKEN_DOWN:
-        return False, TAKEN_DOWN_MSG, None
     payload = dict(raw or {})
     line = (_s(payload, 'line') or _s(payload, 'LINE') or '').upper()
     owner_eng_id = None

@@ -1,7 +1,8 @@
-"""手提 Hold / 附件 FTP 下架（不连 Oracle / FTP）。"""
+"""手提 Hold：创建 API 已恢复；页面 / 列表 / 附件下载仍下架（不连 Oracle / FTP）。"""
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from flask import Flask
 
@@ -24,13 +25,21 @@ def _make_client():
     return app.test_client()
 
 
-class ManualHoldTakenDownCtrlTest(unittest.TestCase):
-    def test_create_returns_taken_down(self):
+class ManualHoldCreateRestoredCtrlTest(unittest.TestCase):
+    @patch.object(
+        manual_hold_ctrl,
+        'resolve_manual_product_id',
+        return_value=(False, '缺少必填字段: product_id'),
+    )
+    def test_create_not_taken_down(self, _resolve):
         ok, msg, data = manual_hold_ctrl.create_manual_hold({'line': 'FT'})
         self.assertFalse(ok)
-        self.assertEqual(msg, manual_hold_ctrl.TAKEN_DOWN_MSG)
+        self.assertNotEqual(msg, manual_hold_ctrl.TAKEN_DOWN_MSG)
         self.assertIsNone(data)
+        _resolve.assert_called_once()
 
+
+class ManualHoldTakenDownCtrlTest(unittest.TestCase):
     def test_annex_image_closed(self):
         ok, msg, data = manual_hold_ctrl.get_annex_image(1, 0)
         self.assertFalse(ok)
@@ -68,12 +77,30 @@ class ManualHoldTakenDownRouteTest(unittest.TestCase):
             sess['role'] = ROLE_ROOT
             sess['must_change_password'] = False
 
-    def test_create_api_410(self):
+    @patch('app.routes.hold_report_routes.manual_hold_ctrl.create_manual_hold')
+    def test_create_api_200(self, mock_create):
+        mock_create.return_value = (True, '创建成功', {'ID': 88})
         resp = self.client.post('/admin/hold/api/manual_hold', json={'line': 'FT'})
-        self.assertEqual(resp.status_code, 410)
+        self.assertEqual(resp.status_code, 200)
         body = resp.get_json()
-        self.assertEqual(body['code'], 410)
-        self.assertEqual(body['msg'], manual_hold_ctrl.TAKEN_DOWN_MSG)
+        self.assertEqual(body['code'], 200)
+        self.assertEqual(body['msg'], '创建成功')
+        self.assertEqual(body['data']['ID'], 88)
+        mock_create.assert_called_once()
+
+    @patch('app.routes.hold_report_routes.manual_hold_ctrl.create_manual_hold')
+    def test_create_api_400(self, mock_create):
+        mock_create.return_value = (False, '缺少必填字段: product_id', None)
+        resp = self.client.post('/admin/hold/api/manual_hold', json={'line': 'FT'})
+        self.assertEqual(resp.status_code, 400)
+        body = resp.get_json()
+        self.assertEqual(body['code'], 400)
+        self.assertIn('缺少', body['msg'])
+
+    def test_create_api_unauthenticated(self):
+        client = _make_client()
+        resp = client.post('/admin/hold/api/manual_hold', json={'line': 'FT'})
+        self.assertEqual(resp.status_code, 401)
 
     def test_annex_image_410(self):
         resp = self.client.get('/admin/hold/api/annex_image?record_id=1')
