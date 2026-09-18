@@ -308,17 +308,22 @@ def api_fvi_defect_details():
 @login_required
 def api_wafer_yield():
     """
-    按 product_id + wafer_id 查询 VW_WAFER_YIELD。
+    按 product_id + wafer_id 查询 VW_WAFER_YIELD（按 STATION 分行）。
     Query: product_id, wafer_id 必填；wafer_id 为 #03 / #01#02 时 lot_id 必填。
-    多片按展开顺序返回 items[].yield，不聚合。
+           station（WLT / FA / WLT2 / FATE-FA / VBOX-FA）或 record_type（0→FA，2→WLT）。
+    指定站点后不跨站回退。多片按展开顺序返回 items[].yield，不聚合。
     """
     product_id = request.args.get('product_id', '').strip()
     lot_id = request.args.get('lot_id', '').strip()
     wafer_id = request.args.get('wafer_id', '').strip()
+    station = request.args.get('station', '').strip()
+    record_type = request.args.get('record_type', '').strip()
     success, msg, data = hold_report_ctrl.get_wafer_yield(
         product_id=product_id,
         lot_id=lot_id or None,
         wafer_id=wafer_id,
+        station=station or None,
+        record_type=record_type or None,
     )
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
@@ -332,8 +337,8 @@ def api_wafer_yield():
 @login_required
 def api_wafer_yield_batch():
     """
-    批量查询 VW_WAFER_YIELD。
-    Body: { "items": [ { "key", "product_id", "lot_id", "wafer_id" }, ... ] }
+    批量查询 VW_WAFER_YIELD（按 STATION 挑选）。
+    Body: { "items": [ { "key", "product_id", "lot_id", "wafer_id", "station?", "record_type?" }, ... ] }
     """
     body = request.get_json(silent=True) or {}
     items = body.get('items') if isinstance(body, dict) else None

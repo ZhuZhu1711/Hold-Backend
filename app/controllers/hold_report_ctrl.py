@@ -636,6 +636,44 @@ def _to_yield_number(value):
         return None
 
 
+def _normalize_yield_station(station=None, record_type=None, lot_id=None):
+    """请求 station / record_type → 视图 STATION（WLT / FA）。
+
+    WLT2 → WLT；FA / FATE-FA / VBOX-FA → FA。
+    未传 station 时：record_type=2 → WLT，record_type=0 → FA。
+    lot_id 仅占位，与 analysis 对齐（FATE/VBOX 都归 FA）。
+    """
+    del lot_id  # FATE-FA / VBOX-FA 都映射为 FA
+    st = str(station or '').strip().upper()
+    if st in ('WLT', 'WLT2'):
+        return 'WLT'
+    if st in ('FA', 'FATE-FA', 'VBOX-FA'):
+        return 'FA'
+    mapped = _same_lot_station_of(st) if st else ''
+    if mapped in ('WLT', 'FA'):
+        return mapped
+    try:
+        rt = int(record_type) if record_type is not None and str(record_type).strip() != '' else None
+    except (TypeError, ValueError):
+        rt = None
+    if rt == 2:
+        return 'WLT'
+    if rt == 0:
+        return 'FA'
+    return None
+
+
+def _lookup_yield(yield_map, product_id, wafer_id, station=None):
+    """指定站只取该站，不跨站回退；未指定时 FA 优先于 WLT（FVI 等无站场景）。"""
+    if station:
+        return yield_map.get((product_id, wafer_id, station))
+    for st in ('FA', 'WLT'):
+        val = yield_map.get((product_id, wafer_id, st))
+        if val is not None:
+            return val
+    return None
+
+
 def _resolve_yield_wafer_ids(product_id, lot_id, wafer_id):
     """product_id + lot_id/wafer_id → MES 片号列表（顺序与展示串一致）。"""
     product_id = str(product_id or '').strip()
@@ -666,7 +704,10 @@ def _resolve_yield_wafer_ids(product_id, lot_id, wafer_id):
 
 
 def _query_vw_wafer_yields(lookups):
-    """lookups: iterable[(product_id, wafer_id)] → {(product_id, wafer_id): yield}."""
+    """lookups: iterable[(product_id, wafer_id)] → {(product_id, wafer_id, station): yield}。
+
+    视图按 (WAFER_ID, STATION) 各保留最新一条；STATION 为 WLT / FA。
+    """
     grouped = {}
     for product_id, wafer_id in lookups or []:
         pid = str(product_id or '').strip()
@@ -679,7 +720,7 @@ def _query_vw_wafer_yields(lookups):
 
     result = {}
     sql = """
-        SELECT WAFER_ID, YIELD
+        SELECT WAFER_ID, STATION, YIELD
         FROM VW_WAFER_YIELD
         WHERE PRODUCT_ID = :product_id
           AND WAFER_ID IN :wafer_ids
@@ -692,19 +733,23 @@ def _query_vw_wafer_yields(lookups):
             stmt,
             {'product_id': product_id, 'wafer_ids': wafer_ids},
         ).fetchall()
-        for wafer_id, yield_val in rows:
+        for wafer_id, station, yield_val in rows:
             wid = str(wafer_id).strip() if wafer_id is not None else ''
             if not wid:
                 continue
-            result[(product_id, wid)] = _to_yield_number(yield_val)
+            st = _normalize_yield_station(station)
+            if not st:
+                continue
+            result[(product_id, wid, st)] = _to_yield_number(yield_val)
     return result
 
 
-def _pack_yield_payload(product_id, lot_id, wafer_id, resolved_ids, yield_map):
+def _pack_yield_payload(product_id, lot_id, wafer_id, resolved_ids, yield_map, station=None):
     items = [
         {
             'wafer_id': wid,
-            'yield': yield_map.get((product_id, wid)),
+            'station': station,
+            'yield': _lookup_yield(yield_map, product_id, wid, station),
         }
         for wid in resolved_ids
     ]
@@ -712,27 +757,33 @@ def _pack_yield_payload(product_id, lot_id, wafer_id, resolved_ids, yield_map):
         'product_id': product_id,
         'lot_id': lot_id,
         'wafer_id': wafer_id,
+        'station': station,
         'resolved_wafer_ids': list(resolved_ids),
         'items': items,
     }
 
 
-def get_wafer_yield(product_id, lot_id=None, wafer_id=None):
+def get_wafer_yield(product_id, lot_id=None, wafer_id=None, station=None, record_type=None):
     """
     按 product_id + 对齐后的 wafer_id 查询 VW_WAFER_YIELD。
     展示串（#03 / #01#02）需配合 lot_id 还原；多片按展开顺序返回，不聚合。
+    station / record_type 用于挑选 WLT 或 FA；指定后不跨站回退。
     """
     ok, msg, resolved = _resolve_yield_wafer_ids(product_id, lot_id, wafer_id)
     if not ok:
         return False, msg, None
 
     product_id, lot_id, wafer_id, resolved_ids = resolved
+    yield_station = _normalize_yield_station(
+        station, record_type=record_type, lot_id=lot_id,
+    )
     try:
         yield_map = _query_vw_wafer_yields(
             (product_id, wid) for wid in resolved_ids
         )
         return True, '获取成功', _pack_yield_payload(
             product_id, lot_id, wafer_id, resolved_ids, yield_map,
+            station=yield_station,
         )
     except SQLAlchemyError as e:
         db.session.rollback()
@@ -745,7 +796,7 @@ def get_wafer_yield(product_id, lot_id=None, wafer_id=None):
 def get_wafer_yield_batch(items):
     """
     批量查询 VW_WAFER_YIELD。
-    items: [{key, product_id, lot_id, wafer_id}, ...]
+    items: [{key, product_id, lot_id, wafer_id, station?, record_type?}, ...]
     """
     if not isinstance(items, list):
         return False, '请指定 items', None
@@ -761,6 +812,11 @@ def get_wafer_yield_batch(items):
         lot_id = raw.get('lot_id')
         wafer_id = raw.get('wafer_id')
         key = str(raw.get('key') or '').strip() or str(wafer_id or '').strip()
+        yield_station = _normalize_yield_station(
+            raw.get('station'),
+            record_type=raw.get('record_type'),
+            lot_id=lot_id,
+        )
         ok, msg, resolved = _resolve_yield_wafer_ids(product_id, lot_id, wafer_id)
         if not ok:
             prepared.append((
@@ -769,11 +825,14 @@ def get_wafer_yield_batch(items):
                 str(lot_id or '').strip(),
                 str(wafer_id or '').strip(),
                 [],
+                yield_station,
                 msg,
             ))
             continue
         product_id, lot_id, wafer_id, resolved_ids = resolved
-        prepared.append((key, product_id, lot_id, wafer_id, resolved_ids, None))
+        prepared.append(
+            (key, product_id, lot_id, wafer_id, resolved_ids, yield_station, None)
+        )
         for wid in resolved_ids:
             lookups.append((product_id, wid))
 
@@ -787,9 +846,10 @@ def get_wafer_yield_batch(items):
         return False, f'查询失败: {e}', None
 
     out = []
-    for key, product_id, lot_id, wafer_id, resolved_ids, error in prepared:
+    for key, product_id, lot_id, wafer_id, resolved_ids, yield_station, error in prepared:
         payload = _pack_yield_payload(
             product_id, lot_id, wafer_id, resolved_ids, yield_map,
+            station=yield_station,
         )
         payload['key'] = key
         if error:
