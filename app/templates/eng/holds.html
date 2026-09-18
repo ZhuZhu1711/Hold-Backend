@@ -144,6 +144,11 @@
         }
         .wafer-checks input { accent-color: #007bff; cursor: pointer; }
         .raw-chart-wrap { position: relative; height: 320px; margin-bottom: 4px; }
+        .rawdata-pending {
+            font-size: 14px; font-weight: 700; color: #8a4b08;
+            background: #ffe8a3; border: 1px solid #f0ad4e;
+            border-radius: 6px; padding: 10px 12px; margin-bottom: 12px;
+        }
         .annex-grid { display: flex; flex-wrap: wrap; gap: 12px; }
         .annex-item { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
         .annex-img { max-width: 100%; max-height: 420px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
@@ -570,21 +575,27 @@
 
         function renderAnalysis(data) {
             analysisState.wafers = buildWaferSeries(data);
+            const pendingHtml = data.raw_data_pending
+                ? '<div class="rawdata-pending">当前站点 rawdata 数据还没到位，请稍等。可先继续处置。</div>'
+                : '';
             const bysiteHtml = `
                 <div class="section-title">Bysite${data.step ? `（${esc(data.step)}）` : ''}</div>
                 <div class="bysite-meta">${esc(data.bysite_msg || '')}</div>
                 ${renderBysite(data.bysite)}
             `;
+            const emptyText = data.raw_data_pending
+                ? '当前站点 rawdata 数据还没到位，请稍等。'
+                : '无 raw_data';
             const rawHtml = `
                 <div class="section-title">Raw Data${data.operation_id ? `（${esc(data.operation_id)}）` : ''}</div>
                 <div class="bysite-meta">${esc(data.raw_msg || '')}</div>
                 ${renderWaferChecks(analysisState.wafers)}
                 <div class="raw-chart-wrap">
                     <canvas id="rawChart"></canvas>
-                    <div class="empty" id="rawChartEmpty" style="display:none;padding:24px;">无 raw_data</div>
+                    <div class="empty" id="rawChartEmpty" style="display:none;padding:24px;">${emptyText}</div>
                 </div>
             `;
-            return bysiteHtml + rawHtml;
+            return pendingHtml + bysiteHtml + rawHtml;
         }
 
         function renderAnnexHtml(recordId, count) {

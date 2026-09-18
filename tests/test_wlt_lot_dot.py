@@ -1,18 +1,15 @@
-"""WOQC LOT.起始片号：合批写入保留原 LOT_ID；normalize；回写默认关。"""
+"""WOQC LOT.起始片号：合批写入保留原 LOT_ID；normalize。"""
 from __future__ import annotations
 
 import unittest
 from datetime import datetime
-from unittest.mock import patch
 
 from app.backend_schedule.FT_HOLD_MERGE_sche import (
     HoldInfo,
     RoughHoldRecord,
     build_rough_hold_records,
 )
-from app.config import Config
-from app.utils.database_util import normalize_lot_id
-from app.utils.legacy_dispose_writeback import writeback_enabled
+from app.utils.database_util import expand_display_wafer_ids, normalize_lot_id
 
 
 class NormalizeLotDotTest(unittest.TestCase):
@@ -102,14 +99,115 @@ class WltMergeKeepsLotIdTest(unittest.TestCase):
         self.assertEqual(row['LOT_ID'], '679PK7.14')
         self.assertEqual(row['WAFER_ID'], '#14#15')
 
+    def test_build_rough_keeps_s83209_dot_suffix(self):
+        rows = [
+            {
+                'ID': 1,
+                'HOLD_DTTM': '2026-08-01 10:00:00',
+                'STATION': 'WOQC',
+                'EQUIP_ID': '100',
+                'PRODUCT_ID': 'PROD-2.6',
+                'LOT_ID': 'S83209.13',
+                'WAFER_ID': 'S83209-13',
+                'HOLD_CODE': '004',
+                'HOLD_REASON': 'r',
+                'SOURCE': 0,
+            },
+            {
+                'ID': 2,
+                'HOLD_DTTM': '2026-08-01 10:01:00',
+                'STATION': 'WOQC',
+                'EQUIP_ID': '100',
+                'PRODUCT_ID': 'PROD-2.6',
+                'LOT_ID': 'S83209.13',
+                'WAFER_ID': 'S83209-14',
+                'HOLD_CODE': '004',
+                'HOLD_REASON': 'r',
+                'SOURCE': 0,
+            },
+        ]
+        records, skipped = build_rough_hold_records(rows)
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].lot_id_override, 'S83209')
+        row = records[0].to_record_dict()
+        self.assertEqual(row['LOT_ID'], 'S83209.13')
+        self.assertEqual(row['WAFER_ID'], '#13#14')
 
-class LegacyWritebackDefaultOffTest(unittest.TestCase):
-    def test_config_flag_false(self):
-        self.assertFalse(Config.LEGACY_DISPOSE_WRITEBACK)
+    def test_prefers_dotted_lot_when_mixed_with_prefix(self):
+        items = [
+            HoldInfo(
+                id=1,
+                hold_dttm=datetime(2026, 8, 1, 10, 0, 0),
+                hold_dttm_raw='2026-08-01 10:00:00',
+                station='WOQC',
+                equip_id='100',
+                product_id='XX-2.6',
+                lot_id='S83209',
+                wafer_id='S83209-13',
+                hold_code='004',
+                hold_reason='t',
+                source=0,
+            ),
+            HoldInfo(
+                id=2,
+                hold_dttm=datetime(2026, 8, 1, 10, 1, 0),
+                hold_dttm_raw='2026-08-01 10:01:00',
+                station='WOQC',
+                equip_id='100',
+                product_id='XX-2.6',
+                lot_id='S83209.13',
+                wafer_id='S83209-14',
+                hold_code='004',
+                hold_reason='t',
+                source=0,
+            ),
+        ]
+        rough = RoughHoldRecord(
+            wafer_id='placeholder',
+            record_type=2,
+            items=items,
+            all_source_ids=[1, 2],
+            fragmented_merged=True,
+            lot_id_override='S83209',
+        )
+        row = rough.to_record_dict(status=0)
+        self.assertEqual(row['LOT_ID'], 'S83209.13')
 
-    def test_writeback_enabled_follows_config(self):
-        with patch.object(Config, 'LEGACY_DISPOSE_WRITEBACK_ENABLED', False):
-            self.assertFalse(writeback_enabled())
+    def test_empty_info_lot_falls_back_to_prefix(self):
+        items = [
+            HoldInfo(
+                id=1,
+                hold_dttm=datetime(2026, 8, 1, 10, 0, 0),
+                hold_dttm_raw='2026-08-01 10:00:00',
+                station='WOQC',
+                equip_id='100',
+                product_id='XX-2.6',
+                lot_id='',
+                wafer_id='S83209-13',
+                hold_code='004',
+                hold_reason='t',
+                source=0,
+            ),
+        ]
+        rough = RoughHoldRecord(
+            wafer_id='#13',
+            record_type=2,
+            items=items,
+            all_source_ids=[1],
+            fragmented_merged=True,
+            lot_id_override='S83209',
+        )
+        row = rough.to_record_dict(status=0)
+        self.assertEqual(row['LOT_ID'], 'S83209')
+
+
+class ExpandDisplayWltLotTest(unittest.TestCase):
+    def test_strips_dot_suffix_before_join(self):
+        self.assertEqual(
+            expand_display_wafer_ids('#13#14', 'S83209.13'),
+            ['S83209-13', 'S83209-14'],
+        )
 
 
 if __name__ == '__main__':

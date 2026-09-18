@@ -1215,6 +1215,25 @@ def _hold_same_lot_station(station=None):
     return None
 
 
+def _same_lot_row_is_current(wafer_id, station, current_set, hold_station_key):
+    """当前 hold 只加粗「当前片 + 当前站」；同片其它站不算当前。"""
+    wid = str(wafer_id or '').strip()
+    if not wid or wid not in current_set:
+        return False
+    key = str(hold_station_key or '').strip()
+    if not key:
+        return True
+    return str(station or '').strip() == key
+
+
+def _same_lot_rawdata_pending(same_lot_rows):
+    return any(
+        r.get('is_current') and r.get('rawdata_pending')
+        for r in (same_lot_rows or [])
+        if isinstance(r, dict)
+    )
+
+
 def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
     """
     Hold Record 数据分析：bysite + raw_data（qty 降序）+ 同 lot 片列表。
@@ -1230,6 +1249,8 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
       - record_type=2（WLT），或 FT 且 lot 后缀位数≠>2：lot 前缀 LIKE TEST_WAFER
       - record_type=0（FT）且 lot 后缀位数>2：合批源片 → 各源 lot 前缀 LIKE，并标注合批源
     同一片在 WLT 与 FA 都有数据时拆成两行（station / test_time）。
+    is_current 仅当前片在请求 station 对应工序（WLT / FA）上为 True；
+    该站 TEST_WAFER 未到时补一行空 raw_data，并标 rawdata_pending（不影响处置）。
     """
     if wafer_id is None or not str(wafer_id).strip():
         return False, '请指定 wafer_id', None
@@ -1338,7 +1359,7 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
             if str(r.get('wafer_id') or '') == wid
         ]
 
-    def _pack_row(wid, rec=None):
+    def _pack_row(wid, rec=None, *, rawdata_pending=False):
         rec = rec if isinstance(rec, dict) else {}
         die_num = rec.get('die_num')
         try:
@@ -1353,9 +1374,12 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
         )
         if test_time and not isinstance(test_time, str):
             test_time = _format_test_time(test_time)
+        is_current = _same_lot_row_is_current(
+            wid, station, current_set, hold_station_key,
+        )
         return {
             'wafer_id': wid,
-            'is_current': wid in current_set,
+            'is_current': is_current,
             'is_merge_source': wid in merge_source_set,
             'lot_prefix': _lot_prefix_of(wid),
             'raw_data': rec.get('raw_data') if isinstance(rec.get('raw_data'), dict) else {},
@@ -1363,12 +1387,14 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
             'operation_id': rec.get('operation_id') or None,
             'station': station,
             'test_time': test_time or None,
+            'rawdata_pending': bool(rawdata_pending) and is_current,
         }
 
     def _build_rows(ordered_ids, *, require_test_wafer=True):
         """
         组装 same_lot_rows：每片每个站一行。
         require_test_wafer=True 时：TEST_WAFER 未命中的片不展示（当前片除外）。
+        当前片若缺 hold 对应站，补一行空 raw_data 并标 rawdata_pending。
         """
         rows = []
         seen = set()
@@ -1378,14 +1404,29 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
                 continue
             seen.add(wid)
             recs = _records_for_wafer(wid)
-            is_current = wid in current_set
-            if require_test_wafer and not recs and not is_current:
+            is_current_wafer = wid in current_set
+            if require_test_wafer and not recs and not is_current_wafer:
                 continue
             if not recs:
-                rows.append(_pack_row(wid))
+                placeholder = (
+                    {'station': hold_station_key} if hold_station_key else None
+                )
+                rows.append(_pack_row(
+                    wid, placeholder, rawdata_pending=is_current_wafer,
+                ))
                 continue
+            have_hold_station = False
             for rec in recs:
+                rec_st = str(rec.get('station') or '').strip() or _same_lot_station_of(
+                    rec.get('operation_id')
+                )
+                if hold_station_key and rec_st == hold_station_key:
+                    have_hold_station = True
                 rows.append(_pack_row(wid, rec))
+            if is_current_wafer and hold_station_key and not have_hold_station:
+                rows.append(_pack_row(
+                    wid, {'station': hold_station_key}, rawdata_pending=True,
+                ))
         return rows
 
     def _ordered_from_query(must_have=None):
@@ -1413,6 +1454,7 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
             for rec in matches:
                 if str(rec.get('station') or '') == prefer_station:
                     return rec.get('raw_data') if isinstance(rec.get('raw_data'), dict) else {}
+            return {}
         if matches:
             rec = matches[0]
             return rec.get('raw_data') if isinstance(rec.get('raw_data'), dict) else {}
@@ -1543,6 +1585,7 @@ def get_hold_analysis(wafer_id, record_type=None, station=None, lot_id=None):
         'bysite_msg': bysite_msg,
         'raw_data': raw_data or {},
         'raw_msg': raw_msg,
+        'raw_data_pending': _same_lot_rawdata_pending(same_lot_rows),
         'is_merged': is_merged,
         'source_lot_ids': source_lot_ids,
         'source_raw_data': source_raw_data,

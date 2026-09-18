@@ -90,17 +90,6 @@ class Config:
         'CIRCULATION_HISTORY_TEST' if argv_is_debug_mode() else 'CIRCULATION_HISTORY'
     )
     HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if argv_is_debug_mode() else 'FT_HOLD_PREDICT'
-    # 过渡期：新系统处置成功后静默写回旧 HOLD_INFO / WLT_HOLD_INFO / HISTORY_DISPOSITION。
-    # 旧系统完全下线后把下面改成 False（重启后端即停写，无需删代码）。
-    # 也可不改代码：环境变量 HOLD_LEGACY_WRITEBACK=0 后重启。
-    # debug 模式始终关闭，避免测试处置写入正式旧表。
-    LEGACY_DISPOSE_WRITEBACK = False
-    LEGACY_DISPOSE_WRITEBACK_ENABLED = (
-        LEGACY_DISPOSE_WRITEBACK
-        and (not argv_is_debug_mode())
-        and os.environ.get('HOLD_LEGACY_WRITEBACK', '1').strip().lower()
-        not in ('0', 'false', 'no', 'off')
-    )
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30
@@ -117,6 +106,8 @@ class Config:
     SYSTEM_USER_ID = 1
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
+    # WLT 同 lot 多片可能分批到达：组内最新 HOLD_DTTM 距今不足该分钟数则本轮不建单
+    HOLD_WLT_SETTLE_MINUTES = 10
 
     # FT 可放行概率静默打分（独立调度，不改处置/UI）。
     # 代码保留；改成 True 并重启后端即可重新启用。独立脚本 FT_HOLD_PREDICT_sche.py 同样看此开关。

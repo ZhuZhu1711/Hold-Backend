@@ -59,6 +59,9 @@ RECORD_TYPE_FT = 0
 RECORD_TYPE_FVI = 1
 RECORD_TYPE_WLT = 2
 
+# WLT 同 lot 多片可能有时间差：组内最新 HOLD 未满该分钟数则本轮不建单
+_WLT_SETTLE_MINUTES_DEFAULT = 10
+
 
 def resolve_record_type(
     product_id: str,
@@ -192,6 +195,33 @@ def _norm_grade_num(value) -> Optional[str]:
     return text if text else None
 
 
+def _pick_wlt_lot_id(
+    items: List['HoldInfo'],
+    fallback: Optional[str] = None,
+) -> Optional[str]:
+    """
+    WLT 写入 RECORD 的 LOT_ID：保留 INFO 原值（LOT.NO），不用分组前缀。
+    同组混有前缀与 LOT.NO 时优先带 `.NN` 的值。
+    """
+    lots: List[str] = []
+    seen = set()
+    for item in items or []:
+        text = str(item.lot_id or '').strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        lots.append(text)
+    if not lots:
+        return fallback
+    dotted = [x for x in lots if '.' in x and normalize_lot_id(x) != x]
+    if dotted:
+        return dotted[0]
+    suffixed = [x for x in lots if normalize_lot_id(x) != x]
+    if suffixed:
+        return suffixed[0]
+    return lots[0]
+
+
 def _merge_grade_num(items: List['HoldInfo']) -> Optional[str]:
     """
     合并多条 hold_info 的 GRADE_NUM：
@@ -274,7 +304,7 @@ class RoughHoldRecord:
     """
     普通：按 (WAFER_ID, RECORD_TYPE, 重码桶) 分组；
     分片合批（LOT_ID!=WAFER_ID 且 LOT 后缀数字>2位）：按 (LOT_ID, RECORD_TYPE, 重码桶) 分组；
-    WLT：同 lot（wafer/lot 中 '-' 前文本相同）合并，按 (lot_prefix, RECORD_TYPE) 分组。
+    WLT：同 lot（wafer/lot 中 '-' / `.NN` 前文本相同）合并，按 (lot_prefix, RECORD_TYPE) 分组。
     FT 重码(028) 与同片/同批良率、缺陷率 hold 分列。
     并对 (WAFER_ID, STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
     items 为去重后用于拼装 FT_HOLD_RECORD 的条目；
@@ -286,7 +316,7 @@ class RoughHoldRecord:
     all_source_ids: List[int] = field(default_factory=list)
     # True：分片合批 / WLT 同 lot 合并，WAFER_ID 写入 #01#02 展示串
     fragmented_merged: bool = False
-    # WLT：写入 record 时 LOT_ID 用 '-' 前截取结果；其它模式为 None
+    # WLT：分组用的 lot 前缀；写入 RECORD.LOT_ID 仍用 INFO 原值。其它模式为 None
     lot_id_override: Optional[str] = None
     # FT 重码桶：'028' 或 ''
     merge_code_bucket: str = ''
@@ -325,7 +355,7 @@ class RoughHoldRecord:
         基础字段取时间最早一条；HOLD_CODE / HOLD_REASON 按时间序去重后用 @ 拼接。
         RECORD_TYPE 取本 rough record 按处置单划分判定的值。
         分片合批 / WLT 同 lot：WAFER_ID 存多片展示串（如 #01#02）。
-        WLT：LOT_ID 取 lot_id_override（'-' 前文本）。
+        WLT：LOT_ID 保留源 INFO 原值（如 S83209.13）；lot_id_override 只作分组前缀。
         """
         if not self.items:
             return None
@@ -351,12 +381,11 @@ class RoughHoldRecord:
             ) or self.wafer_id
         else:
             wafer_out = self.wafer_id
-        lot_out = (
-            self.lot_id_override
-            if self.lot_id_override is not None
-            else first.lot_id
-        )
-        # 属性用源 LOT/EQUIP/STATION（WLT 截断 LOT 前）
+        if self.lot_id_override is not None:
+            lot_out = _pick_wlt_lot_id(ordered, fallback=self.lot_id_override)
+        else:
+            lot_out = first.lot_id
+        # 属性用源 LOT/EQUIP/STATION（WLT 分组前缀截断前）
         hold_wafer_attr = compute_hold_wafer_attr(
             first.lot_id, first.equip_id, first.station
         )
@@ -423,7 +452,7 @@ def build_rough_hold_records(
     查询结果 → 按处置单划分判定 RECORD_TYPE → 分组 → 去重 → 粗糙 hold record。
 
     分组键：
-      - WLT：('wlt_lot', lot_prefix, record_type, '')，lot_prefix 为 wafer/lot 中 '-' 前文本
+      - WLT：('wlt_lot', lot_prefix, record_type, '')，lot_prefix 为 wafer/lot 去掉 '-' / `.NN` 后的文本
       - 分片合批（LOT!=WAFER 且 LOT 后缀数字>2位）：('lot', exact_lot_id, record_type, bucket)
       - 其它：('wafer', wafer_id, record_type, bucket)
       bucket：FT 的 028 为 '028'，其余为空。同 lot/wafer 上良率、缺陷率与重码拆成两条 record。
@@ -520,6 +549,26 @@ def build_rough_hold_records(
     return records, skipped_ids
 
 
+def should_defer_wlt_record(
+    rec: RoughHoldRecord,
+    now: Optional[datetime] = None,
+    settle: timedelta = timedelta(minutes=_WLT_SETTLE_MINUTES_DEFAULT),
+) -> bool:
+    """
+    WLT 同 lot 多片可能分批到达：组内最新 HOLD_DTTM 距今不足 settle（默认 10 分钟）
+    则本轮不建单、不标脏，留给下次定时周期，避免先到的片单独成单。
+    非 WLT、或无法解析 HOLD_DTTM 时不推迟。
+    """
+    if rec.record_type != RECORD_TYPE_WLT:
+        return False
+    times = [i.hold_dttm for i in rec.items if i.hold_dttm is not None]
+    if not times:
+        return False
+    latest = max(times)
+    now = now if now is not None else datetime.now()
+    return (now - latest) < settle
+
+
 def is_ziyi_append_candidate(rec: RoughHoldRecord) -> bool:
     """
     梓一合批才走跨周期追加：分片合批、非 WLT、ATTR 含梓一 bit。
@@ -575,7 +624,8 @@ class HoldMergeScheduler(threading.Thread):
       - 普通：按 (WAFER_ID, RECORD_TYPE)；FT 028 与良率/缺陷率分列
       - 分片合批：按 (LOT_ID, RECORD_TYPE)；FT 028 同样分列
       - 梓一合批：同 LOT 已有 MES record 且 HOLD_DTTM 在合批间隔（默认 30 分钟）回看窗口内则追加，不按 STATUS
-      - WLT：按 (lot_prefix, RECORD_TYPE)，LOT_ID 截取 '-' 前，WAFER_ID 为 #01#02
+      - WLT：按 (lot_prefix, RECORD_TYPE) 分组，LOT_ID 保留 INFO 原值（LOT.NO），WAFER_ID 为 #01#02
+      - WLT 组内最新 HOLD_DTTM 距今不足 HOLD_WLT_SETTLE_MINUTES（默认 10）则本轮不建单
     """
 
     def __init__(self):
@@ -590,6 +640,10 @@ class HoldMergeScheduler(threading.Thread):
         self.dedup_window = timedelta(
             hours=getattr(self.config, 'HOLD_DEDUP_WINDOW_HOURS', 1)
         )
+        self.wlt_settle_minutes = getattr(
+            self.config, 'HOLD_WLT_SETTLE_MINUTES', _WLT_SETTLE_MINUTES_DEFAULT
+        )
+        self.wlt_settle_window = timedelta(minutes=self.wlt_settle_minutes)
 
     def stop(self):
         self.logger.info("正在停止 Hold 合并调度器...")
@@ -733,9 +787,19 @@ class HoldMergeScheduler(threading.Thread):
                 f"（去重窗口={self.dedup_window}）"
             )
 
-            ok, fail = 0, 0
+            ok, fail, deferred = 0, 0, 0
+            now = datetime.now()
             for rec in rough_records:
                 self.logger.info(f"  - {rec.summary()}")
+                if should_defer_wlt_record(
+                    rec, now=now, settle=self.wlt_settle_window
+                ):
+                    self.logger.info(
+                        f"WLT 最新 HOLD 未满 {self.wlt_settle_minutes} 分钟，"
+                        f"本轮不建单，等下次周期: {rec.summary()}"
+                    )
+                    deferred += 1
+                    continue
                 if self._persist_rough_record(rec) is None:
                     fail += 1
                 else:
@@ -743,7 +807,7 @@ class HoldMergeScheduler(threading.Thread):
 
             self.logger.info(
                 f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"
-                f"跳过 {len(skipped_ids)}"
+                f"跳过 {len(skipped_ids)}，WLT 等待下次 {deferred}"
             )
         except Exception as e:
             self.logger.error(f"Hold 合并定时任务执行出错: {e}", exc_info=True)

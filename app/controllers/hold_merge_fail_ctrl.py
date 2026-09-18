@@ -169,7 +169,7 @@ def _guess_record_type(infos):
 def _build_draft_from_infos(infos: list) -> dict:
     """
     用与 merge 相近的字段归纳生成草稿。
-    WLT：LOT 截取 '-' 前，WAFER 用 #01#02；其它多片则拼展示串。
+    WLT：LOT_ID 保留 INFO 原值（LOT.NO），WAFER 用 #01#02；其它多片则拼展示串。
     """
     if not infos:
         return {}

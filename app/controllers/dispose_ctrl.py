@@ -21,7 +21,6 @@ DISPOSE_NOTE：工程师处置时选择的工程备注文本
 DISPOSE_MANUAL_NOTE：任意处置可选手输备注；可靠性分析之后的放行/降级必须手输
 """
 import json
-import logging
 import re
 from datetime import date, datetime
 
@@ -1890,23 +1889,6 @@ def dispose_record(
         )
 
         db.session.commit()
-        try:
-            from app.utils.legacy_dispose_writeback import writeback_after_dispose
-            writeback_after_dispose(
-                record,
-                dispose=dispose,
-                actor_user_id=actor_user_id,
-                dispose_detail=detail,
-                dispose_note=note,
-                dispose_manual_note=manual_note,
-                wafer_actions=wafer_actions,
-                downgrades=downgrades,
-                retest_grades=retest_grades,
-            )
-        except Exception:
-            logging.getLogger(__name__).warning(
-                'legacy_writeback: hook error', exc_info=True
-            )
         return True, '处置成功', {
             'hold_record_id': rid,
             'circulation_id': circ_id,

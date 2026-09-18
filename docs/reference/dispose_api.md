@@ -30,7 +30,6 @@
 ~: 代指型号所属工程师的ID(PRODUCT_INFO.PRO_ENG_ID)
 
 > 工程师处置仅为意见：写入 CIRCULATION_HISTORY，并回写 FT_HOLD_RECORD.LAST_CIRCULATION_ID / STATUS；**不改写 GRADE_NUM**。真正落地由生产执行。
-> 旧 AutoHoldSys 表回写（`LEGACY_DISPOSE_WRITEBACK`）**默认关闭**。
 
 
 # 处置单划分
