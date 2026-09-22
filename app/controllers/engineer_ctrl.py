@@ -245,7 +245,7 @@ def get_owned_holding_records(
     max_page_size=200,
 ):
     """
-    查看所属型号的在线 Hold Record（分页）。
+    查看所属型号尚未关闭的 Hold Record（分页，含 MES 已解 hold）。
     pending_only=True 时仅返回当前负责人为该工程师的待办。
     每条附带 CAN_DISPOSE：当前负责人是本人且未关闭。
     成功返回 (True, msg, page_payload)。

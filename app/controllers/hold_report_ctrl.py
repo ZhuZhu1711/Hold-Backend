@@ -1,10 +1,10 @@
 """
 Hold 报表业务逻辑（root 全量数据）。
 
-1. holding_record：当前仍在 hold 的 FT_HOLD_RECORD
-   - MES：通过 FT_HOLD_INFO 关联字段 + HOLDING=0 过滤已解 hold
-   - 手提（SOURCE=1）：无 hold_info，以 STATUS<>99 视为在线
-   - 注意：HOLDING=0 表示正在 hold（命名反直觉）
+1. holding_record：系统尚未关闭的 FT_HOLD_RECORD（STATUS<>99）
+   - MES 是否已解 hold（HOLDING=1）不影响列表；工程师仍需在系统内处置留档
+   - INFO_CNT 只统计 HOLDING=0 的 info（MES 仍在 hold 的片数）
+   - 注意：HOLDING=0 表示 MES 正在 hold（命名反直觉）
 
 2. hold 历史：按型号 + 月份/周聚合 hold 数量，供柱状图使用
 """
@@ -140,8 +140,8 @@ def get_holding_records(
     max_page_size=200,
 ):
     """
-    查询当前仍在 hold 的 hold_record 列表（分页）。
-    HOLDING=0 才是在线 hold（MES）；手提 SOURCE=1 无 info 时以 STATUS<>99 视为在线。
+    查询尚未关闭的 hold_record 列表（分页）。
+    在线以 STATUS<>99 为准；MES HOLDING=1（已解 hold）仍列出，便于系统内处置留档。
     record_type：按处置单大类筛选（0=FT / 1=FVI / 2=WLT），空则不过滤。
     owner_eng_id：仅返回 PRODUCT_INFO.PRO_ENG_ID 等于该工程师的型号。
     product_ids：精确匹配型号列表（与 product_id 模糊可叠加）。
@@ -158,13 +158,12 @@ def get_holding_records(
         else:
             page, page_size, offset = _parse_page(page, page_size, max_page_size=max_page_size)
 
-        where_sql = """
-            WHERE (
-                i.ID IS NOT NULL
-                OR (NVL(r.SOURCE, 0) = 1 AND NVL(r.STATUS, 0) <> 99)
-            )
-        """
-        params = {'offset': offset, 'page_size': page_size}
+        where_sql = " WHERE NVL(r.STATUS, 0) <> :closed"
+        params = {
+            'offset': offset,
+            'page_size': page_size,
+            'closed': DISPOSE_CLOSE,
+        }
 
         if owner_eng_id is not None:
             where_sql += """

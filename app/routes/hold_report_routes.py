@@ -139,7 +139,7 @@ def manual_hold_page():
 @root_required
 def api_holding_records():
     """
-    当前仍在 hold 的 record 列表（分页）。
+    尚未关闭（STATUS<>99）的 record 列表（分页）。MES 已解 hold 仍列出。
     Query: product_id, station, keyword, record_type(0/1/2), page, page_size
     record_type 对应处置单大类：0=FT异常反馈单 1=FVI异常反馈单 2=WLT异常反馈单
     """
