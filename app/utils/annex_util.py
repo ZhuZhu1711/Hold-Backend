@@ -42,8 +42,11 @@ def ft_manual_stations() -> tuple:
     return tuple(s for s in stations if s and str(s).strip() not in _FVI_STATIONS)
 
 
-def product_suffix_for_line(line: str) -> str:
-    return '-3.5' if str(line or '').upper() == 'FT' else '-2.6'
+def line_type_for_line(line: str) -> int:
+    """手提产线 → PRODUCT_INFO.LINE_TYPE。FT=0，WLT=1。"""
+    from app.utils.database_util import LINE_TYPE_FT, LINE_TYPE_WLT
+
+    return LINE_TYPE_WLT if str(line or '').upper() == 'WLT' else LINE_TYPE_FT
 
 
 def parse_wlt_wafer_nos(wafer_id=None, extra=None) -> list:
@@ -130,6 +133,9 @@ def annex_mimetype(ftp_path: str) -> str:
 
 
 def annex_line_from_record(record) -> str:
+    """附件目录：RECORD_TYPE=2 或 PRODUCT_INFO.LINE_TYPE=1 为 WLT，否则 FT。"""
+    from app.utils.database_util import LINE_TYPE_WLT
+
     if not isinstance(record, dict):
         return 'FT'
     try:
@@ -137,8 +143,12 @@ def annex_line_from_record(record) -> str:
             return 'WLT'
     except (TypeError, ValueError):
         pass
-    pid = str(record.get('PRODUCT_ID') or '')
-    return 'WLT' if pid.endswith('-2.6') else 'FT'
+    try:
+        if int(record.get('LINE_TYPE')) == LINE_TYPE_WLT:
+            return 'WLT'
+    except (TypeError, ValueError):
+        pass
+    return 'FT'
 
 
 def annex_root_dir(line='') -> str:

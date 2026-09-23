@@ -16,8 +16,6 @@
 
 | 脚本 | 对象 |
 | --- | --- |
-| [HOLD_INFO_DDL.sql](./ddl/HOLD_INFO_DDL.sql) | 旧系统 `HOLD_INFO` |
-| [HISTORY_DISPOSITION_DDL.sql](./ddl/HISTORY_DISPOSITION_DDL.sql) | 旧系统 `HISTORY_DISPOSITION` |
 | [DEFECT_CODE_DDL.sql](./ddl/DEFECT_CODE_DDL.sql) | `DEFECT_CODE` |
 | [FT_ENG_NOTES.sql](./ddl/FT_ENG_NOTES.sql) | `FT_ENG_NOTES` + 序列 |
 | [FT_HOLD_RECORD_DDL.sql](./ddl/FT_HOLD_RECORD_DDL.sql) | `FT_HOLD_RECORD` |
@@ -29,7 +27,7 @@
 | [SOFTWARE_INFO_DDL.sql](./ddl/SOFTWARE_INFO_DDL.sql) | `SOFTWARE_INFO`（客户端版本卡控） |
 | [USERS_MUST_CHANGE_PWD.sql](./ddl/USERS_MUST_CHANGE_PWD.sql) | 给已有 `USERS` 增加 `MUST_CHANGE_PWD`（debug/release 共用表，执行一次；**先跑脚本再部署代码**） |
 
-新环境建议顺序：旧表（若仍对接）→ `DEFECT_CODE` / `FT_ENG_NOTES` → `FT_HOLD_RECORD`（及 TEST）→ `CIRCULATION_HISTORY` → 其余。
+新环境建议顺序：`DEFECT_CODE` / `FT_ENG_NOTES` → `FT_HOLD_RECORD`（及 TEST）→ `CIRCULATION_HISTORY` → 其余。
 
 ## 变更（alter）
 

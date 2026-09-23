@@ -153,7 +153,7 @@
                             <input id="product_id" placeholder="输入关键字匹配型号" required autocomplete="off" />
                             <div id="product_list" class="combo-list"></div>
                         </div>
-                        <div class="hint" id="product_hint">FT 须 *-3.5 / WLT 须 *-2.6</div>
+                        <div class="hint" id="product_hint">FT 为 LINE_TYPE=0 / WLT 为 LINE_TYPE=1</div>
                     </div>
                     <div>
                         <label>HOLD_CODE *</label>
@@ -239,7 +239,6 @@
         const FT_STATIONS = {{ (ft_stations or [])|tojson }};
         const WLT_STATION = {{ (wlt_station or 'WLT2')|tojson }};
         const ANNEX_MAX = {{ (annex_max_files or 25)|int }};
-        const SUFFIX = { FT: '-3.5', WLT: '-2.6' };
         let productCache = [];
         let syncingLot = false;
 
@@ -300,7 +299,7 @@
             document.getElementById('wafer_wlt_wrap').style.display = isFt ? 'none' : '';
             document.getElementById('wafer_id').required = isFt;
             document.getElementById('product_hint').textContent =
-                isFt ? '输入匹配 *-3.5 型号' : '输入匹配 *-2.6 型号';
+                isFt ? '匹配 LINE_TYPE=0 的型号' : '匹配 LINE_TYPE=1 的型号';
             document.getElementById('lot_hint').textContent = isFt
                 ? '与 WAFER_ID 相同，手输'
                 : '手输 LOT.NO，NO 为本 lot 第一片片号，如 C123456.01';
@@ -337,12 +336,9 @@
         }
         function filterProducts(keyword) {
             const kw = String(keyword || '').trim().toUpperCase();
-            const suffix = (SUFFIX[currentLine()] || '').toUpperCase();
             let items = productCache;
             if (kw) {
                 items = items.filter(p => String(p).toUpperCase().includes(kw));
-            } else {
-                items = items.filter(p => String(p).toUpperCase().endsWith(suffix));
             }
             return items.slice(0, 40);
         }

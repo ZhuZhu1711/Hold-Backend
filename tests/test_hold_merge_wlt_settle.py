@@ -53,6 +53,7 @@ def _wlt_row(info_id, wafer_suffix, hold_dttm, lot='S83209.13'):
         'STATION': 'WOQC',
         'EQUIP_ID': '100',
         'PRODUCT_ID': 'PROD-2.6',
+        'LINE_TYPE': 1,
         'LOT_ID': lot,
         'WAFER_ID': f'S83209-{wafer_suffix}',
         'HOLD_CODE': '004',

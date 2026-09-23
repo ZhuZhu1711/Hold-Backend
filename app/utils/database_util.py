@@ -9,6 +9,10 @@ USER = "FT_OWEN"
 PWD = "Mee0MvpgXU!Lcp"
 DSN = "172.18.202.5:1521/jsqy"
 
+# PRODUCT_INFO.LINE_TYPE 实际存储：0 全部为 FT，1 全部为 WLT。
+LINE_TYPE_FT = 0
+LINE_TYPE_WLT = 1
+
 # 1. 获取 logger 实例
 logger = logging.getLogger(__name__)
 # 设置日志级别，否则默认只有 WARNING 及以上才会输出
@@ -182,11 +186,11 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
 
     仅捞取满足 dispose_api.md「处置单划分」的候选行：
-      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,028,AQL_HOLD),
+      FT  : PRODUCT_INFO.LINE_TYPE=0, HOLD_CODE∈(023,024,025,027,028,AQL_HOLD),
             STATION∉(FAOIFINISH,FFVI)，且排除 (AQL_HOLD + FAOI-BACK)
       FVI : HOLD_CODE=023 + STATION∈(FAOIFINISH,FFVI)
             或 HOLD_CODE=AQL_HOLD + STATION=FAOI-BACK
-      WLT : PRODUCT_ID LIKE '%-2.6', HOLD_CODE∈(004,022), STATION=WOQC
+      WLT : PRODUCT_INFO.LINE_TYPE=1, HOLD_CODE∈(004,022), STATION=WOQC
     精确 RECORD_TYPE 仍由调用方按同样规则判定后写入 FT_HOLD_RECORD。
 
     为保证 MES 多条同 wafer 记录插入完整：固定排除 HOLD_DTTM 最新的那个
@@ -208,13 +212,18 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     # 仅本系统 AREA=0、待处理(NULL/0)；排除已关联(>0)与脏数据(-1)；
     # 处置单划分三选一（与 resolve_record_type 保持一致）
     area_sql = hold_info_area_sql()
+    tbl = table_name.upper()
     base_filter = f"""
             {area_sql}
             AND HOLDING = 0
             AND NVL(HOLD_RECORD_ID, 0) = 0
             AND (
                 (
-                    PRODUCT_ID LIKE '%-3.5'
+                    EXISTS (
+                        SELECT 1 FROM PRODUCT_INFO p
+                        WHERE p.PRODUCT_ID = {tbl}.PRODUCT_ID
+                          AND p.LINE_TYPE = {LINE_TYPE_FT}
+                    )
                     AND HOLD_CODE IN ('023', '024', '025', '027', '028', 'AQL_HOLD')
                     AND STATION NOT IN ('FAOIFINISH', 'FFVI')
                     AND NOT (HOLD_CODE = 'AQL_HOLD' AND STATION = 'FAOI-BACK')
@@ -228,13 +237,16 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
                     AND STATION = 'FAOI-BACK'
                 )
                 OR (
-                    PRODUCT_ID LIKE '%-2.6'
+                    EXISTS (
+                        SELECT 1 FROM PRODUCT_INFO p
+                        WHERE p.PRODUCT_ID = {tbl}.PRODUCT_ID
+                          AND p.LINE_TYPE = {LINE_TYPE_WLT}
+                    )
                     AND HOLD_CODE IN ('004', '022')
                     AND STATION = 'WOQC'
                 )
             )
     """
-    tbl = table_name.upper()
 
     # HOLD_DTTM 为 VARCHAR2(YYYY-MM-DD HH24:MI:SS)，字典序即时间序；
     # 取 HOLD_DTTM 最大的一条所在 WAFER_ID，排除该 wafer 全部 N 条记录
@@ -255,7 +267,13 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
             GRADE_NUM,
             HOLD_RECORD_ID,
             HOLDING,
-            REMARK
+            REMARK,
+            (
+                SELECT p.LINE_TYPE
+                FROM PRODUCT_INFO p
+                WHERE p.PRODUCT_ID = {tbl}.PRODUCT_ID
+                  AND ROWNUM = 1
+            ) AS LINE_TYPE
         FROM
             {tbl}
         WHERE
@@ -1298,7 +1316,13 @@ def query_hold_infos_by_ids(
         SELECT
             ID, HOLD_DTTM, STATION, EQUIP_ID, PRODUCT_ID, LOT_ID, WAFER_ID,
             HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID, GRADE_NUM,
-            HOLD_RECORD_ID, HOLDING, REMARK
+            HOLD_RECORD_ID, HOLDING, REMARK,
+            (
+                SELECT p.LINE_TYPE
+                FROM PRODUCT_INFO p
+                WHERE p.PRODUCT_ID = {info_tbl}.PRODUCT_ID
+                  AND ROWNUM = 1
+            ) AS LINE_TYPE
         FROM {info_tbl}
         WHERE ID IN ({id_ph})
           AND {hold_info_area_sql()}

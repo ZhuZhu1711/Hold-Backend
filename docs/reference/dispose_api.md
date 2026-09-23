@@ -35,10 +35,10 @@
 # 处置单划分
 | 处置单大类 | PRODUCT_ID | HOLD_CODE | STATION | RECORD_TYPE |
 | ----- | ----- | ----- | ----- | ----- |
-| FT异常反馈单 | *-3.5 | 023、024、025、027、028、AQL_HOLD | NOT IN ('FAOIFINISH', 'FFVI')，且排除 AQL_HOLD + FAOI-BACK | 0 |
+| FT异常反馈单 | PRODUCT_INFO.LINE_TYPE=0 | 023、024、025、027、028、AQL_HOLD | NOT IN ('FAOIFINISH', 'FFVI')，且排除 AQL_HOLD + FAOI-BACK | 0 |
 | FVI异常反馈单 | * | 023 | IN('FAOIFINISH', 'FFVI') | 1 |
 | FVI异常反馈单 | * | AQL_HOLD | FAOI-BACK | 1 |
-| WLT 异常反馈单 | *-2.6 | 004、022 | WOQC | 2 |
+| WLT 异常反馈单 | PRODUCT_INFO.LINE_TYPE=1 | 004、022 | WOQC | 2 |
 
 > '*'是正则化写法，代表任意匹配  
 > 不满足表中规则的，无需转成record  

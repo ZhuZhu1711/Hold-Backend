@@ -34,16 +34,16 @@ from app.utils.annex_util import (
     hold_code_is_aql,
     join_annex_ftp_paths,
     parse_annex_ftp_paths,
+    line_type_for_line,
     parse_wlt_wafer_nos,
-    product_suffix_for_line,
     sanitize_client_annex_paths,
     upload_annex_files,
 )
 from app.utils.database_util import (
+    compute_hold_wafer_attr,
     insert_manual_hold_record,
     resolve_hold_record_table,
     update_manual_hold_annex_path,
-    compute_hold_wafer_attr,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,15 +98,37 @@ def _parse_hold_dttm(raw):
     return None
 
 
+def lookup_product_line_type(product_id: str):
+    """PRODUCT_INFO.LINE_TYPE；型号不存在返回 None。"""
+    pid = (product_id or '').strip()
+    if not pid:
+        return None
+    row = db.session.execute(
+        text("""
+            SELECT LINE_TYPE
+            FROM PRODUCT_INFO
+            WHERE PRODUCT_ID = :pid
+              AND ROWNUM = 1
+        """),
+        {'pid': pid},
+    ).fetchone()
+    if not row or row[0] is None:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
 def _product_candidates(line, keyword='', owner_eng_id=None) -> list:
-    suffix = product_suffix_for_line(line)
+    line_type = line_type_for_line(line)
     sql = """
         SELECT PRODUCT_ID
         FROM PRODUCT_INFO
         WHERE PRODUCT_ID IS NOT NULL
-          AND PRODUCT_ID LIKE :suffix
+          AND LINE_TYPE = :line_type
     """
-    params = {'suffix': f'%{suffix}'}
+    params = {'line_type': line_type}
     if owner_eng_id is not None:
         sql += " AND PRO_ENG_ID = :eid"
         params['eid'] = int(owner_eng_id)
@@ -140,7 +162,7 @@ def resolve_manual_product_id(line, raw, owner_eng_id=None) -> tuple:
     text = (raw or '').strip()
     if not text:
         return False, '缺少必填字段: product_id'
-    suffix = product_suffix_for_line(line)
+    expected = line_type_for_line(line)
     try:
         candidates = _product_candidates(line, owner_eng_id=owner_eng_id)
     except (TypeError, ValueError, SQLAlchemyError) as e:
@@ -159,9 +181,7 @@ def resolve_manual_product_id(line, raw, owner_eng_id=None) -> tuple:
         return True, contains[0]
     if len(prefix) > 1 or len(contains) > 1:
         return False, '匹配到多个型号，请选择完整 PRODUCT_ID'
-    if text.endswith(suffix):
-        return True, text
-    return False, f'未匹配到{line}型号（须 {suffix}）'
+    return False, f'未匹配到{line}型号（PRODUCT_INFO.LINE_TYPE={expected}）'
 
 
 def normalize_manual_hold(raw: dict) -> tuple:
@@ -214,9 +234,18 @@ def normalize_manual_hold(raw: dict) -> tuple:
 
     pid = product_id.strip()
     code = (hold_code or '').strip()
+    expected_line_type = line_type_for_line(line)
+    try:
+        actual_line_type = lookup_product_line_type(pid)
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return False, f'查询型号失败: {e}', None
+    if actual_line_type != expected_line_type:
+        return False, (
+            f'{line} 手提要求 PRODUCT_INFO.LINE_TYPE={expected_line_type}'
+            f'（当前 {actual_line_type if actual_line_type is not None else "无此型号"}）'
+        ), None
     if line == _LINE_FT:
-        if not pid.endswith('-3.5'):
-            return False, 'FT 手提要求 PRODUCT_ID 以 -3.5 结尾', None
         if not code:
             code = HOLD_CODE_AQL
         if code not in FT_MANUAL_HOLD_CODES:
@@ -234,8 +263,6 @@ def normalize_manual_hold(raw: dict) -> tuple:
         elif lot_id != wafer_id:
             return False, 'FT 手提 LOT_ID 须与 WAFER_ID 相同', None
     else:
-        if not pid.endswith('-2.6'):
-            return False, 'WLT 手提要求 PRODUCT_ID 以 -2.6 结尾', None
         if code not in WLT_MANUAL_HOLD_CODES:
             allowed = ' / '.join(sorted(WLT_MANUAL_HOLD_CODES))
             return False, f'WLT 手提 HOLD_CODE 须为 {allowed}', None

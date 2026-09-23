@@ -102,6 +102,14 @@ class DownloadAnnexBytesGuardTest(unittest.TestCase):
 
 
 class NormalizeManualHoldAnnexTest(unittest.TestCase):
+    def setUp(self):
+        self._line_type = patch(
+            'app.controllers.manual_hold_ctrl.lookup_product_line_type',
+            return_value=0,
+        )
+        self._line_type.start()
+        self.addCleanup(self._line_type.stop)
+
     def _ft_base(self):
         stations = ft_manual_stations()
         self.assertTrue(stations)

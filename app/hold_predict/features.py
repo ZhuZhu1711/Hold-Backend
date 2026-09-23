@@ -13,9 +13,6 @@ from app.hold_predict.db import (
     query_bsl_map,
     query_latest_test_wafer,
     query_latest_testlog_path,
-    query_legacy_product_hold_cnt,
-    query_legacy_release_rate,
-    query_legacy_wafer_prior_hold_cnt,
     query_product_gross,
     query_product_hold_cnt,
     query_release_rate,
@@ -214,24 +211,14 @@ def _fill_prior_features(
     is_eng: int,
     route_missing: int,
     wafer_ids: list[str],
-    prior_source: str,
 ) -> None:
-    if prior_source == 'legacy':
-        rate_fn = query_legacy_release_rate
-        wafer_fn = query_legacy_wafer_prior_hold_cnt
-        product_fn = query_legacy_product_hold_cnt
-        product_extra = 'AND h.PRODUCT_ID = :pid'
-        holdcode_extra = "AND REGEXP_SUBSTR(h.HOLD_REASON, '023|024|025|027') = :code"
-        route_eng_extra = "AND UPPER(NVL(h.ROUTE_ID, '')) LIKE '%ENG%'"
-        route_non_extra = "AND UPPER(NVL(h.ROUTE_ID, '')) NOT LIKE '%ENG%'"
-    else:
-        rate_fn = query_release_rate
-        wafer_fn = query_wafer_prior_hold_cnt
-        product_fn = query_product_hold_cnt
-        product_extra = 'AND r.PRODUCT_ID = :pid'
-        holdcode_extra = "AND REGEXP_SUBSTR(r.HOLD_CODE, '[^@]+', 1, 1) = :code"
-        route_eng_extra = "AND UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%'"
-        route_non_extra = "AND UPPER(NVL(r.ROUTE_ID, '')) NOT LIKE '%ENG%'"
+    rate_fn = query_release_rate
+    wafer_fn = query_wafer_prior_hold_cnt
+    product_fn = query_product_hold_cnt
+    product_extra = 'AND r.PRODUCT_ID = :pid'
+    holdcode_extra = "AND REGEXP_SUBSTR(r.HOLD_CODE, '[^@]+', 1, 1) = :code"
+    route_eng_extra = "AND UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%'"
+    route_non_extra = "AND UPPER(NVL(r.ROUTE_ID, '')) NOT LIKE '%ENG%'"
 
     if isinstance(hold_dttm, datetime):
         feats['product_release_rate_30d'] = rate_fn(
@@ -268,7 +255,6 @@ def extract_features(
     record: dict,
     *,
     skip_bysite: bool = False,
-    prior_source: str = 'record',
 ) -> dict:
     feats = empty_features()
     hold_dttm = record.get('HOLD_DTTM')
@@ -407,7 +393,6 @@ def extract_features(
 
     record_id = int(record['ID'])
     product_id = str(record.get('PRODUCT_ID') or '')
-    source = record.get('_prior_source') or prior_source or 'record'
     _fill_prior_features(
         cursor,
         feats,
@@ -418,7 +403,6 @@ def extract_features(
         is_eng=is_eng,
         route_missing=route_missing,
         wafer_ids=wafer_ids,
-        prior_source=source,
     )
 
     feats['_feature_version'] = FEATURE_VERSION

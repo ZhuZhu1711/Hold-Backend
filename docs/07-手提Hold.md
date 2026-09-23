@@ -18,8 +18,8 @@
 
 | 产线 `line` | PRODUCT_ID | HOLD_CODE | RECORD_TYPE | STATION |
 | --- | --- | --- | --- | --- |
-| `FT` | 须 `*-3.5`，可关键字匹配 `PRODUCT_INFO` | 当前仅 `AQL_HOLD`（可扩） | `0` FT 异常反馈单 | 从合批 FT 站点中选（不含 FAOIFINISH / FFVI） |
-| `WLT` | 须 `*-2.6`，可关键字匹配 `PRODUCT_INFO` | `004` 或 `022` | `2` WLT 异常反馈单 | 固定 `WLT2` |
+| `FT` | `PRODUCT_INFO.LINE_TYPE=0`，可关键字匹配 | 当前仅 `AQL_HOLD`（可扩） | `0` FT 异常反馈单 | 从合批 FT 站点中选（不含 FAOIFINISH / FFVI） |
+| `WLT` | `PRODUCT_INFO.LINE_TYPE=1`，可关键字匹配 | `004` 或 `022` | `2` WLT 异常反馈单 | 固定 `WLT2` |
 
 其它必填：`equip_id`、`lot_id`、`wafer_id`、`hold_reason`。
 

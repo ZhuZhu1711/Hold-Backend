@@ -22,6 +22,8 @@ from app.config import Config
 from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
     HOLD_WAFER_ATTR_ZIYI,
+    LINE_TYPE_FT,
+    LINE_TYPE_WLT,
     append_hold_infos_to_record,
     build_merged_wafer_display,
     compute_hold_wafer_attr,
@@ -35,11 +37,11 @@ from app.utils.database_util import (
 )
 
 # 处置单划分（见 dispose_api.md）：
-#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,028,AQL_HOLD},
+#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_INFO.LINE_TYPE=0, HOLD_CODE∈{023,024,025,027,028,AQL_HOLD},
 #                 STATION∉{FAOIFINISH,FFVI}，且排除 (AQL_HOLD + FAOI-BACK)
 #   FVI异常反馈单 RECORD_TYPE=1  HOLD_CODE=023 + STATION∈{FAOIFINISH,FFVI}
 #                               或 HOLD_CODE=AQL_HOLD + STATION=FAOI-BACK
-#   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_ID *-2.6, HOLD_CODE∈{004,022}, STATION=WOQC
+#   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_INFO.LINE_TYPE=1, HOLD_CODE∈{004,022}, STATION=WOQC
 # 不满足以上规则的 hold_info 不转成 record。
 # 028（重码风险）仍为 RECORD_TYPE=0，但与同片/同批良率、缺陷率 hold 分列，不拼进同一条 record。
 # FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD 的 info 不参与合批。
@@ -63,18 +65,28 @@ RECORD_TYPE_WLT = 2
 _WLT_SETTLE_MINUTES_DEFAULT = 10
 
 
+def _as_line_type(value) -> Optional[int]:
+    if value is None or value == '':
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def resolve_record_type(
-    product_id: str,
+    line_type,
     hold_code: str,
     station: str,
 ) -> Optional[int]:
     """
     按 dispose_api.md「处置单划分」判定 RECORD_TYPE。
+    line_type 为 PRODUCT_INFO.LINE_TYPE（0=FT，1=WLT）。
     不匹配任何规则时返回 None（无需转成 record）。
     """
-    pid = (product_id or '').strip()
     code = (hold_code or '').strip()
     sta = (station or '').strip().upper()
+    lt = _as_line_type(line_type)
 
     # FVI：先判站点限定规则，避免与 FT 的「站点排除」交叉误伤
     if code in _FVI_HOLD_CODES and sta in _FVI_STATIONS:
@@ -83,14 +95,14 @@ def resolve_record_type(
         return RECORD_TYPE_FVI
 
     if (
-        pid.endswith('-3.5')
+        lt == LINE_TYPE_FT
         and code in _FT_HOLD_CODES
         and sta not in _FVI_STATIONS
     ):
         return RECORD_TYPE_FT
 
     if (
-        pid.endswith('-2.6')
+        lt == LINE_TYPE_WLT
         and code in _WLT_HOLD_CODES
         and sta in _WLT_STATIONS
     ):
@@ -270,6 +282,7 @@ class HoldInfo:
     hold_record_id: int = 0
     holding: int = 0
     remark: Optional[str] = None
+    line_type: Optional[int] = None
 
     @classmethod
     def from_row(cls, row: dict) -> 'HoldInfo':
@@ -296,6 +309,7 @@ class HoldInfo:
             ),
             holding=row.get('HOLDING') if row.get('HOLDING') is not None else 0,
             remark=row.get('REMARK'),
+            line_type=_as_line_type(row.get('LINE_TYPE')),
         )
 
 
@@ -481,12 +495,12 @@ def build_rough_hold_records(
                 skipped_ids.append(info.id)
             continue
 
-        rtype = resolve_record_type(info.product_id, info.hold_code, info.station)
+        rtype = resolve_record_type(info.line_type, info.hold_code, info.station)
         if rtype is None:
             logger.info(
                 f"hold_info id={info.id} 不满足处置单划分，无需转成 record "
-                f"(product={info.product_id}, code={info.hold_code}, "
-                f"station={info.station})"
+                f"(product={info.product_id}, line_type={info.line_type}, "
+                f"code={info.hold_code}, station={info.station})"
             )
             if info.id is not None:
                 skipped_ids.append(info.id)

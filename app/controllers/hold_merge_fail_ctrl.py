@@ -160,7 +160,7 @@ def _guess_record_type(infos):
         key=lambda x: (x.hold_dttm or datetime.min, x.id or 0),
     )
     for info in ordered:
-        rtype = resolve_record_type(info.product_id, info.hold_code, info.station)
+        rtype = resolve_record_type(info.line_type, info.hold_code, info.station)
         if rtype is not None:
             return rtype
     return None

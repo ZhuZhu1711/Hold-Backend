@@ -18,6 +18,7 @@ def _row(info_id, hold_code, wafer_id='ABC01', lot_id='ABC01', station='FATE-FA'
         'STATION': station,
         'EQUIP_ID': 'EQ1',
         'PRODUCT_ID': 'PROD-3.5',
+        'LINE_TYPE': 0,
         'LOT_ID': lot_id,
         'WAFER_ID': wafer_id,
         'HOLD_CODE': hold_code,
@@ -29,7 +30,7 @@ def _row(info_id, hold_code, wafer_id='ABC01', lot_id='ABC01', station='FATE-FA'
 class FtDupcode028MergeTest(unittest.TestCase):
     def test_028_is_ft_record_type(self):
         self.assertEqual(
-            resolve_record_type('PROD-3.5', '028', 'FATE-FA'),
+            resolve_record_type(0, '028', 'FATE-FA'),
             RECORD_TYPE_FT,
         )
 
@@ -106,23 +107,26 @@ class FpqcFutureHoldSkipTest(unittest.TestCase):
 class FaoiBackAqlHoldFviTest(unittest.TestCase):
     def test_aql_faoi_back_is_fvi_regardless_of_product(self):
         self.assertEqual(
-            resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FAOI-BACK'),
+            resolve_record_type(0, 'AQL_HOLD', 'FAOI-BACK'),
             RECORD_TYPE_FVI,
         )
         self.assertEqual(
-            resolve_record_type('OTHER', 'AQL_HOLD', 'faoi-back'),
+            resolve_record_type(None, 'AQL_HOLD', 'faoi-back'),
             RECORD_TYPE_FVI,
         )
 
+    def test_suffix_alone_is_not_ft(self):
+        self.assertIsNone(resolve_record_type(None, '028', 'FATE-FA'))
+
     def test_aql_other_station_still_ft(self):
         self.assertEqual(
-            resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FATE-FA'),
+            resolve_record_type(0, 'AQL_HOLD', 'FATE-FA'),
             RECORD_TYPE_FT,
         )
 
     def test_023_faoi_back_stays_ft(self):
         self.assertEqual(
-            resolve_record_type('PROD-3.5', '023', 'FAOI-BACK'),
+            resolve_record_type(0, '023', 'FAOI-BACK'),
             RECORD_TYPE_FT,
         )
 
