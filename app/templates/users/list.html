@@ -12,6 +12,7 @@
             background: #fff; border-radius: 8px; padding: 20px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         }
+        .card + .card { margin-top: 16px; }
         h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
         .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
         .toolbar {
@@ -19,9 +20,12 @@
             align-items: center; justify-content: space-between;
         }
         .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-        .filters input {
-            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; min-width: 200px;
+        .filters input, .filters select {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px; font-family: inherit; background: #fff;
         }
+        .filters input { min-width: 200px; }
+        .filters select { min-width: 160px; }
         .btn {
             padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
             color: #fff; font-size: 14px;
@@ -30,6 +34,8 @@
         .btn-primary:hover { background: #0069d9; }
         .btn-danger { background: #dc3545; }
         .btn-danger:hover { background: #c82333; }
+        .btn-edit { background: #6c757d; }
+        .btn-edit:hover { background: #5a6268; }
         .btn:disabled { background: #ccc; cursor: not-allowed; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; }
@@ -76,11 +82,14 @@
     <main class="main">
         <div class="card">
             <h1>用户管理</h1>
-            <p class="sub">维护系统账号，支持按工号/姓名搜索与排序。</p>
+            <p class="sub">维护系统账号，支持按工号/姓名搜索、按角色筛选与排序。</p>
 
             <div class="toolbar">
                 <div class="filters">
                     <input type="text" id="search-input" placeholder="搜索工号或姓名..." onkeyup="handleSearch(event)">
+                    <select id="role-filter" onchange="loadUsers()">
+                        <option value="">全部角色</option>
+                    </select>
                     <button class="btn btn-primary" onclick="loadUsers()">查询</button>
                 </div>
                 <button class="btn btn-primary" onclick="addUser()">+ 新增用户</button>
@@ -97,6 +106,29 @@
                         </tr>
                     </thead>
                     <tbody id="user-table-body">
+                        <tr><td colspan="4" class="empty">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <h1 style="margin-bottom:16px;">角色管理</h1>
+            <div class="toolbar">
+                <div class="filters"></div>
+                <button class="btn btn-primary" onclick="addRole()">+ 新增角色</button>
+            </div>
+            <div style="overflow:auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>编号</th>
+                            <th>说明</th>
+                            <th>用户数</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="role-table-body">
                         <tr><td colspan="4" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
@@ -123,10 +155,7 @@
             <div class="form-row">
                 <label>角色</label>
                 <select id="new_role">
-                    <option value="1">产品工程师</option>
-                    <option value="9">生产</option>
-                    <option value="8">质量部</option>
-                    <option value="0">超级管理员</option>
+                    <option value="">加载中...</option>
                 </select>
             </div>
             <div class="modal-actions">
@@ -136,13 +165,117 @@
         </div>
     </div>
 
+    <div class="modal-mask" id="roleModal">
+        <div class="modal">
+            <h3 id="roleModalTitle">新增角色</h3>
+            <div class="form-row">
+                <label>角色编号</label>
+                <input id="role_id" inputmode="numeric" placeholder="非负整数，保存后不可改" />
+            </div>
+            <div class="form-row">
+                <label>说明</label>
+                <input id="role_desc" maxlength="100" placeholder="例如：CP产品协助" />
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" onclick="closeRoleModal()">取消</button>
+                <button class="btn btn-ok" onclick="submitRole()">保存</button>
+            </div>
+        </div>
+    </div>
+
     <script>
 
         let currentSort = { by: 'employee_no', order: 'asc' };
+        let roleCatalog = [];
+        let editingRolePk = null;
+
+        function esc(value) {
+            return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[ch]));
+        }
+
+        function roleBadgeClass(roleId) {
+            const known = { 0: 'role-0', 1: 'role-1', 2: 'role-2', 8: 'role-8', 9: 'role-9' };
+            return known[Number(roleId)] || 'role-1';
+        }
+
+        function fillRoleSelect(prefer) {
+            const sel = document.getElementById('new_role');
+            const previous = prefer == null ? sel.value : String(prefer);
+            sel.innerHTML = '';
+            if (!roleCatalog.length) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '暂无角色';
+                sel.appendChild(opt);
+                return;
+            }
+            roleCatalog.forEach((role) => {
+                const opt = document.createElement('option');
+                opt.value = String(role.role_id);
+                opt.textContent = `${role.role_desc} (${role.role_id})`;
+                sel.appendChild(opt);
+            });
+            const hasPrevious = roleCatalog.some((role) => String(role.role_id) === previous);
+            const hasEngineer = roleCatalog.some((role) => role.role_id === 1);
+            sel.value = hasPrevious ? previous : (hasEngineer ? '1' : String(roleCatalog[0].role_id));
+        }
+
+        function fillRoleFilter() {
+            const sel = document.getElementById('role-filter');
+            const previous = sel.value;
+            sel.innerHTML = '';
+            const all = document.createElement('option');
+            all.value = '';
+            all.textContent = '全部角色';
+            sel.appendChild(all);
+            roleCatalog.forEach((role) => {
+                const opt = document.createElement('option');
+                opt.value = String(role.role_id);
+                opt.textContent = role.role_desc;
+                sel.appendChild(opt);
+            });
+            const stillThere = [...sel.options].some((opt) => opt.value === previous);
+            sel.value = stillThere ? previous : '';
+        }
+
+        function loadRoles() {
+            return fetch('/admin/users/api/roles')
+                .then(response => response.json())
+                .then(res => {
+                    const tbody = document.getElementById('role-table-body');
+                    if (res.code !== 200) {
+                        tbody.innerHTML = `<tr><td colspan="4" class="empty">${esc(res.msg || '加载失败')}</td></tr>`;
+                        return;
+                    }
+                    roleCatalog = res.data || [];
+                    fillRoleSelect();
+                    fillRoleFilter();
+                    if (!roleCatalog.length) {
+                        tbody.innerHTML = '<tr><td colspan="4" class="empty">还没有角色</td></tr>';
+                        return;
+                    }
+                    tbody.innerHTML = roleCatalog.map((role) => `
+                        <tr>
+                            <td>${esc(role.role_id)}</td>
+                            <td><span class="role-badge ${roleBadgeClass(role.role_id)}">${esc(role.role_desc)}</span></td>
+                            <td>${esc(role.user_count)}</td>
+                            <td><button class="btn btn-edit" onclick="editRole(${role.id})">编辑</button></td>
+                        </tr>
+                    `).join('');
+                })
+                .catch(() => {
+                    document.getElementById('role-table-body').innerHTML =
+                        '<tr><td colspan="4" class="empty">加载失败</td></tr>';
+                });
+        }
 
         function loadUsers() {
             const searchVal = document.getElementById('search-input').value;
-            const url = `/admin/users/api?search=${searchVal}&sort_by=${currentSort.by}&order=${currentSort.order}`;
+            const roleVal = document.getElementById('role-filter').value;
+            const roleQuery = roleVal === '' ? '' : `&role=${encodeURIComponent(roleVal)}`;
+            const url = `/admin/users/api?search=${encodeURIComponent(searchVal)}${roleQuery}&sort_by=${currentSort.by}&order=${currentSort.order}`;
 
             fetch(url)
                 .then(response => response.json())
@@ -154,28 +287,17 @@
                             html = '<tr><td colspan="4" class="empty">没有找到用户</td></tr>';
                         } else {
                             res.data.forEach(user => {
-                                const roleClass = user.role === 0 ? 'role-0'
-                                    : (user.role === 2 ? 'role-2'
-                                    : (user.role === 8 ? 'role-8'
-                                    : (user.role === 9 ? 'role-9' : 'role-1')));
-                                const roleMap = {
-                                    0: '超级管理员',
-                                    1: '产品工程师',
-                                    2: '管理员',
-                                    8: '质量部',
-                                    9: '生产'
-                                };
-                                const roleName = roleMap[user.role] || '未知角色';
+                                const roleName = user.role_desc || '未知角色';
                                 const isAdmin = user.role === 0;
                                 const deleteBtn = isAdmin
                                     ? `<button class="btn" disabled>不可删</button>`
-                                    : `<button class="btn btn-danger" onclick="deleteUser(${user.id})">删除</button>`;
+                                    : `<button class="btn btn-danger" onclick="deleteUser(${Number(user.id)})">删除</button>`;
 
                                 html += `
                                     <tr>
-                                        <td>${user.employee_no}</td>
-                                        <td>${user.name}</td>
-                                        <td><span class="role-badge ${roleClass}">${roleName}</span></td>
+                                        <td>${esc(user.employee_no)}</td>
+                                        <td>${esc(user.name)}</td>
+                                        <td><span class="role-badge ${roleBadgeClass(user.role)}">${esc(roleName)}</span></td>
                                         <td>${deleteBtn}</td>
                                     </tr>
                                 `;
@@ -218,7 +340,7 @@
             document.getElementById('new_employee_no').value = '';
             document.getElementById('new_name').value = '';
             document.getElementById('new_password').value = '';
-            document.getElementById('new_role').value = '1';
+            fillRoleSelect(1);
             document.getElementById('userModal').classList.add('show');
             document.getElementById('new_employee_no').focus();
         }
@@ -231,7 +353,8 @@
             const employee_no = document.getElementById('new_employee_no').value.trim();
             const name = document.getElementById('new_name').value.trim();
             const passwordPlain = document.getElementById('new_password').value;
-            const role = Number(document.getElementById('new_role').value);
+            const roleRaw = document.getElementById('new_role').value;
+            const role = Number(roleRaw);
             if (!employee_no) { alert('请填写工号'); return; }
             if (!name) { alert('请填写姓名'); return; }
             if (!passwordPlain) { alert('请填写密码'); return; }
@@ -242,6 +365,7 @@
             if (passwordPlain.toLowerCase() === employee_no.toLowerCase()) {
                 alert('密码不能与工号相同'); return;
             }
+            if (roleRaw === '' || Number.isNaN(role)) { alert('请选择角色'); return; }
 
             fetch('/admin/users/api', {
                 method: 'POST',
@@ -268,17 +392,84 @@
             fetch(`/admin/users/api/${id}`, { method: 'DELETE' })
             .then(res => res.json())
             .then(data => {
-                if (data.code === 200) { alert('删除成功！'); loadUsers(); }
+                if (data.code === 200) { alert('删除成功！'); loadUsers(); loadRoles(); }
                 else { alert('删除失败: ' + data.msg); }
             });
         }
 
-        document.addEventListener('DOMContentLoaded', loadUsers);
+        function addRole() {
+            editingRolePk = null;
+            document.getElementById('roleModalTitle').textContent = '新增角色';
+            const idInput = document.getElementById('role_id');
+            idInput.disabled = false;
+            idInput.value = '';
+            document.getElementById('role_desc').value = '';
+            document.getElementById('roleModal').classList.add('show');
+            idInput.focus();
+        }
+
+        function editRole(id) {
+            const role = roleCatalog.find((item) => item.id === id);
+            if (!role) return;
+            editingRolePk = id;
+            document.getElementById('roleModalTitle').textContent = '编辑角色';
+            const idInput = document.getElementById('role_id');
+            idInput.value = role.role_id;
+            idInput.disabled = true;
+            document.getElementById('role_desc').value = role.role_desc;
+            document.getElementById('roleModal').classList.add('show');
+            document.getElementById('role_desc').focus();
+        }
+
+        function closeRoleModal() {
+            document.getElementById('roleModal').classList.remove('show');
+            editingRolePk = null;
+        }
+
+        function submitRole() {
+            const roleDesc = document.getElementById('role_desc').value.trim();
+            if (!roleDesc) { alert('请填写角色说明'); return; }
+            const isEdit = editingRolePk !== null;
+            const url = isEdit ? `/admin/users/api/roles/${editingRolePk}` : '/admin/users/api/roles';
+            const payload = { role_desc: roleDesc };
+            if (!isEdit) {
+                const roleIdText = document.getElementById('role_id').value.trim();
+                if (!/^\d+$/.test(roleIdText)) { alert('角色编号须为非负整数'); return; }
+                payload.role_id = Number(roleIdText);
+            }
+            fetch(url, {
+                method: isEdit ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.code === 200) {
+                    closeRoleModal();
+                    alert(isEdit ? '已更新' : '已添加');
+                    loadRoles().then(loadUsers);
+                } else {
+                    alert((isEdit ? '更新失败: ' : '添加失败: ') + data.msg);
+                }
+            })
+            .catch(err => alert('保存失败: ' + err));
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadRoles();
+            loadUsers();
+        });
         document.getElementById('userModal').addEventListener('click', (e) => {
             if (e.target.id === 'userModal') closeUserModal();
         });
+        document.getElementById('roleModal').addEventListener('click', (e) => {
+            if (e.target.id === 'roleModal') closeRoleModal();
+        });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeUserModal();
+            if (e.key === 'Escape') {
+                closeUserModal();
+                closeRoleModal();
+            }
         });
     </script>
 </body>

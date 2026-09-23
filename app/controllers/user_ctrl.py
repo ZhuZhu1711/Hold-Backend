@@ -1,12 +1,126 @@
 from app import db
 from app.models import User
+from app.models.role import Role
 from app.controllers.auth_ctrl import normalize_login_password, password_matches
-from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_NAMES
+from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_PRODUCTION, ROLE_QUALITY, ROLE_ROOT
 from app.utils.password_policy import user_must_change_password, validate_new_password
 
-ALLOWED_ROLES = set(ROLE_NAMES.keys())
+# 登录与页面权限仍按这些编号写死；目录里可以改说明，但不能删。
+BUILTIN_ROLE_IDS = frozenset({ROLE_ROOT, ROLE_ENGINEER, ROLE_QUALITY, ROLE_PRODUCTION})
+ROLE_DESC_MAX_BYTES = 100
+ROLE_ID_MAX = 99999999999
 EMPLOYEE_NO_MAX = 20
 NAME_MAX = 20
+
+
+def normalize_role_id(raw):
+    """解析角色编号。成功返回 (int, '')，失败返回 (None, 原因)。"""
+    if isinstance(raw, bool) or raw is None:
+        return None, '请填写角色编号'
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None, '请填写角色编号'
+        if not text.isdigit():
+            return None, '角色编号须为非负整数'
+        value = int(text)
+    elif isinstance(raw, int):
+        value = raw
+    else:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None, '角色编号须为非负整数'
+        if value != raw:
+            return None, '角色编号须为非负整数'
+    if value < 0 or value > ROLE_ID_MAX:
+        return None, '角色编号超出范围'
+    return value, ''
+
+
+def normalize_role_desc(raw):
+    """解析角色说明。成功返回 (str, '')，失败返回 (None, 原因)。"""
+    text = str(raw or '').strip()
+    if not text:
+        return None, '请填写角色说明'
+    if len(text.encode('utf-8')) > ROLE_DESC_MAX_BYTES:
+        return None, '角色说明过长（最多 100 字节）'
+    return text, ''
+
+
+def role_exists(role_id):
+    return Role.query.filter(Role.ROLE_ID == role_id).first() is not None
+
+
+def _user_counts_by_role():
+    rows = db.session.query(User.ROLE, db.func.count(User.ID)).group_by(User.ROLE).all()
+    return {int(role): int(count) for role, count in rows}
+
+
+def list_roles():
+    """角色目录，含占用人数。"""
+    try:
+        rows = Role.query.order_by(Role.ROLE_ID.asc(), Role.ID.asc()).all()
+        counts = _user_counts_by_role()
+        data = []
+        for row in rows:
+            role_id = int(row.ROLE_ID)
+            data.append({
+                'id': int(row.ID),
+                'role_id': role_id,
+                'role_desc': row.ROLE_DESC,
+                'user_count': counts.get(role_id, 0),
+                'builtin': role_id in BUILTIN_ROLE_IDS,
+            })
+        return True, '获取成功', data
+    except Exception as e:
+        db.session.rollback()
+        return False, str(e), []
+
+
+def add_role(data):
+    """新增角色。ROLE_ID 唯一，主键 ID 取当前最大值 + 1。"""
+    data = data or {}
+    role_id, msg = normalize_role_id(data.get('role_id'))
+    if role_id is None:
+        return False, msg
+    desc, msg = normalize_role_desc(data.get('role_desc'))
+    if desc is None:
+        return False, msg
+    try:
+        if Role.query.filter(Role.ROLE_ID == role_id).first():
+            return False, '角色编号已存在'
+        next_id = db.session.query(db.func.max(Role.ID)).scalar()
+        row = Role(ID=int(next_id or 0) + 1, ROLE_ID=role_id, ROLE_DESC=desc)
+        db.session.add(row)
+        db.session.commit()
+        return True, '角色已添加'
+    except Exception as e:
+        db.session.rollback()
+        return False, str(e)
+
+
+def update_role(role_pk, data):
+    """只改说明。编号被用户表引用，不在这里改。"""
+    data = data or {}
+    desc, msg = normalize_role_desc(data.get('role_desc'))
+    if desc is None:
+        return False, msg
+    try:
+        row = Role.query.get(role_pk)
+        if not row:
+            return False, '角色不存在'
+        row.ROLE_DESC = desc
+        db.session.commit()
+        return True, '角色已更新'
+    except Exception as e:
+        db.session.rollback()
+        return False, str(e)
+
+
+def remove_role(role_pk):
+    """角色目录不允许删除。"""
+    return False, '角色不可删除'
 
 
 def login(employee_no, password_input):
@@ -70,16 +184,24 @@ def create_user(employee_no, name, password, role=1):
         db.session.rollback()
         return False, str(e)
     
-def get_all_users(search="", sort_by="employee_no", order="asc"):
+def get_all_users(search="", sort_by="employee_no", order="asc", role=""):
     """
-    从数据库获取用户列表（支持搜索和排序）
+    从数据库获取用户列表（支持搜索、按角色筛选和排序）
     :param search: 搜索关键词（工号或姓名）
     :param sort_by: 排序字段 ('employee_no' 或 'name')
     :param order: 排序方向 ('asc' 或 'desc')
+    :param role: 角色编号；空字符串表示不限
     """
+    role_id = None
+    if role is not None and str(role).strip() != '':
+        role_id, msg = normalize_role_id(role)
+        if role_id is None:
+            return False, '角色无效', []
     try:
         # 1. 构建基础查询
         query = User.query
+        if role_id is not None:
+            query = query.filter(User.ROLE == role_id)
 
         # 2. 处理搜索逻辑：如果有关键词，筛选工号或姓名包含该词的记录
         if search:
@@ -154,15 +276,14 @@ def add_user(data):
         return False, f'姓名最长 {NAME_MAX} 个字符'
     if not normalize_login_password(password):
         return False, '请填写密码'
-    try:
-        role = int(role_raw)
-    except (TypeError, ValueError):
+    role, _role_msg = normalize_role_id(role_raw)
+    if role is None:
         return False, '角色无效'
-    if role not in ALLOWED_ROLES:
-        return False, '角色无效，须为超级管理员 / 产品工程师 / 质量部 / 生产'
     ok, policy_msg = validate_new_password(employee_no, password)
     if not ok:
         return False, policy_msg
+    if not role_exists(role):
+        return False, '角色无效，请先在角色列表中维护'
 
     try:
         existing_user = User.query.filter_by(EMPLOYEE_NO=employee_no).first()
