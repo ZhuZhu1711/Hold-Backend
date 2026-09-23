@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """关闭无 hold_info 关联的残留 hold_record（MES 合批）。
 
-判定：FT_HOLD_RECORD 上不存在任何 FT_HOLD_INFO.HOLD_RECORD_ID = record.ID，
-且尚未关闭（STATUS <> 99）。
+判定：FT_HOLD_RECORD 上不存在任何 AREA=0 的
+FT_HOLD_INFO.HOLD_RECORD_ID = record.ID，且尚未关闭（STATUS <> 99）。
 
 手提 Hold（SOURCE=1）创建时就不写 hold_info，一律跳过，避免误关。
 
@@ -34,6 +34,7 @@ from app.utils.database_util import (
     PWD,
     USER,
     auto_close_hold_records,
+    hold_info_area_sql,
 )
 
 _ALLOWED = {
@@ -79,6 +80,7 @@ def query_orphan_record_ids(
               SELECT 1
               FROM {info_tbl} i
               WHERE i.HOLD_RECORD_ID = r.ID
+                AND {hold_info_area_sql('i')}
           )
         ORDER BY r.ID
     """

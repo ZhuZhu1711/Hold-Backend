@@ -36,7 +36,7 @@ if str(_ROOT) not in sys.path:
 
 import oracledb
 
-from app.utils.database_util import DISPOSE_CLOSE, DSN, PWD, USER
+from app.utils.database_util import DISPOSE_CLOSE, DSN, PWD, USER, hold_info_area_sql
 
 TableTriple = tuple[str, str, str]  # info, record, circ
 
@@ -110,7 +110,9 @@ def check_1_mes_record_no_info(
         WHERE {_NOT_CLOSED}
           AND NVL(r.SOURCE, 0) <> 1
           AND NOT EXISTS (
-              SELECT 1 FROM {info} i WHERE i.HOLD_RECORD_ID = r.ID
+              SELECT 1 FROM {info} i
+              WHERE i.HOLD_RECORD_ID = r.ID
+                AND {hold_info_area_sql('i')}
           )
         ORDER BY r.ID
     """
@@ -254,7 +256,8 @@ def check_9_info_points_missing_record(
         SELECT i.ID AS INFO_ID, i.HOLD_RECORD_ID, i.PRODUCT_ID, i.LOT_ID,
                i.WAFER_ID, i.HOLD_CODE, i.HOLDING, i.HOLD_DTTM
         FROM {info} i
-        WHERE i.HOLD_RECORD_ID IS NOT NULL
+        WHERE {hold_info_area_sql('i')}
+          AND i.HOLD_RECORD_ID IS NOT NULL
           AND i.HOLD_RECORD_ID > 0
           AND NOT EXISTS (
               SELECT 1 FROM {record} r WHERE r.ID = i.HOLD_RECORD_ID
@@ -271,12 +274,15 @@ def check_10_manual_with_info(
     info, record, _ = tables
     sql = f"""
         SELECT r.ID, r.STATUS, r.PRODUCT_ID, r.LOT_ID, r.HOLD_CODE,
-               (SELECT COUNT(*) FROM {info} i WHERE i.HOLD_RECORD_ID = r.ID) AS INFO_CNT
+               (SELECT COUNT(*) FROM {info} i
+                WHERE i.HOLD_RECORD_ID = r.ID AND {hold_info_area_sql('i')}) AS INFO_CNT
         FROM {record} r
         WHERE {_NOT_CLOSED}
           AND NVL(r.SOURCE, 0) = 1
           AND EXISTS (
-              SELECT 1 FROM {info} i WHERE i.HOLD_RECORD_ID = r.ID
+              SELECT 1 FROM {info} i
+              WHERE i.HOLD_RECORD_ID = r.ID
+                AND {hold_info_area_sql('i')}
           )
         ORDER BY r.ID
     """
@@ -314,11 +320,15 @@ def check_12_unclosed_all_released(
         WHERE {_NOT_CLOSED}
           AND EXISTS (
               SELECT 1 FROM {info} i
-              WHERE i.HOLD_RECORD_ID = r.ID AND i.HOLDING = 1
+              WHERE i.HOLD_RECORD_ID = r.ID
+                AND {hold_info_area_sql('i')}
+                AND i.HOLDING = 1
           )
           AND NOT EXISTS (
               SELECT 1 FROM {info} i
-              WHERE i.HOLD_RECORD_ID = r.ID AND NVL(i.HOLDING, 1) = 0
+              WHERE i.HOLD_RECORD_ID = r.ID
+                AND {hold_info_area_sql('i')}
+                AND NVL(i.HOLDING, 1) = 0
           )
         ORDER BY r.ID
     """
@@ -334,7 +344,8 @@ def check_13_dirty_info_count(
         SELECT i.ID AS INFO_ID, i.HOLD_RECORD_ID, i.PRODUCT_ID, i.LOT_ID,
                i.WAFER_ID, i.HOLD_CODE, i.HOLDING, i.REMARK
         FROM {info} i
-        WHERE i.HOLD_RECORD_ID = -1
+        WHERE {hold_info_area_sql('i')}
+          AND i.HOLD_RECORD_ID = -1
         ORDER BY i.ID
     """
     total, rows = _fetch(conn, sql, limit=limit)

@@ -51,6 +51,7 @@ class GetHoldingRecordsSqlTest(unittest.TestCase):
             self.assertNotIn('i.ID IS NOT NULL', sql)
             self.assertNotIn('NVL(r.SOURCE, 0) = 1', sql)
             self.assertIn('AND NVL(i.HOLDING, 1) = 0', sql)
+            self.assertIn('i.AREA = 0', sql)
             self.assertIn('c.NEXT_OWNER_ID = :current_owner_id', sql)
         self.assertEqual(params.get('closed'), DISPOSE_CLOSE)
         self.assertEqual(params.get('current_owner_id'), 3)

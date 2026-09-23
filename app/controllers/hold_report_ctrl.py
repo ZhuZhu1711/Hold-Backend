@@ -3,7 +3,7 @@ Hold 报表业务逻辑（root 全量数据）。
 
 1. holding_record：系统尚未关闭的 FT_HOLD_RECORD（STATUS<>99）
    - MES 是否已解 hold（HOLDING=1）不影响列表；工程师仍需在系统内处置留档
-   - INFO_CNT 只统计 HOLDING=0 的 info（MES 仍在 hold 的片数）
+   - INFO_CNT 只统计 AREA=0 且 HOLDING=0 的 info（本系统仍在 hold 的片数）
    - 注意：HOLDING=0 表示 MES 正在 hold（命名反直觉）
 
 2. hold 历史：按型号 + 月份/周聚合 hold 数量，供柱状图使用
@@ -29,6 +29,7 @@ from app.utils.database_util import (
     is_merged_wafer_id,
     lot_id_digit_suffix_len,
     normalize_lot_id,
+    hold_info_area_sql,
     query_fvi_defect_details,
     query_split_merge_history,
     resolve_circulation_table,
@@ -229,6 +230,7 @@ def get_holding_records(
             FROM {record_table} r
             LEFT JOIN {info_table} i
                 ON i.{link_col} = r.ID
+               AND {hold_info_area_sql('i')}
                AND NVL(i.HOLDING, 1) = 0
             LEFT JOIN {circ_table} c
                 ON c.ID = r.LAST_CIRCULATION_ID

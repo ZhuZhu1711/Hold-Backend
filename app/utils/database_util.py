@@ -53,6 +53,14 @@ _CIRC_SEQ_MAP = {
 # 源表 HOLD_RECORD_ID：0/NULL=待处理；>0=已关联；-1=转换失败脏数据（需人工）
 HOLD_RECORD_ID_PENDING = 0
 HOLD_RECORD_ID_DIRTY = -1
+# 本系统只处理 AREA=0 的 FT_HOLD_INFO；其它区域的行不读不写。
+HOLD_INFO_AREA = 0
+
+
+def hold_info_area_sql(alias: str = '') -> str:
+    """SQL 片段：只保留本系统关注的 hold_info。"""
+    col = f'{alias}.AREA' if alias else 'AREA'
+    return f'{col} = {int(HOLD_INFO_AREA)}'
 
 
 def resolve_hold_record_table(name=None) -> str:
@@ -169,7 +177,8 @@ def query_testlog_history(test_date: date):
 def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     """
     查询指定表中在线且尚未关联 hold_record 的 hold_info
-    （HOLDING = 0 且 HOLD_RECORD_ID 为 NULL/0）。
+    （AREA = 0、HOLDING = 0 且 HOLD_RECORD_ID 为 NULL/0）。
+    其它 AREA 不属于本系统，不参与合批。
     HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
 
     仅捞取满足 dispose_api.md「处置单划分」的候选行：
@@ -196,10 +205,12 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
         password=PWD,
         dsn=DSN
     )
-    # 仅待处理(NULL/0)；排除已关联(>0)与脏数据(-1)；
+    # 仅本系统 AREA=0、待处理(NULL/0)；排除已关联(>0)与脏数据(-1)；
     # 处置单划分三选一（与 resolve_record_type 保持一致）
-    base_filter = """
-            HOLDING = 0
+    area_sql = hold_info_area_sql()
+    base_filter = f"""
+            {area_sql}
+            AND HOLDING = 0
             AND NVL(HOLD_RECORD_ID, 0) = 0
             AND (
                 (
@@ -310,11 +321,13 @@ def query_released_unclosed_hold_records(
           AND EXISTS (
               SELECT 1 FROM {info_tbl} i
               WHERE i.HOLD_RECORD_ID = r.ID
+                AND {hold_info_area_sql('i')}
                 AND i.HOLDING = 1
           )
           AND NOT EXISTS (
               SELECT 1 FROM {info_tbl} i
               WHERE i.HOLD_RECORD_ID = r.ID
+                AND {hold_info_area_sql('i')}
                 AND NVL(i.HOLDING, 1) = 0
           )
           AND ROWNUM <= :lim
@@ -491,6 +504,7 @@ def mark_hold_infos_dirty(
             REMARK = :remark
         WHERE ID IN ({id_ph})
           AND NVL(HOLD_RECORD_ID, 0) = 0
+          AND {hold_info_area_sql()}
     """
 
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
@@ -624,6 +638,7 @@ def insert_hold_record_and_link(
         SET HOLD_RECORD_ID = :record_id
         WHERE ID IN ({id_ph})
           AND NVL(HOLD_RECORD_ID, 0) = 0
+          AND {hold_info_area_sql()}
     """
 
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
@@ -854,6 +869,7 @@ def query_hold_infos_by_record_id(
             HOLD_RECORD_ID, HOLDING, REMARK
         FROM {info_tbl}
         WHERE HOLD_RECORD_ID = :record_id
+          AND {hold_info_area_sql()}
         ORDER BY HOLD_DTTM, ID
     """
 
@@ -930,6 +946,7 @@ def append_hold_infos_to_record(
         SET HOLD_RECORD_ID = :record_id
         WHERE ID IN ({id_ph})
           AND NVL(HOLD_RECORD_ID, 0) = 0
+          AND {hold_info_area_sql()}
     """
 
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
@@ -1188,7 +1205,7 @@ def query_dirty_hold_infos(
         page_size = 20
     offset = (page - 1) * page_size
 
-    where = ["HOLD_RECORD_ID = :dirty_id"]
+    where = ["HOLD_RECORD_ID = :dirty_id", hold_info_area_sql()]
     params = {
         'dirty_id': HOLD_RECORD_ID_DIRTY,
         'offset': offset,
@@ -1284,6 +1301,7 @@ def query_hold_infos_by_ids(
             HOLD_RECORD_ID, HOLDING, REMARK
         FROM {info_tbl}
         WHERE ID IN ({id_ph})
+          AND {hold_info_area_sql()}
         {dirty_filter}
         ORDER BY HOLD_DTTM, ID
     """
@@ -1327,6 +1345,7 @@ def reset_dirty_hold_infos(
             REMARK = NULL
         WHERE ID IN ({id_ph})
           AND HOLD_RECORD_ID = :dirty_id
+          AND {hold_info_area_sql()}
     """
 
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
@@ -1397,6 +1416,7 @@ def insert_hold_record_and_link_from_dirty(
             SET REMARK = :remark
             WHERE ID IN ({id_ph_f})
               AND HOLD_RECORD_ID = :dirty_id
+              AND {hold_info_area_sql()}
         """
         conn_f = oracledb.connect(user=USER, password=PWD, dsn=DSN)
         try:
@@ -1489,6 +1509,7 @@ def insert_hold_record_and_link_from_dirty(
             REMARK = NULL
         WHERE ID IN ({id_ph})
           AND HOLD_RECORD_ID = :dirty_id
+          AND {hold_info_area_sql()}
     """
 
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
