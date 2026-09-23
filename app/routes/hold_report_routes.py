@@ -5,7 +5,13 @@ from logging.handlers import RotatingFileHandler
 
 from flask import Blueprint, render_template, request, jsonify, session, Response
 
-from app.controllers import hold_report_ctrl, hold_merge_fail_ctrl, hold_info_export_ctrl, manual_hold_ctrl
+from app.controllers import (
+    hold_report_ctrl,
+    hold_merge_fail_ctrl,
+    hold_info_export_ctrl,
+    manual_hold_ctrl,
+    user_ctrl,
+)
 from app.controllers.defect_code_ctrl import query_bincode_defect
 from app.utils.auth_decorators import (
     root_required,
@@ -140,8 +146,9 @@ def manual_hold_page():
 def api_holding_records():
     """
     尚未关闭（STATUS<>99）的 record 列表（分页）。MES 已解 hold 仍列出。
-    Query: product_id, station, keyword, record_type(0/1/2), page, page_size
+    Query: product_id, station, keyword, record_type(0/1/2), engineer_id, page, page_size
     record_type 对应处置单大类：0=FT异常反馈单 1=FVI异常反馈单 2=WLT异常反馈单
+    engineer_id：指定产品工程师的待办（型号归属且当前负责人都是该人）
     """
     product_id = request.args.get('product_id', '').strip()
     station = request.args.get('station', '').strip()
@@ -149,6 +156,9 @@ def api_holding_records():
     record_type = request.args.get('record_type', '').strip()
     page = request.args.get('page', 1)
     page_size = request.args.get('page_size', 20)
+    engineer_id, eng_err = _optional_engineer_id()
+    if eng_err:
+        return jsonify({'code': 400, 'msg': eng_err, 'data': [], 'total': 0}), 400
 
     success, msg, payload = hold_report_ctrl.get_holding_records(
         product_id=product_id,
@@ -157,6 +167,8 @@ def api_holding_records():
         record_type=record_type if record_type != '' else None,
         page=page,
         page_size=page_size,
+        owner_eng_id=engineer_id,
+        current_owner_id=engineer_id,
     )
     if success:
         return jsonify({
@@ -177,18 +189,53 @@ def api_holding_records():
 def api_holding_records_export():
     """
     导出在线 Hold Record 为 xlsx（筛选条件与列表一致，最多 5000 行）。
-    Query: product_id, station, keyword, record_type(0/1/2)
+    Query: product_id, station, keyword, record_type(0/1/2), engineer_id
+    engineer_id：与列表相同，指定产品工程师的待办。
     """
+    engineer_id, eng_err = _optional_engineer_id()
+    if eng_err:
+        return jsonify({'code': 400, 'msg': eng_err}), 400
     success, msg, content = hold_report_ctrl.export_holding_records_xlsx(
         product_id=request.args.get('product_id', '').strip(),
         station=request.args.get('station', '').strip(),
         keyword=request.args.get('keyword', '').strip(),
         record_type=request.args.get('record_type', '').strip() or None,
+        owner_eng_id=engineer_id,
+        current_owner_id=engineer_id,
     )
     return xlsx_or_error(
         success, msg, content, stamp_filename('holding_records'),
         bad_keys=('无效', '须为'),
     )
+
+
+def _optional_engineer_id():
+    """
+    root 指定工程师待办。
+    空表示不限；有值时与工程师「仅我的待办」一致：
+    型号 PRO_ENG_ID 与当前负责人 NEXT_OWNER_ID 都等于该工程师。
+    返回 (eng_id|None, err|None)。
+    """
+    raw = request.args.get('engineer_id', '').strip()
+    if raw == '':
+        return None, None
+    try:
+        eng_id = int(raw)
+    except (TypeError, ValueError):
+        return None, 'engineer_id 无效'
+    if eng_id <= 0:
+        return None, 'engineer_id 无效'
+    return eng_id, None
+
+
+@hold_report_bp.route('/api/engineers', methods=['GET'])
+@root_required
+def api_engineers():
+    """产品工程师下拉（root Holding 报表按待办筛选）。"""
+    success, msg, data = user_ctrl.list_engineers()
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    return jsonify({'code': 500, 'msg': msg, 'data': []}), 500
 
 
 def _collect_upload_files():

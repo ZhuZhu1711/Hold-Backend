@@ -132,9 +132,12 @@
     <main class="main">
         <div class="card">
             <h1>Holding Record 报表</h1>
-            <p class="sub">查询在线的Hold报表。FVI 记录可点击原因查看缺陷明细；可点「分析」查看 bysite / raw_data。</p>
+            <p class="sub">查询在线的Hold报表。可指定工程师查看其待办（型号归该工程师，且当前负责人也是他）。FVI 记录可点击原因查看缺陷明细；可点「分析」查看 bysite / raw_data。</p>
 
             <div class="filters">
+                <select id="engineer_id">
+                    <option value="">不限工程师待办</option>
+                </select>
                 <select id="record_type">
                     <option value="">全部处置单类型</option>
                     <option value="0">FT异常反馈单</option>
@@ -638,19 +641,42 @@
             }
         }
 
-        async function loadData(resetPage = true) {
-            if (resetPage) currentPage = 1;
-            const params = new URLSearchParams({
+        function filterParams(extra) {
+            const params = new URLSearchParams(Object.assign({
                 product_id: document.getElementById('product_id').value.trim(),
                 station: document.getElementById('station').value.trim(),
                 keyword: document.getElementById('keyword').value.trim(),
+            }, extra || {}));
+            const recordType = document.getElementById('record_type').value;
+            if (recordType !== '') params.set('record_type', recordType);
+            const engineerId = document.getElementById('engineer_id').value;
+            if (engineerId) params.set('engineer_id', engineerId);
+            return params;
+        }
+
+        async function loadEngineers() {
+            const sel = document.getElementById('engineer_id');
+            try {
+                const resp = await fetch('/admin/hold/api/engineers');
+                const json = await resp.json();
+                if (json.code !== 200) return;
+                (json.data || []).forEach(u => {
+                    const opt = document.createElement('option');
+                    opt.value = String(u.id);
+                    opt.textContent = (u.name || '-') + '（' + (u.employee_no || '') + '）';
+                    sel.appendChild(opt);
+                });
+            } catch (e) {
+                /* 名单失败时仍可查全部 */
+            }
+        }
+
+        async function loadData(resetPage = true) {
+            if (resetPage) currentPage = 1;
+            const params = filterParams({
                 page: String(currentPage),
                 page_size: String(pageSize),
             });
-            const recordType = document.getElementById('record_type').value;
-            if (recordType !== '') {
-                params.set('record_type', recordType);
-            }
             document.getElementById('meta').textContent = '查询中...';
             try {
                 const resp = await fetch('/admin/hold/api/holding_records?' + params.toString());
@@ -728,20 +754,17 @@
         }
 
         function exportXlsx() {
-            const params = new URLSearchParams({
-                product_id: document.getElementById('product_id').value.trim(),
-                station: document.getElementById('station').value.trim(),
-                keyword: document.getElementById('keyword').value.trim(),
-            });
-            const recordType = document.getElementById('record_type').value;
-            if (recordType !== '') params.set('record_type', recordType);
-            window.location.href = '/admin/hold/api/holding_records/export?' + params.toString();
+            window.location.href = '/admin/hold/api/holding_records/export?' + filterParams().toString();
         }
-        document.addEventListener('DOMContentLoaded', () => loadData(true));
+        document.addEventListener('DOMContentLoaded', () => {
+            loadEngineers();
+            loadData(true);
+        });
         document.querySelectorAll('.filters input').forEach(el => {
             el.addEventListener('keyup', ev => { if (ev.key === 'Enter') loadData(true); });
         });
         document.getElementById('record_type').addEventListener('change', () => loadData(true));
+        document.getElementById('engineer_id').addEventListener('change', () => loadData(true));
         document.getElementById('fviModal').addEventListener('click', (e) => {
             if (e.target.id === 'fviModal') closeFviModal();
         });

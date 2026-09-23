@@ -1,7 +1,7 @@
 from app import db
 from app.models import User
 from app.controllers.auth_ctrl import normalize_login_password, password_matches
-from app.utils.auth_decorators import ROLE_NAMES
+from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_NAMES
 from app.utils.password_policy import user_must_change_password, validate_new_password
 
 ALLOWED_ROLES = set(ROLE_NAMES.keys())
@@ -112,6 +112,28 @@ def get_all_users(search="", sort_by="employee_no", order="asc"):
         db.session.rollback()
         return False, str(e), []
   
+def list_engineers():
+    """产品工程师名单（id / 工号 / 姓名），供 root 按待办筛选。"""
+    try:
+        users = (
+            User.query.filter(User.ROLE == ROLE_ENGINEER)
+            .order_by(User.EMPLOYEE_NO.asc(), User.ID.asc())
+            .all()
+        )
+        data = [
+            {
+                'id': user.ID,
+                'employee_no': user.EMPLOYEE_NO,
+                'name': user.NAME,
+            }
+            for user in users
+        ]
+        return True, '获取成功', data
+    except Exception as e:
+        db.session.rollback()
+        return False, str(e), []
+
+
 def add_user(data):
     """
     新增用户。密码须明文，校验字母+数字且至少 6 位后存 MD5 hex。
