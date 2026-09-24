@@ -40,23 +40,23 @@ class NormalizeYieldStationTest(unittest.TestCase):
 class LookupYieldTest(unittest.TestCase):
     def setUp(self):
         self.yield_map = {
-            ('P', 'W1', 'FA'): 80.0,
-            ('P', 'W1', 'WLT'): 90.0,
+            ('W1', 'FA'): 80.0,
+            ('W1', 'WLT'): 90.0,
         }
 
     def test_explicit_station_no_fallback(self):
-        self.assertEqual(_lookup_yield(self.yield_map, 'P', 'W1', 'WLT'), 90.0)
+        self.assertEqual(_lookup_yield(self.yield_map, 'W1', 'WLT'), 90.0)
         self.assertIsNone(_lookup_yield(
-            {('P', 'W1', 'FA'): 80.0}, 'P', 'W1', 'WLT',
+            {('W1', 'FA'): 80.0}, 'W1', 'WLT',
         ))
 
     def test_unspecified_prefers_fa(self):
-        self.assertEqual(_lookup_yield(self.yield_map, 'P', 'W1', None), 80.0)
+        self.assertEqual(_lookup_yield(self.yield_map, 'W1', None), 80.0)
 
 
 class PackYieldPayloadTest(unittest.TestCase):
     def test_wlt_empty_not_filled_by_fa(self):
-        yield_map = {('P', 'W1', 'FA'): 80.0}
+        yield_map = {('W1', 'FA'): 80.0}
         payload = _pack_yield_payload(
             'P', 'L', 'W1', ['W1'], yield_map, station='WLT',
         )
@@ -76,15 +76,18 @@ class QueryVwWaferYieldsTest(unittest.TestCase):
         with patch('app.controllers.hold_report_ctrl.db') as mock_db:
             mock_db.session = mock_session
             result = _query_vw_wafer_yields([('P', 'W1')])
-        self.assertEqual(result[('P', 'W1', 'WLT')], 90.1)
-        self.assertEqual(result[('P', 'W1', 'FA')], 80.2)
+        self.assertEqual(result[('W1', 'WLT')], 90.1)
+        self.assertEqual(result[('W1', 'FA')], 80.2)
+        params = mock_session.execute.call_args[0][1]
+        self.assertEqual(params['wafer_ids'], ['W1'])
+        self.assertNotIn('product_id', params)
 
 
 class GetWaferYieldBatchTest(unittest.TestCase):
     def test_batch_picks_requested_station(self):
         yield_map = {
-            ('PROD', 'W1', 'WLT'): None,
-            ('PROD', 'W1', 'FA'): 88.5,
+            ('W1', 'WLT'): None,
+            ('W1', 'FA'): 88.5,
         }
         with patch(
             'app.controllers.hold_report_ctrl._query_vw_wafer_yields',
@@ -113,3 +116,24 @@ class GetWaferYieldBatchTest(unittest.TestCase):
         self.assertEqual(by_key['W1|FA']['items'][0]['yield'], 88.5)
         self.assertEqual(by_key['W1|WLT']['station'], 'WLT')
         self.assertEqual(by_key['W1|FA']['station'], 'FA')
+
+    def test_wlt_yield_ignores_hold_product(self):
+        """FA 合批 hold 型号与 WLT 单片型号不同，仍按片号+站点取到良率。"""
+        yield_map = {('C194241-14', 'WLT'): 92.46}
+        with patch(
+            'app.controllers.hold_report_ctrl._query_vw_wafer_yields',
+            return_value=yield_map,
+        ):
+            ok, _msg, data = get_wafer_yield_batch([
+                {
+                    'key': 'C194241-14|WLT',
+                    'product_id': 'GC4103-3.5',
+                    'lot_id': 'C194241-1412',
+                    'wafer_id': 'C194241-14',
+                    'station': 'WLT',
+                },
+            ])
+        self.assertTrue(ok)
+        item = data['items'][0]
+        self.assertEqual(item['product_id'], 'GC4103-3.5')
+        self.assertEqual(item['items'][0]['yield'], 92.46)

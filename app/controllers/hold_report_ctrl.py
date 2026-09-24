@@ -664,12 +664,17 @@ def _normalize_yield_station(station=None, record_type=None, lot_id=None):
     return None
 
 
-def _lookup_yield(yield_map, product_id, wafer_id, station=None):
-    """指定站只取该站，不跨站回退；未指定时 FA 优先于 WLT（FVI 等无站场景）。"""
+def _lookup_yield(yield_map, wafer_id, station=None):
+    """指定站只取该站，不跨站回退；未指定时 FA 优先于 WLT（FVI 等无站场景）。
+
+    视图按 (WAFER_ID, STATION) 唯一，不按请求里的 PRODUCT_ID 过滤。
+    WLT 单片型号（如 GC4103-2.6）与 FA 合批 hold（如 GC4103-3.5）不同，
+    用 hold 型号会把同 lot 的 WLT 良率滤掉。
+    """
     if station:
-        return yield_map.get((product_id, wafer_id, station))
+        return yield_map.get((wafer_id, station))
     for st in ('FA', 'WLT'):
-        val = yield_map.get((product_id, wafer_id, st))
+        val = yield_map.get((wafer_id, st))
         if val is not None:
             return val
     return None
@@ -705,43 +710,38 @@ def _resolve_yield_wafer_ids(product_id, lot_id, wafer_id):
 
 
 def _query_vw_wafer_yields(lookups):
-    """lookups: iterable[(product_id, wafer_id)] → {(product_id, wafer_id, station): yield}。
+    """lookups: iterable[(product_id, wafer_id)] → {(wafer_id, station): yield}。
 
+    product_id 只用于接口入参校验，不参与 SQL。
     视图按 (WAFER_ID, STATION) 各保留最新一条；STATION 为 WLT / FA。
     """
-    grouped = {}
-    for product_id, wafer_id in lookups or []:
-        pid = str(product_id or '').strip()
+    wafer_ids = []
+    seen = set()
+    for _product_id, wafer_id in lookups or []:
         wid = str(wafer_id or '').strip()
-        if not pid or not wid:
+        if not wid or wid in seen:
             continue
-        grouped.setdefault(pid, [])
-        if wid not in grouped[pid]:
-            grouped[pid].append(wid)
+        seen.add(wid)
+        wafer_ids.append(wid)
 
     result = {}
+    if not wafer_ids:
+        return result
     sql = """
         SELECT WAFER_ID, STATION, YIELD
         FROM VW_WAFER_YIELD
-        WHERE PRODUCT_ID = :product_id
-          AND WAFER_ID IN :wafer_ids
+        WHERE WAFER_ID IN :wafer_ids
     """
-    for product_id, wafer_ids in grouped.items():
-        if not wafer_ids:
+    stmt = text(sql).bindparams(bindparam('wafer_ids', expanding=True))
+    rows = db.session.execute(stmt, {'wafer_ids': wafer_ids}).fetchall()
+    for wafer_id, station, yield_val in rows:
+        wid = str(wafer_id).strip() if wafer_id is not None else ''
+        if not wid:
             continue
-        stmt = text(sql).bindparams(bindparam('wafer_ids', expanding=True))
-        rows = db.session.execute(
-            stmt,
-            {'product_id': product_id, 'wafer_ids': wafer_ids},
-        ).fetchall()
-        for wafer_id, station, yield_val in rows:
-            wid = str(wafer_id).strip() if wafer_id is not None else ''
-            if not wid:
-                continue
-            st = _normalize_yield_station(station)
-            if not st:
-                continue
-            result[(product_id, wid, st)] = _to_yield_number(yield_val)
+        st = _normalize_yield_station(station)
+        if not st:
+            continue
+        result[(wid, st)] = _to_yield_number(yield_val)
     return result
 
 
@@ -750,7 +750,7 @@ def _pack_yield_payload(product_id, lot_id, wafer_id, resolved_ids, yield_map, s
         {
             'wafer_id': wid,
             'station': station,
-            'yield': _lookup_yield(yield_map, product_id, wid, station),
+            'yield': _lookup_yield(yield_map, wid, station),
         }
         for wid in resolved_ids
     ]
@@ -766,7 +766,7 @@ def _pack_yield_payload(product_id, lot_id, wafer_id, resolved_ids, yield_map, s
 
 def get_wafer_yield(product_id, lot_id=None, wafer_id=None, station=None, record_type=None):
     """
-    按 product_id + 对齐后的 wafer_id 查询 VW_WAFER_YIELD。
+    按对齐后的 wafer_id 查询 VW_WAFER_YIELD（不按 product_id 过滤）。
     展示串（#03 / #01#02）需配合 lot_id 还原；多片按展开顺序返回，不聚合。
     station / record_type 用于挑选 WLT 或 FA；指定后不跨站回退。
     """
