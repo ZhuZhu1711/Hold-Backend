@@ -148,6 +148,141 @@ def _system_user_id():
     return int(getattr(Config, 'SYSTEM_USER_ID', 1) or 1)
 
 
+def owner_slot(eng_id):
+    """型号绑定为空时，流转负责人与建单缺省一致，记为系统用户。"""
+    if eng_id is None or str(eng_id).strip() == '':
+        return _system_user_id()
+    return int(eng_id)
+
+
+def transfer_open_holds_on_rebind(product_code, from_owner_id, to_owner_id, note):
+    """
+    型号改绑：未关闭且当前负责人仍是原工程师的单，插入 DISPOSE=7 交给新工程师。
+    不改 STATUS，不提交事务。返回转交条数。
+    """
+    product_code = str(product_code or '').strip()
+    from_owner_id = int(from_owner_id)
+    to_owner_id = int(to_owner_id)
+    if not product_code or from_owner_id == to_owner_id:
+        return 0
+
+    note_text = (note or '').strip()
+    if len(note_text) > DISPOSE_NOTE_MAX_LEN:
+        note_text = note_text[:DISPOSE_NOTE_MAX_LEN]
+
+    record_table = _record_table()
+    circ_table = _circ_table()
+    rows = db.session.execute(
+        text(f"""
+            SELECT r.ID
+            FROM {record_table} r
+            INNER JOIN {circ_table} c
+                ON c.ID = r.LAST_CIRCULATION_ID
+            WHERE r.PRODUCT_ID = :product_id
+              AND NVL(r.STATUS, 0) <> :closed
+              AND c.NEXT_OWNER_ID = :from_owner
+        """),
+        {
+            'product_id': product_code,
+            'closed': DISPOSE_CLOSE,
+            'from_owner': from_owner_id,
+        },
+    ).fetchall()
+
+    record_ids = [int(row[0]) for row in rows if row[0] is not None]
+    for rid in record_ids:
+        circ_id = _next_positive_seq(_circ_seq())
+        db.session.execute(
+            text(f"""
+                INSERT INTO {circ_table} (
+                    ID,
+                    HOLD_RECORD_ID,
+                    DISPOSED_OWNER_ID,
+                    DISPOSE,
+                    NEXT_OWNER_ID,
+                    DISPOSE_SOURCE,
+                    DISPOSE_DTTM,
+                    DISPOSE_TYPE,
+                    DISPOSE_DETAIL,
+                    DISPOSE_NOTE,
+                    DISPOSE_MANUAL_NOTE
+                ) VALUES (
+                    :circ_id,
+                    :hold_record_id,
+                    :disposed_owner_id,
+                    :dispose,
+                    :next_owner_id,
+                    :dispose_source,
+                    SYSDATE,
+                    :dispose_type,
+                    NULL,
+                    :dispose_note,
+                    NULL
+                )
+            """),
+            {
+                'circ_id': circ_id,
+                'hold_record_id': rid,
+                'disposed_owner_id': _system_user_id(),
+                'dispose': DISPOSE_TRANSFER,
+                'next_owner_id': to_owner_id,
+                'dispose_source': 'SYS',
+                'dispose_type': DISPOSE_TRANSFER,
+                'dispose_note': note_text or None,
+            },
+        )
+        db.session.execute(
+            text(f"""
+                UPDATE {record_table}
+                SET LAST_CIRCULATION_ID = :circ_id
+                WHERE ID = :rid
+            """),
+            {'circ_id': circ_id, 'rid': rid},
+        )
+    return len(record_ids)
+
+
+def find_stale_engineer_holds():
+    """
+    存量：未关闭、当前负责人不是生产、且不等于该型号现在的工程师（空绑定按系统用户）。
+    返回 [{record_id, product_id, from_owner, to_owner}, ...]。
+    """
+    record_table = _record_table()
+    circ_table = _circ_table()
+    system_id = _system_user_id()
+    rows = db.session.execute(
+        text(f"""
+            SELECT
+                r.ID,
+                r.PRODUCT_ID,
+                c.NEXT_OWNER_ID AS FROM_OWNER,
+                NVL(p.PRO_ENG_ID, :system_id) AS TO_OWNER
+            FROM {record_table} r
+            INNER JOIN {circ_table} c
+                ON c.ID = r.LAST_CIRCULATION_ID
+            INNER JOIN PRODUCT_INFO p
+                ON p.PRODUCT_ID = r.PRODUCT_ID
+            WHERE NVL(r.STATUS, 0) <> :closed
+              AND c.NEXT_OWNER_ID <> :prod_id
+              AND c.NEXT_OWNER_ID <> NVL(p.PRO_ENG_ID, :system_id)
+        """),
+        {
+            'closed': DISPOSE_CLOSE,
+            'prod_id': _production_op_id(),
+            'system_id': system_id,
+        },
+    ).fetchall()
+    items = []
+    for row in rows:
+        items.append({
+            'record_id': int(row[0]),
+            'product_id': row[1],
+            'from_owner': int(row[2]),
+            'to_owner': int(row[3]),
+        })
+    return items
+
+
 def _record_table():
     return resolve_hold_record_table()
 

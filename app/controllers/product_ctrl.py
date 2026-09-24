@@ -3,6 +3,22 @@ from app.models.user import User
 from app import db
 from datetime import datetime
 
+from app.controllers.dispose_ctrl import (
+    owner_slot,
+    transfer_open_holds_on_rebind,
+)
+
+
+def _engineer_label(eng_id, slot_id):
+    if eng_id is None or str(eng_id).strip() == '':
+        return '系统'
+    user = User.query.get(eng_id)
+    if user and user.NAME:
+        return f'{user.NAME}({slot_id})'
+    if int(slot_id) == owner_slot(None):
+        return '系统'
+    return str(slot_id)
+
 def get_all_products(search=""):
     """
     获取产品列表，支持按产品ID搜索，并按ID倒序排列
@@ -55,15 +71,27 @@ def update_product(product_id, data):
         if 'gross_die' in data:
             product.GROSS_DIE = data['gross_die']
             
-        # 2. 更新 工程师绑定 (PRO_ENG_ID)
+        # 2. 更新 工程师绑定 (PRO_ENG_ID)。绑定变化时，把仍挂在原工程师名下的未关闭单转给新人。
         if 'engineer_id' in data:
-            # 如果传了ID，检查该用户是否存在
             eng_id = data['engineer_id']
             if eng_id:
                 user = User.query.get(eng_id)
                 if not user:
+                    db.session.rollback()
                     return False, "指定的工程师用户不存在"
-            product.PRO_ENG_ID = eng_id
+            old_raw = product.PRO_ENG_ID
+            new_raw = eng_id if eng_id else None
+            old_slot = owner_slot(old_raw)
+            new_slot = owner_slot(new_raw)
+            product.PRO_ENG_ID = new_raw
+            if old_slot != new_slot:
+                note = (
+                    f'型号工程师由 {_engineer_label(old_raw, old_slot)} '
+                    f'调整为 {_engineer_label(new_raw, new_slot)}'
+                )
+                transfer_open_holds_on_rebind(
+                    product.PRODUCT_ID, old_slot, new_slot, note,
+                )
 
         # 3. 更新时间
         product.UPDATE_DTTM = datetime.now().date()
