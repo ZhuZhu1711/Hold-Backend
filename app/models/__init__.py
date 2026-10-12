@@ -6,5 +6,6 @@ from .user import User
 from .product import ProductInfo
 from .rawdata import TestWafer, TestBincode
 from .client_error import ClientError
+from .defect_code_sync_log import DefectCodeSyncLog
 
-__all__ = ['User', 'ProductInfo', 'ClientError', 'db']
+__all__ = ['User', 'ProductInfo', 'ClientError', 'DefectCodeSyncLog', 'db']

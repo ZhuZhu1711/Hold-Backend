@@ -2,6 +2,7 @@ import sys
 import os
 import argparse
 import signal
+import subprocess
 import threading
 from multiprocessing import freeze_support
 from cryptography import x509
@@ -27,7 +28,7 @@ if project_root_path not in sys.path:
 from app import create_app, db
 from app.config import Config
 # 直接从 routes 包中导入所有蓝图
-from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp, client_error_bp, software_bp, release_notes_bp
+from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp, client_error_bp, software_bp, release_notes_bp, defect_sync_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
 from app.backend_schedule.FT_HOLD_MERGE_sche import HoldMergeScheduler
 
@@ -51,6 +52,7 @@ app.register_blueprint(quality_bp)      # 质量部只读报表 (/qa/...)
 app.register_blueprint(client_error_bp)  # 客户端崩溃上报 (/api/client_errors)
 app.register_blueprint(software_bp)      # 客户端版本 SOFTWARE_INFO (/admin/software)
 app.register_blueprint(release_notes_bp) # 版本说明 Markdown（全员可读 / root 上传）
+app.register_blueprint(defect_sync_bp)   # 缺陷代码同步记录（/admin/defect-sync）
 
 # ==========================================
 # 程序入口
@@ -76,19 +78,40 @@ def _wait_until_stop(stop_event, server_thread):
         stop_event.set()
 
 
-def _shutdown(schedulers):
+def _shutdown(schedulers, defect_sync_proc=None):
     print('\n正在退出...')
     for sched in schedulers:
         try:
             sched.stop()
         except Exception:
             pass
+    if defect_sync_proc is not None and defect_sync_proc.poll() is None:
+        defect_sync_proc.terminate()
     # Waitress / FTP 等阻塞调用在 Windows 上经常无法干净 join
     os._exit(0)
 
 
+def _spawn_defect_sync_process():
+    """release 才启动。子进程单独 thick 模式连 RPTDB，避免改掉 Web 的 thin 连接。"""
+    if getattr(sys, 'frozen', False):
+        cmd = [sys.executable, '--defect-sync', '--mode', 'release']
+        cwd = os.getcwd()
+    else:
+        script = os.path.join(
+            project_root_path, 'app', 'backend_schedule', 'FT_DEFECT_CODE_SYNC_sche.py',
+        )
+        cmd = [sys.executable, script, '--mode', 'release']
+        cwd = project_root_path
+    return subprocess.Popen(cmd, cwd=cwd)
+
+
 if __name__ == '__main__':
     freeze_support()
+    if '--defect-sync' in sys.argv:
+        sys.argv = [arg for arg in sys.argv if arg != '--defect-sync']
+        from app.backend_schedule.FT_DEFECT_CODE_SYNC_sche import main as defect_sync_main
+        defect_sync_main()
+        raise SystemExit(0)
     parser = argparse.ArgumentParser(description='启动 Flask 应用，可选 debug/release 模式。默认 release。')
     parser.add_argument(
         '--mode',
@@ -119,6 +142,7 @@ if __name__ == '__main__':
     stop_event = threading.Event()
     _install_interrupt_handlers(stop_event)
     schedulers = []
+    defect_sync_proc = None
 
     hold_merge_scheduler = HoldMergeScheduler()
     hold_merge_scheduler.start()
@@ -135,6 +159,11 @@ if __name__ == '__main__':
             schedulers.append(hold_predict_scheduler)
         else:
             print('HOLD_PREDICT_ENABLED=False，未启动可放行概率预测调度')
+        defect_sync_proc = _spawn_defect_sync_process()
+        print(
+            f'缺陷代码同步子进程已启动 pid={defect_sync_proc.pid}，'
+            f'每天 {getattr(Config, "DEFECT_SYNC_AT", "02:00")} 执行'
+        )
         server = threading.Thread(
             target=lambda: serve(app, host='0.0.0.0', port=50001),
             name='waitress',
@@ -152,5 +181,5 @@ if __name__ == '__main__':
 
     server.start()
     _wait_until_stop(stop_event, server)
-    _shutdown(schedulers)
+    _shutdown(schedulers, defect_sync_proc)
  

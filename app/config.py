@@ -83,6 +83,23 @@ class Config:
     RAW_DATA_LOCAL_DIR = 'RAW_DATA'
     RAW_DATA_INTERVAL_MINUTES = 60
 
+    # 缺陷代码每日全量同步（RPTDB → DEFECT_CODE）。只在 release 子进程里跑。
+    # RPTDB 低于 12.1，子进程用 thick 模式；Web 进程不初始化 Instant Client。
+    RPTDB_DSN = '10.181.160.15:1521/RPTDB'
+    RPTDB_USER = 'ZNZZ_USER'
+    RPTDB_PASSWORD = 'Znz3GvpcKU!PGV'
+    ORACLE_CLIENT_LIB_DIR = os.environ.get(
+        'ORACLE_CLIENT_LIB_DIR',
+        r'E:\workspace\AutoHoldSys\oracle_dll',
+    )
+    DEFECT_SYNC_AT = os.environ.get('DEFECT_SYNC_AT', '02:00')
+    DEFECT_SYNC_FT_CLASSIFY = '1_PD_DCG_DC_2_DN'
+    DEFECT_SYNC_WLT_CLASSIFY = '1_PD_DCG_DC_2_DN_WLT'
+    # 源表错误：WLT 分类下的该型号不参与同步，只保留 FT 分类的配置。
+    DEFECT_SYNC_IGNORE = (
+        ('1_PD_DCG_DC_2_DN_WLT', 'GC3003-3.5'),
+    )
+
     # Hold info 合并为 hold_record 的定时任务配置
     HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if argv_is_debug_mode() else 'FT_HOLD_INFO'
     HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if argv_is_debug_mode() else 'FT_HOLD_RECORD'

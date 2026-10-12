@@ -57,8 +57,8 @@
                     </ul>
                 </details>
             </li>
-            <li class="nav-group {% if menu in ['users', 'products', 'defects', 'software'] %}has-active{% endif %}">
-                <details {% if menu in ['users', 'products', 'defects', 'software'] %}open{% endif %}>
+            <li class="nav-group {% if menu in ['users', 'products', 'defects', 'defect_sync', 'software'] %}has-active{% endif %}">
+                <details {% if menu in ['users', 'products', 'defects', 'defect_sync', 'software'] %}open{% endif %}>
                     <summary>系统管理</summary>
                     <ul class="nav-sub">
                         <li class="{% if menu == 'users' %}active{% endif %}">
@@ -69,6 +69,9 @@
                         </li>
                         <li class="{% if menu == 'defects' %}active{% endif %}">
                             <a href="/admin/defects">缺陷管理</a>
+                        </li>
+                        <li class="{% if menu == 'defect_sync' %}active{% endif %}">
+                            <a href="/admin/defect-sync">缺陷同步记录</a>
                         </li>
                         <li class="{% if menu == 'software' %}active{% endif %}">
                             <a href="/admin/software">客户端版本</a>

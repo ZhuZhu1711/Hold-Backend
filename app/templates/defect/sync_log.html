@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>缺陷同步记录</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
+        .main { flex: 1; padding: 24px; overflow: auto; }
+        .card {
+            background: #fff; border-radius: 8px; padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1 { font-size: 22px; margin-bottom: 6px; color: #222; }
+        .sub { color: #666; margin-bottom: 18px; font-size: 13px; }
+        .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+        .filters input, .filters select {
+            padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;
+        }
+        .filters input { min-width: 220px; }
+        .btn {
+            padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
+            background: #007bff; color: #fff; font-size: 14px;
+        }
+        .btn:hover { background: #0069d9; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+        th { background: #f8f9fa; position: sticky; top: 0; }
+        .empty { padding: 40px; text-align: center; color: #888; }
+        .err { color: #b00020; font-size: 13px; margin-bottom: 12px; }
+        .tag {
+            display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px;
+            background: #e9ecef; color: #333;
+        }
+        .tag.ok { background: #e6f4ea; color: #137333; }
+        .tag.skip { background: #fff8e1; color: #8d6e00; }
+        .tag.fail { background: #fdecea; color: #b00020; }
+        .msg { max-width: 360px; white-space: pre-wrap; word-break: break-word; color: #444; }
+    </style>
+</head>
+<body>
+    {% set active_menu = 'defect_sync' %}
+    {% include '_admin_sidebar.html' %}
+
+    <main class="main">
+        <div class="card">
+            <h1>缺陷同步记录</h1>
+            <p class="sub">每天按型号全量同步 FT / WLT 缺陷配置。这里只显示记录，不触发同步。最多 200 条，时间倒序。</p>
+            <div class="filters">
+                <input type="text" id="product_code" placeholder="型号" autocomplete="off">
+                <select id="prod_line">
+                    <option value="">全部产线</option>
+                    <option value="FT">FT</option>
+                    <option value="WLT">WLT</option>
+                </select>
+                <select id="status">
+                    <option value="">全部结果</option>
+                    <option value="OK">成功</option>
+                    <option value="SKIPPED">未建档</option>
+                    <option value="FAILED">失败</option>
+                </select>
+                <button type="button" class="btn" id="search_btn">查询</button>
+            </div>
+            <div id="error_msg" class="err" style="display:none;"></div>
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>型号</th>
+                            <th>产线</th>
+                            <th>结果</th>
+                            <th>源行数</th>
+                            <th>新增</th>
+                            <th>更新</th>
+                            <th>删除</th>
+                            <th>冲突</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table_body"></tbody>
+                </table>
+            </div>
+            <div id="empty_msg" class="empty" style="display:none;">暂无同步记录</div>
+        </div>
+    </main>
+<script>
+    const STATUS_TEXT = { OK: '成功', SKIPPED: '未建档', FAILED: '失败' };
+
+    document.getElementById('search_btn').addEventListener('click', loadRows);
+    document.getElementById('product_code').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') loadRows();
+    });
+    document.addEventListener('DOMContentLoaded', loadRows);
+
+    function loadRows() {
+        const params = new URLSearchParams();
+        const product = document.getElementById('product_code').value.trim();
+        const line = document.getElementById('prod_line').value;
+        const status = document.getElementById('status').value;
+        if (product) params.set('product_code', product);
+        if (line) params.set('prod_line', line);
+        if (status) params.set('status', status);
+        const errorBox = document.getElementById('error_msg');
+        errorBox.style.display = 'none';
+        fetch('/admin/defect-sync/api?' + params.toString())
+            .then(function (resp) { return resp.json().then(function (body) { return { ok: resp.ok, body: body }; }); })
+            .then(function (result) {
+                if (!result.ok || !result.body || result.body.code !== 200) {
+                    showError((result.body && result.body.msg) || '查询失败');
+                    renderRows([]);
+                    return;
+                }
+                renderRows((result.body.data && result.body.data.rows) || []);
+            })
+            .catch(function () {
+                showError('查询失败');
+                renderRows([]);
+            });
+    }
+
+    function showError(text) {
+        const errorBox = document.getElementById('error_msg');
+        errorBox.textContent = text;
+        errorBox.style.display = 'block';
+    }
+
+    function renderRows(rows) {
+        const body = document.getElementById('table_body');
+        const empty = document.getElementById('empty_msg');
+        body.innerHTML = '';
+        if (!rows.length) {
+            empty.style.display = 'block';
+            return;
+        }
+        empty.style.display = 'none';
+        rows.forEach(function (row) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = [
+                cell(row.run_at),
+                cell(row.product_code),
+                cell(row.prod_line),
+                statusCell(row.status),
+                cell(row.src_rows),
+                cell(row.inserted),
+                cell(row.updated),
+                cell(row.deleted),
+                cell(row.conflicts),
+                '<td class="msg"></td>'
+            ].join('');
+            tr.querySelector('.msg').textContent = row.message || '';
+            body.appendChild(tr);
+        });
+    }
+
+    function cell(value) {
+        return '<td>' + escapeHtml(value == null ? '' : String(value)) + '</td>';
+    }
+
+    function statusCell(status) {
+        const text = STATUS_TEXT[status] || status || '';
+        const kind = status === 'OK' ? 'ok' : (status === 'FAILED' ? 'fail' : (status === 'SKIPPED' ? 'skip' : ''));
+        return '<td><span class="tag ' + kind + '">' + escapeHtml(text) + '</span></td>';
+    }
+
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+</script>
+</body>
+</html>
