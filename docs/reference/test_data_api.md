@@ -222,7 +222,7 @@ FTP 下载 FTP_PATH 对应文件到本地临时目录
 
 ### 7.1 `GET /api/raw_data/mes_defect_bin`
 
-MES：`LOT_ID` + `LINE_TYPE` → `LOT_RRN`，再筛 `BIN_NAME`（默认 `F`），只返回 `DEFECT_CODE`、`QTY`。同一 code 多行保留第一条；`has_duplicate` / `duplicate_codes` 告知调用方是否出现过重复。
+MES：`LOT_ID` + `LINE_TYPE` → `LOT_RRN`，不传 `bin_name` 时包含全部 `BIN_NAME`，只返回 `DEFECT_CODE`、`QTY`。`TRANSACTION_TIME` 是每一遍测试的时间，只保留最新一遍的 CODE 列表，更早遍次整表丢弃。最新这一遍里同一 code 多行保留先遇到的一条；`has_duplicate` / `duplicate_codes` 只统计这一遍内部的重复。
 
 **Query**
 
@@ -230,7 +230,7 @@ MES：`LOT_ID` + `LINE_TYPE` → `LOT_RRN`，再筛 `BIN_NAME`（默认 `F`）�
 | --- | --- | --- | --- |
 | `lot_id` | 是 | | MES `LOT_ID`，如 `C200161-027` |
 | `line_type` | 否 | `FT` | MES `LINE_TYPE` |
-| `bin_name` | 否 | `F` | MES `BIN_NAME` |
+| `bin_name` | 否 | 空（全部 BIN） | 传入时才按 MES `BIN_NAME` 过滤 |
 
 ```http
 GET /api/raw_data/mes_defect_bin?lot_id=C200161-027 HTTP/1.1
@@ -245,7 +245,7 @@ GET /api/raw_data/mes_defect_bin?lot_id=C200161-027 HTTP/1.1
   "data": {
     "lot_id": "C200161-027",
     "line_type": "FT",
-    "bin_name": "F",
+    "bin_name": "",
     "qty": 12,
     "items": [
       {"defect_code": "xxx", "qty": 7},
@@ -257,7 +257,7 @@ GET /api/raw_data/mes_defect_bin?lot_id=C200161-027 HTTP/1.1
 }
 ```
 
-`qty` 为去重后数量之和。缺 `lot_id` → HTTP 400；MES 查询失败 → HTTP 500。
+`qty` 为去重后数量之和。`fail_qty` 只含 `BIN_NAME=F`，良率按它扣不良。缺 `lot_id` → HTTP 400；MES 查询失败 → HTTP 500。
 
 ---
 
@@ -265,5 +265,6 @@ GET /api/raw_data/mes_defect_bin?lot_id=C200161-027 HTTP/1.1
 
 | 日期 | 说明 |
 | --- | --- |
+| 2026-10-12 | `/api/raw_data/mes_defect_bin` 按 `TRANSACTION_TIME` 只保留最新一遍测试的 CODE 列表 |
 | 2026-09-02 | 增加 `/api/raw_data/mes_defect_bin`；附录补充 yield / defect_bincode |
 | 2026-08-03 | 初版：补充 `/api/test_data/bysite` 对接说明 |

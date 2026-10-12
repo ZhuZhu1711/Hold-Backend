@@ -163,48 +163,95 @@ def get_latest_defect_bincodes(wafer_id, operation_id, sql_trace=None):
     return True, '获取成功', data
 
 
-def get_mes_defect_bin_qty(lot_id, line_type='FT', bin_name='F'):
+def _latest_transaction_time(rows):
+    """N 遍测试里最新的 TRANSACTION_TIME。全空时返回 None。"""
+    latest = None
+    for item in rows:
+        txn_time = item.get('transaction_time')
+        if txn_time is None:
+            continue
+        if latest is None:
+            latest = txn_time
+            continue
+        try:
+            if txn_time > latest:
+                latest = txn_time
+        except TypeError:
+            continue
+    return latest
+
+
+def get_mes_defect_bin_qty(lot_id, line_type='FT', bin_name=''):
     """
-    从 MES 查询指定 lot 的缺陷 BIN 数量（BIN_NAME 默认 F）。
-    按 DEFECT_CODE 去重，重复时保留第一条；has_duplicate 标明是否出现过重复。
+    从 MES 查询指定 lot 的缺陷 BIN 数量。
+    TRANSACTION_TIME 是每一遍测试的时间：只保留最新一遍的 CODE 列表。
+    bin_name 为空时包含该遍全部 BIN_NAME（F/HA/MA 等）；传入时只留该 BIN。
+    这一遍里同一 code 多行时保留先遇到的一条。
+    has_duplicate 只统计最新这一遍内部的重复。
+    fail_qty 只加 BIN_NAME=F 的数量，其余 BIN 仍在 items 里展示，但不算不良。
 
     Returns:
         (True, msg, data) 或 (False, msg, None)
-        data: {lot_id, line_type, bin_name, qty, items, has_duplicate, duplicate_codes}
+        data: {lot_id, line_type, bin_name, qty, fail_qty, items, has_duplicate, duplicate_codes}
     """
     if lot_id is None or not str(lot_id).strip():
         return False, '请指定 lot_id', None
 
     lot_id = str(lot_id).strip()
     line_type = (str(line_type).strip() if line_type is not None else '') or 'FT'
-    bin_name = (str(bin_name).strip() if bin_name is not None else '') or 'F'
+    bin_name = str(bin_name).strip() if bin_name is not None else ''
 
     rows = query_mes_defect_bin_qty(lot_id, line_type=line_type, bin_name=bin_name)
     if rows is None:
         return False, '查询 MES 缺陷 BIN 失败', None
 
+    latest_time = _latest_transaction_time(rows)
     seen = {}
     duplicate_codes = []
     for item in rows:
         code = item.get('defect_code') or ''
         if not code:
             continue
+        txn_time = item.get('transaction_time')
+        if latest_time is None:
+            if txn_time is not None:
+                continue
+        elif txn_time != latest_time:
+            continue
+        qty_value = int(item.get('qty') or 0)
         if code in seen:
             if code not in duplicate_codes:
                 duplicate_codes.append(code)
             continue
         seen[code] = {
             'defect_code': code,
-            'qty': int(item.get('qty') or 0),
+            'qty': qty_value,
+            'bin_name': item.get('bin_name') or '',
         }
 
-    items = list(seen.values())
+    items = [
+        {
+            'defect_code': item['defect_code'],
+            'qty': item['qty'],
+            'bin_name': item.get('bin_name') or '',
+        }
+        for item in sorted(
+            seen.values(),
+            key=lambda row: (-int(row.get('qty') or 0), row.get('defect_code') or ''),
+        )
+    ]
     qty = sum(int(item.get('qty') or 0) for item in items)
+    fail_qty = sum(
+        int(item.get('qty') or 0)
+        for item in items
+        if str(item.get('bin_name') or '').strip().upper() == 'F'
+    )
     return True, '获取成功', {
         'lot_id': lot_id,
         'line_type': line_type,
         'bin_name': bin_name,
         'qty': qty,
+        'fail_qty': fail_qty,
         'items': items,
         'has_duplicate': bool(duplicate_codes),
         'duplicate_codes': duplicate_codes,

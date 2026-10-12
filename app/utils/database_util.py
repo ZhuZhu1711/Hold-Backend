@@ -1934,18 +1934,21 @@ def query_fvi_defect_details(lot_id: str, line_type: str = 'FT'):
         connection.close()
 
 
-def query_mes_defect_bin_qty(lot_id: str, line_type: str = 'FT', bin_name: str = 'F'):
+def query_mes_defect_bin_qty(lot_id: str, line_type: str = 'FT', bin_name: str = ''):
     """
     MES 缺陷 BIN 数量（DB link）。
-    SELECT DEFECT_CODE, QTY
+    SELECT DEFECT_CODE, QTY, TRANSACTION_TIME, BIN_NAME
       FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
      WHERE d.LOT_RRN = (
            SELECT l.LOT_RRN FROM MESPROD.LOT@MES16019 l
             WHERE l.LOT_ID = :lot_id AND l.LINE_TYPE = :line_type
      )
-       AND d.BIN_NAME = :bin_name
 
-    返回 list[{defect_code, qty}]（未去重）；失败返回 None。
+    bin_name 为空时不按 BIN_NAME 过滤（同一遍测试的 F/HA/MA 都要）。
+    传入时才加 AND d.BIN_NAME = :bin_name。
+
+    返回 list[{defect_code, qty, transaction_time, bin_name}]（含各遍测试）；失败返回 None。
+    取哪一遍由 get_mes_defect_bin_qty 决定：只留最新 TRANSACTION_TIME 的 CODE 列表。
     """
     lot_id = (lot_id or '').strip()
     if not lot_id:
@@ -1953,9 +1956,10 @@ def query_mes_defect_bin_qty(lot_id: str, line_type: str = 'FT', bin_name: str =
         return None
 
     line_type = (line_type or 'FT').strip() or 'FT'
-    bin_name = (bin_name or 'F').strip() or 'F'
-    sql = """
-        SELECT DEFECT_CODE, QTY
+    bin_name = (bin_name or '').strip()
+    bin_clause = 'AND d.BIN_NAME = :bin_name' if bin_name else ''
+    sql = f"""
+        SELECT DEFECT_CODE, QTY, TRANSACTION_TIME, BIN_NAME
         FROM MESPROD.DEFECT_BIN_RELATION_H@MES16019 d
         WHERE d.LOT_RRN = (
             SELECT l.LOT_RRN
@@ -1963,14 +1967,15 @@ def query_mes_defect_bin_qty(lot_id: str, line_type: str = 'FT', bin_name: str =
             WHERE l.LOT_ID = :lot_id
               AND l.LINE_TYPE = :line_type
         )
-          AND d.BIN_NAME = :bin_name
-        ORDER BY QTY DESC NULLS LAST, DEFECT_CODE
+          {bin_clause}
+        ORDER BY TRANSACTION_TIME DESC NULLS LAST, QTY DESC NULLS LAST, DEFECT_CODE
     """
     params = {
         'lot_id': lot_id,
         'line_type': line_type,
-        'bin_name': bin_name,
     }
+    if bin_name:
+        params['bin_name'] = bin_name
 
     connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
     try:
@@ -1978,7 +1983,7 @@ def query_mes_defect_bin_qty(lot_id: str, line_type: str = 'FT', bin_name: str =
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             result = []
-            for code_raw, qty in rows:
+            for code_raw, qty, txn_time, row_bin in rows:
                 if code_raw is None:
                     continue
                 code = str(code_raw).strip()
@@ -1987,6 +1992,8 @@ def query_mes_defect_bin_qty(lot_id: str, line_type: str = 'FT', bin_name: str =
                 result.append({
                     'defect_code': code,
                     'qty': int(qty) if qty is not None else 0,
+                    'transaction_time': txn_time,
+                    'bin_name': str(row_bin).strip() if row_bin is not None else '',
                 })
             return result
     except Exception as e:

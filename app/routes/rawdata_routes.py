@@ -71,17 +71,19 @@ def query_latest_defect_bincode():
 @rawdata_bp.route('/mes_defect_bin', methods=['GET'])
 def query_mes_defect_bin():
     """
-    从 MES 查询缺陷 BIN 数量（仅 DEFECT_CODE + QTY，BIN_NAME 默认 F）。
-    按 code 去重；has_duplicate / duplicate_codes 标明是否出现过重复。
+    从 MES 查询缺陷 BIN 数量（仅 DEFECT_CODE + QTY）。
+    不传 bin_name 时包含最新一遍测试的全部 BIN_NAME。
+    TRANSACTION_TIME 为每一遍测试时间，只返回最新一遍的 CODE 列表。
+    这一遍内 code 重复时留先遇到的一条；has_duplicate / duplicate_codes 只统计这一遍。
 
     Query:
         lot_id     必填（MES LOT_ID，如 C200161-027）
         line_type  可选，默认 FT
-        bin_name   可选，默认 F
+        bin_name   可选，不传则不按 BIN_NAME 过滤
     """
     lot_id = request.args.get('lot_id', '').strip()
     line_type = request.args.get('line_type', 'FT').strip() or 'FT'
-    bin_name = request.args.get('bin_name', 'F').strip() or 'F'
+    bin_name = request.args.get('bin_name', '').strip()
 
     success, msg, data = get_mes_defect_bin_qty(
         lot_id, line_type=line_type, bin_name=bin_name,
