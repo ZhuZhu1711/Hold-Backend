@@ -87,6 +87,7 @@ def api_dispose():
     downgrades = data.get('downgrades')
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
+    extra_samples = data.get('extra_samples')
     wafer_actions = data.get('wafer_actions')
     confirm_interval = data.get('confirm_interval')
 
@@ -113,6 +114,7 @@ def api_dispose():
             downgrades=downgrades,
             retest_grades=retest_grades,
             retest_code=retest_code,
+            extra_samples=extra_samples,
             wafer_actions=wafer_actions,
             confirm_interval=confirm_interval,
         )
@@ -128,6 +130,7 @@ def api_dispose():
             downgrades=downgrades,
             retest_grades=retest_grades,
             retest_code=retest_code,
+            extra_samples=extra_samples,
             wafer_actions=wafer_actions,
             confirm_interval=confirm_interval,
         )

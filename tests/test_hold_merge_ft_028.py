@@ -5,7 +5,6 @@ import unittest
 
 from app.backend_schedule.FT_HOLD_MERGE_sche import (
     RECORD_TYPE_FT,
-    RECORD_TYPE_FVI,
     build_rough_hold_records,
     resolve_record_type,
 )
@@ -104,21 +103,10 @@ class FpqcFutureHoldSkipTest(unittest.TestCase):
 
 
 class FaoiBackAqlHoldFviTest(unittest.TestCase):
-    def test_aql_faoi_back_is_fvi_regardless_of_product(self):
-        self.assertEqual(
-            resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FAOI-BACK'),
-            RECORD_TYPE_FVI,
-        )
-        self.assertEqual(
-            resolve_record_type('OTHER', 'AQL_HOLD', 'faoi-back'),
-            RECORD_TYPE_FVI,
-        )
-
-    def test_aql_other_station_still_ft(self):
-        self.assertEqual(
-            resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FATE-FA'),
-            RECORD_TYPE_FT,
-        )
+    def test_aql_is_not_merged(self):
+        self.assertIsNone(resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FAOI-BACK'))
+        self.assertIsNone(resolve_record_type('OTHER', 'AQL_HOLD', 'faoi-back'))
+        self.assertIsNone(resolve_record_type('PROD-3.5', 'AQL_HOLD', 'FATE-FA'))
 
     def test_023_faoi_back_stays_ft(self):
         self.assertEqual(
@@ -126,17 +114,13 @@ class FaoiBackAqlHoldFviTest(unittest.TestCase):
             RECORD_TYPE_FT,
         )
 
-    def test_aql_faoi_back_builds_fvi_record(self):
+    def test_aql_rows_are_skipped(self):
         records, skipped = build_rough_hold_records([
             _row(1, 'AQL_HOLD', station='FAOI-BACK'),
+            _row(2, 'AQL_HOLD', station='FATE-FA'),
         ])
-        self.assertEqual(skipped, [])
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0].record_type, RECORD_TYPE_FVI)
-        row = records[0].to_record_dict()
-        self.assertEqual(row['RECORD_TYPE'], RECORD_TYPE_FVI)
-        self.assertEqual(row['HOLD_CODE'], 'AQL_HOLD')
-        self.assertEqual(row['STATION'], 'FAOI-BACK')
+        self.assertEqual(records, [])
+        self.assertEqual(skipped, [1, 2])
 
 
 if __name__ == '__main__':

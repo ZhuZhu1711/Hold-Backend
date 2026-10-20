@@ -79,9 +79,17 @@
             padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
             font-size: 13px; width: 100%;
         }
-        .dg-row input:disabled, .dg-row input[readonly] {
+        .dg-row input:disabled,         .dg-row input[readonly] {
             background: #e9ecef; color: #555; cursor: not-allowed;
         }
+        .es-row {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;
+        }
+        .es-row input {
+            padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 13px; width: 100%;
+        }
+        .es-row input[readonly] { background: #e9ecef; color: #555; }
         .note-select option { max-width: 100%; }
         .btn {
             padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer;
@@ -153,6 +161,7 @@
         const DISPOSE_RELEASE = 1;
         const DISPOSE_DOWNGRADE = 2;
         const DISPOSE_RETEST = 3;
+        const DISPOSE_EXTRA_SAMPLE = 4;
         const DISPOSE_ANALYZE = 5;
         const RETEST_CODES_RE = /^(@\d+)+$/;
 
@@ -186,9 +195,13 @@
                 codes = [DISPOSE_RELEASE, DISPOSE_DOWNGRADE];
             } else {
                 codes = [DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_ANALYZE];
+                if (record.IS_AQL_HOLD) codes.push(DISPOSE_EXTRA_SAMPLE);
             }
             if (isWlt()) {
-                return codes.filter(c => c !== DISPOSE_ANALYZE);
+                codes = codes.filter(c => c !== DISPOSE_ANALYZE);
+            }
+            if (isWlt() || afterAnalyze() || !record.IS_AQL_HOLD) {
+                codes = codes.filter(c => c !== DISPOSE_EXTRA_SAMPLE);
             }
             return codes;
         }
@@ -209,10 +222,12 @@
             }
             const d = selectedDispose();
             document.getElementById('panelEngNote').classList.toggle(
-                'hidden', !(d === DISPOSE_RELEASE || d === DISPOSE_DOWNGRADE)
+                'hidden', !(d === DISPOSE_RELEASE || d === DISPOSE_DOWNGRADE || d === DISPOSE_EXTRA_SAMPLE)
             );
             document.getElementById('panelDowngrade').classList.toggle('hidden', d !== DISPOSE_DOWNGRADE);
             document.getElementById('panelRetest').classList.toggle('hidden', d !== DISPOSE_RETEST);
+            const extra = document.getElementById('panelExtra');
+            if (extra) extra.classList.toggle('hidden', d !== DISPOSE_EXTRA_SAMPLE);
         }
 
         function syncWltEngNote() {
@@ -311,6 +326,51 @@
         function collectRetestGrades(name) {
             return Array.from(document.querySelectorAll(`input[name=${name}]:checked`))
                 .map(el => el.value);
+        }
+
+        function addExtraRow(grade, locked, can) {
+            const box = document.getElementById('extraRows');
+            if (!box) return;
+            const row = document.createElement('div');
+            row.className = 'es-row';
+            const dis = can ? '' : 'disabled';
+            const ro = locked ? 'readonly' : '';
+            row.innerHTML = `
+                <input class="es-grade" type="text" placeholder="等级" value="${esc(grade)}" ${ro} ${dis} />
+                <input class="es-qty" type="text" placeholder="数量（选填）" ${dis} />
+            `;
+            box.appendChild(row);
+        }
+
+        function fillExtraRows() {
+            const box = document.getElementById('extraRows');
+            if (!box) return;
+            box.innerHTML = '';
+            const can = !!record.CAN_DISPOSE;
+            if (grades.length) {
+                grades.forEach(g => addExtraRow(g.grade || '', true, can));
+            } else {
+                addExtraRow('', false, can);
+            }
+        }
+
+        function collectExtraSamples() {
+            const rows = [];
+            const seen = new Set();
+            for (const row of document.querySelectorAll('#extraRows .es-row')) {
+                const grade = (row.querySelector('.es-grade').value || '').trim();
+                const qty = (row.querySelector('.es-qty').value || '').trim();
+                if (!grade && !qty) continue;
+                if (!grade || !qty) return { error: '加抽须同时填写等级和数量', rows: [] };
+                if (!/^\d+$/.test(qty) || Number(qty) <= 0) {
+                    return { error: '加抽数量须为正整数', rows: [] };
+                }
+                const key = grade.toUpperCase();
+                if (seen.has(key)) return { error: `同一等级只能加抽一次: ${grade}`, rows: [] };
+                seen.add(key);
+                rows.push({ grade, qty: String(Number(qty)) });
+            }
+            return { error: '', rows };
         }
 
         function gradeChecksHtml(namePrefix) {
@@ -463,6 +523,7 @@
                     [DISPOSE_RELEASE, '放行'],
                     [DISPOSE_DOWNGRADE, '降级'],
                     [DISPOSE_RETEST, '重测'],
+                    [DISPOSE_EXTRA_SAMPLE, '加抽'],
                     [DISPOSE_ANALYZE, '可靠性分析'],
                 ].filter(([code]) => disposeAllowed(code)).map(([code, label], i) => {
                     const checked = i === 0 ? 'checked' : '';
@@ -490,6 +551,11 @@
                             </div>
                         </div>
                     </div>
+                    <div id="panelExtra" class="panel hidden">
+                        <p class="hint" style="margin-bottom:10px;">等级和数量选填。留空则不写加抽明细。填写时须同时给出等级和正整数数量。</p>
+                        <div id="extraRows"></div>
+                        <button type="button" class="btn btn-ghost btn-sm" id="addExtraBtn" ${can ? '' : 'disabled'}>添加等级</button>
+                    </div>
                     ${manualPanel}
                     ${actions}
                 `;
@@ -498,6 +564,11 @@
                     el.addEventListener('change', syncPanels);
                 });
                 grades.forEach(g => addDowngradeRow('dgRows', g.grade, g.grade));
+                fillExtraRows();
+                const addExtraBtn = document.getElementById('addExtraBtn');
+                if (addExtraBtn) {
+                    addExtraBtn.addEventListener('click', () => addExtraRow('', false, true));
+                }
                 syncPanels();
             }
 
@@ -586,6 +657,14 @@
                         return;
                     }
                     body.retest_grades = gs;
+                } else if (dispose === DISPOSE_EXTRA_SAMPLE) {
+                    const samples = collectExtraSamples();
+                    if (samples.error) {
+                        errEl.textContent = samples.error;
+                        return;
+                    }
+                    if (samples.rows.length) body.extra_samples = samples.rows;
+                    body.dispose_note = selectedEngNote() || null;
                 }
             }
 

@@ -36,7 +36,8 @@ class HoldInfoAreaSqlTest(unittest.TestCase):
         self.assertEqual(rows, [])
         sql = cursor.execute.call_args.args[0]
         self.assertEqual(sql.count('AREA = 0'), 2)
-        self.assertIn('HOLDING = 0', sql)
+        self.assertNotIn('HOLDING =', sql)
+        self.assertNotIn('HOLDING=', sql)
 
     @patch('app.utils.database_util.oracledb.connect')
     def test_linked_infos_require_area_zero(self, connect):

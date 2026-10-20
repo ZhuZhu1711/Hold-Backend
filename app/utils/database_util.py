@@ -176,17 +176,18 @@ def query_testlog_history(test_date: date):
 
 def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     """
-    查询指定表中在线且尚未关联 hold_record 的 hold_info
-    （AREA = 0、HOLDING = 0 且 HOLD_RECORD_ID 为 NULL/0）。
+    查询指定表中尚未关联 hold_record 的 hold_info
+    （AREA = 0 且 HOLD_RECORD_ID 为 NULL/0）。
+    HOLDING 不参与过滤：0（仍在 hold）与 1（MES 已解 hold）都捞，避免解 hold 早于合批导致漏单。
     其它 AREA 不属于本系统，不参与合批。
     HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
 
     仅捞取满足 dispose_api.md「处置单划分」的候选行：
-      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,028,AQL_HOLD),
-            STATION∉(FAOIFINISH,FFVI)，且排除 (AQL_HOLD + FAOI-BACK)
+      FT  : PRODUCT_ID LIKE '%-3.5', HOLD_CODE∈(023,024,025,027,028),
+            STATION∉(FAOIFINISH,FFVI)
       FVI : HOLD_CODE=023 + STATION∈(FAOIFINISH,FFVI)
-            或 HOLD_CODE=AQL_HOLD + STATION=FAOI-BACK
       WLT : PRODUCT_ID LIKE '%-2.6', HOLD_CODE∈(004,022), STATION=WOQC
+    AQL_HOLD 不参与合批（手提创建仍可直接写 record）。
     精确 RECORD_TYPE 仍由调用方按同样规则判定后写入 FT_HOLD_RECORD。
 
     为保证 MES 多条同 wafer 记录插入完整：固定排除 HOLD_DTTM 最新的那个
@@ -205,27 +206,22 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
         password=PWD,
         dsn=DSN
     )
-    # 仅本系统 AREA=0、待处理(NULL/0)；排除已关联(>0)与脏数据(-1)；
+    # 仅本系统 AREA=0、待处理(NULL/0)；排除已关联(>0)与脏数据(-1)。
+    # 不按 HOLDING 过滤：已解 hold（HOLDING=1）仍要合出 record。
     # 处置单划分三选一（与 resolve_record_type 保持一致）
     area_sql = hold_info_area_sql()
     base_filter = f"""
             {area_sql}
-            AND HOLDING = 0
             AND NVL(HOLD_RECORD_ID, 0) = 0
             AND (
                 (
                     PRODUCT_ID LIKE '%-3.5'
-                    AND HOLD_CODE IN ('023', '024', '025', '027', '028', 'AQL_HOLD')
+                    AND HOLD_CODE IN ('023', '024', '025', '027', '028')
                     AND STATION NOT IN ('FAOIFINISH', 'FFVI')
-                    AND NOT (HOLD_CODE = 'AQL_HOLD' AND STATION = 'FAOI-BACK')
                 )
                 OR (
                     HOLD_CODE = '023'
                     AND STATION IN ('FAOIFINISH', 'FFVI')
-                )
-                OR (
-                    HOLD_CODE = 'AQL_HOLD'
-                    AND STATION = 'FAOI-BACK'
                 )
                 OR (
                     PRODUCT_ID LIKE '%-2.6'

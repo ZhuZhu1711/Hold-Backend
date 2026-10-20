@@ -10,10 +10,11 @@ Hold Record 处置流转业务逻辑。
 同一事务内：插入 CIRCULATION_HISTORY + 回写 LAST_CIRCULATION_ID / STATUS。
 可靠性分析(5) 下一节点仍是操作工程师；生产「留样完成」(65) 只写流转、不改当前节点。
 
-DISPOSE_DETAIL 结构化规则（工程师降级/重测由服务端生成，不含备注）：
+DISPOSE_DETAIL 结构化规则（工程师降级/重测/加抽由服务端生成，不含备注）：
   降级: DG:HA>F;FB>F
   重测(等级): RT:F,HA
   重测(WLT code): RT:CODE=123
+  加抽(选填): AS:F:10;HA:5
   WLT 按片（直白中文，片间 ;）：#02，降级，降main拆批;#03，重测，整片重测，@1@361;#04，重测，重测A夹具，@1@361
   WLT 不开放可靠性分析(5)；重测可填 @code，填了须为 @数字 形式
 工程师处置仅为意见，不改写 FT_HOLD_RECORD.GRADE_NUM。
@@ -46,6 +47,7 @@ DISPOSE_CREATE = 0
 DISPOSE_RELEASE = 1          # 放行
 DISPOSE_DOWNGRADE = 2        # 降级
 DISPOSE_RETEST = 3           # 重测
+DISPOSE_EXTRA_SAMPLE = 4     # 加抽（仅 AQL_HOLD，下一节点为生产）
 DISPOSE_ANALYZE = 5          # 可靠性分析（下一节点仍是工程师）
 DISPOSE_ANALYZE_RETURN = 6   # 分析(返回) — 已废弃，仅历史展示
 DISPOSE_TRANSFER = 7         # 转交
@@ -84,6 +86,7 @@ DISPOSE_LABELS = {
     DISPOSE_RELEASE: '放行',
     DISPOSE_DOWNGRADE: '降级',
     DISPOSE_RETEST: '重测',
+    DISPOSE_EXTRA_SAMPLE: '加抽',
     DISPOSE_ANALYZE: '可靠性分析',
     DISPOSE_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_TRANSFER: '转交',
@@ -99,6 +102,7 @@ ENGINEER_DISPOSES = {
     DISPOSE_RELEASE,
     DISPOSE_DOWNGRADE,
     DISPOSE_RETEST,
+    DISPOSE_EXTRA_SAMPLE,
     DISPOSE_ANALYZE,
     # DISPOSE_TRANSFER,  # TODO: 转交方案确定后再开放
 }
@@ -108,6 +112,7 @@ ENGINEER_FLOW_DISPOSES = {
     DISPOSE_RELEASE,
     DISPOSE_DOWNGRADE,
     DISPOSE_RETEST,
+    DISPOSE_EXTRA_SAMPLE,
     DISPOSE_ANALYZE,
     DISPOSE_TRANSFER,
 }
@@ -561,6 +566,41 @@ def _build_downgrade_pairs(downgrades):
     return True, pairs
 
 
+def _build_extra_sample_list(extra_samples):
+    """
+    加抽等级与数量选填。
+    成功 (True, [(grade, qty), ...])，可为空；失败 (False, err)。
+    """
+    if extra_samples is None:
+        return True, []
+    if not isinstance(extra_samples, list):
+        return False, 'extra_samples 格式无效'
+    pairs = []
+    seen = set()
+    for item in extra_samples:
+        if not isinstance(item, dict):
+            return False, 'extra_samples 格式无效'
+        grade = _norm_grade_token(
+            item.get('grade') if 'grade' in item else item.get('GRADE')
+        )
+        qty_raw = item.get('qty', item.get('QTY'))
+        qty_text = '' if qty_raw is None else str(qty_raw).strip()
+        if not grade and not qty_text:
+            continue
+        if not grade or not qty_text:
+            return False, '加抽须同时填写等级和数量'
+        if ':' in grade or ';' in grade:
+            return False, '加抽等级不能包含冒号或分号'
+        if not qty_text.isdigit() or int(qty_text) <= 0:
+            return False, '加抽数量须为正整数'
+        key = grade.upper()
+        if key in seen:
+            return False, f'同一等级只能加抽一次: {grade}'
+        seen.add(key)
+        pairs.append((grade, str(int(qty_text))))
+    return True, pairs
+
+
 def _build_retest_grade_list(retest_grades):
     """成功 (True, uniq_grades)；失败 (False, err)。"""
     uniq = []
@@ -686,6 +726,7 @@ def build_dispose_detail(
     downgrades=None,
     retest_grades=None,
     retest_code=None,
+    extra_samples=None,
     record_type=None,
     wafer_actions=None,
     expected_wafers=None,
@@ -694,6 +735,7 @@ def build_dispose_detail(
     按处置行为生成 DISPOSE_DETAIL（仅规则化文本，不含工程备注/手输备注）。
     降级: DG:HA>F;FB>F
     重测: RT:F,HA 或 RT:CODE=123
+    加抽: AS:F:10;HA:5（不填等级时为空）
     WLT 按片: #01，放行;#02，降级，降main拆批;#03，重测，整片重测，@1@361;#04，重测，重测A夹具，@1@361
     其它行为：DISPOSE_DETAIL 为空
     成功返回 (True, detail_or_None[, summarized_dispose])；
@@ -752,6 +794,14 @@ def build_dispose_detail(
             detail = 'RT:' + ','.join(uniq_or_err)
         else:
             return False, '重测须选择等级或填写 code'
+    elif dispose == DISPOSE_EXTRA_SAMPLE:
+        ok, pairs_or_err = _build_extra_sample_list(extra_samples)
+        if not ok:
+            return False, pairs_or_err
+        if pairs_or_err:
+            detail = 'AS:' + ';'.join(f'{grade}:{qty}' for grade, qty in pairs_or_err)
+        else:
+            detail = None
     else:
         # 放行/分析/生产等：规则化详情为空；手输备注走 DISPOSE_MANUAL_NOTE
         detail = None
@@ -825,7 +875,7 @@ def _in_clause(ids, prefix):
 
 
 def _query_latest_engineer_circs(record_ids):
-    """最新一次工程师处置（1/2/3/5/7）。返回 {record_id: dict}。"""
+    """最新一次工程师处置（1/2/3/4/5/7）。返回 {record_id: dict}。"""
     result = {}
     flow_codes = tuple(sorted(ENGINEER_FLOW_DISPOSES))
     for chunk in _id_chunks(record_ids):
@@ -930,6 +980,20 @@ def pending_sample_bind_params():
     }
 
 
+def allowed_disposes_for_record(hold_code, record_type, after_analyze):
+    """单条记录当前可发起的工程师处置码。加抽仅非 WLT 的 AQL_HOLD，且不在可靠性分析之后。"""
+    allowed = sorted(AFTER_ANALYZE_ALLOWED) if after_analyze else sorted(ENGINEER_DISPOSES)
+    if record_type == RECORD_TYPE_WLT:
+        allowed = [code for code in allowed if code != DISPOSE_ANALYZE]
+    if (
+        record_type == RECORD_TYPE_WLT
+        or after_analyze
+        or not hold_code_is_aql(hold_code)
+    ):
+        allowed = [code for code in allowed if code != DISPOSE_EXTRA_SAMPLE]
+    return allowed
+
+
 def attach_reliability_followup_many(records):
     """为 record dict 列表附加分析后限制 / 待留样标志。"""
     if not records:
@@ -937,8 +1001,6 @@ def attach_reliability_followup_many(records):
     ids = [item.get('ID') for item in records]
     latest_map = _query_latest_engineer_circs(ids)
     pending_set = _query_pending_sample_ids(ids)
-    default_allowed = sorted(ENGINEER_DISPOSES)
-    after_allowed = sorted(AFTER_ANALYZE_ALLOWED)
     for item in records:
         try:
             rid = int(item.get('ID'))
@@ -963,10 +1025,9 @@ def attach_reliability_followup_many(records):
             )
         except (TypeError, ValueError):
             record_type = None
-        allowed = after_allowed if after else list(default_allowed)
-        if record_type == RECORD_TYPE_WLT:
-            allowed = [code for code in allowed if code != DISPOSE_ANALYZE]
-        item['ALLOWED_DISPOSES'] = allowed
+        item['ALLOWED_DISPOSES'] = allowed_disposes_for_record(
+            item.get('HOLD_CODE'), record_type, after,
+        )
         item['REQUIRE_MANUAL_NOTE'] = after
         item['ANALYZE_INTERVAL_WARN'] = bool(after and interval_warn)
         item['LAST_ANALYZE_DTTM'] = circ.get('DISPOSE_DTTM') if after else None
@@ -989,7 +1050,7 @@ def _is_structured_dispose_detail(raw):
     if not text_val:
         return False
     upper = text_val.upper()
-    return upper.startswith(('DG:', 'RT:', 'W:')) or text_val.startswith('#')
+    return upper.startswith(('DG:', 'RT:', 'AS:', 'W:')) or text_val.startswith('#')
 
 
 def enrich_record_grades(record):
@@ -1062,7 +1123,7 @@ def _resolve_owners(dispose: int, product_id: str, actor_user_id: int):
         return eng, eng
 
     if dispose in (
-        DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST,
+        DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_EXTRA_SAMPLE,
     ):
         return prod_op, engineer_disposed()
 
@@ -1173,6 +1234,7 @@ def dispose_engineer_record(
     downgrades=None,
     retest_grades=None,
     retest_code=None,
+    extra_samples=None,
     wafer_actions=None,
     confirm_interval=False,
 ):
@@ -1199,6 +1261,7 @@ def dispose_engineer_record(
         downgrades=downgrades,
         retest_grades=retest_grades,
         retest_code=retest_code,
+        extra_samples=extra_samples,
         wafer_actions=wafer_actions,
         confirm_interval=confirm_interval,
     )
@@ -1740,6 +1803,7 @@ def dispose_record(
     downgrades=None,
     retest_grades=None,
     retest_code=None,
+    extra_samples=None,
     wafer_actions=None,
     confirm_interval=False,
 ):
@@ -1875,6 +1939,7 @@ def dispose_record(
                 downgrades is not None
                 or retest_grades is not None
                 or retest_code is not None
+                or extra_samples is not None
             )
 
             # 兼容旧客户端：放行/降级把工程备注塞在 dispose_detail
@@ -1924,7 +1989,8 @@ def dispose_record(
                 if detail and len(detail) > DISPOSE_DETAIL_MAX_LEN:
                     return False, f'dispose_detail 最长 {DISPOSE_DETAIL_MAX_LEN} 字符', None
             elif dispose in (
-                DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_RELEASE, DISPOSE_ANALYZE,
+                DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_EXTRA_SAMPLE,
+                DISPOSE_RELEASE, DISPOSE_ANALYZE,
             ) or has_structured:
                 ok_detail, built = build_dispose_detail(
                     dispose=dispose,
@@ -1932,6 +1998,7 @@ def dispose_record(
                     downgrades=downgrades,
                     retest_grades=retest_grades,
                     retest_code=retest_code,
+                    extra_samples=extra_samples,
                     record_type=record.get('RECORD_TYPE'),
                 )
                 if not ok_detail:
@@ -1953,6 +2020,12 @@ def dispose_record(
                 return False, '可靠性分析之后须手输备注', None
             if record.get('ANALYZE_INTERVAL_WARN') and not confirm_interval:
                 return False, INTERVAL_CONFIRM_MSG, {'need_interval_confirm': True}
+
+        if (
+            dispose == DISPOSE_EXTRA_SAMPLE
+            and not hold_code_is_aql(record.get('HOLD_CODE'))
+        ):
+            return False, '加抽仅 HOLD_CODE 为 AQL_HOLD 时可用', None
 
         last_circ = _load_circulation(record.get('LAST_CIRCULATION_ID'))
         current_owner_id = last_circ.get('NEXT_OWNER_ID') if last_circ else None

@@ -35,21 +35,19 @@ from app.utils.database_util import (
 )
 
 # 处置单划分（见 dispose_api.md）：
-#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,028,AQL_HOLD},
-#                 STATION∉{FAOIFINISH,FFVI}，且排除 (AQL_HOLD + FAOI-BACK)
+#   FT异常反馈单  RECORD_TYPE=0  PRODUCT_ID *-3.5, HOLD_CODE∈{023,024,025,027,028},
+#                 STATION∉{FAOIFINISH,FFVI}
 #   FVI异常反馈单 RECORD_TYPE=1  HOLD_CODE=023 + STATION∈{FAOIFINISH,FFVI}
-#                               或 HOLD_CODE=AQL_HOLD + STATION=FAOI-BACK
 #   WLT异常反馈单 RECORD_TYPE=2  PRODUCT_ID *-2.6, HOLD_CODE∈{004,022}, STATION=WOQC
+# AQL_HOLD 不再合批；手提创建仍可直接写 record。
 # 不满足以上规则的 hold_info 不转成 record。
 # 028（重码风险）仍为 RECORD_TYPE=0，但与同片/同批良率、缺陷率 hold 分列，不拼进同一条 record。
 # FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD 的 info 不参与合批。
-_FT_HOLD_CODES = frozenset({'023', '024', '025', '027', '028', 'AQL_HOLD'})
+_FT_HOLD_CODES = frozenset({'023', '024', '025', '027', '028'})
 _FT_DUPCODE_HOLD_CODE = '028'
 _FVI_HOLD_CODES = frozenset({'023'})
 _WLT_HOLD_CODES = frozenset({'004', '022'})
 _FVI_STATIONS = frozenset({'FAOIFINISH', 'FFVI'})
-_FVI_AQL_HOLD_CODE = 'AQL_HOLD'
-_FVI_AQL_STATION = 'FAOI-BACK'
 _WLT_STATIONS = frozenset({'WOQC'})
 _FPQC_FUTURE_HOLD_CODE = '025'
 _FPQC_FUTURE_HOLD_STATION = 'FPQC'
@@ -78,8 +76,6 @@ def resolve_record_type(
 
     # FVI：先判站点限定规则，避免与 FT 的「站点排除」交叉误伤
     if code in _FVI_HOLD_CODES and sta in _FVI_STATIONS:
-        return RECORD_TYPE_FVI
-    if code == _FVI_AQL_HOLD_CODE and sta == _FVI_AQL_STATION:
         return RECORD_TYPE_FVI
 
     if (
@@ -620,7 +616,8 @@ def build_ziyi_append_updates(
 
 class HoldMergeScheduler(threading.Thread):
     """
-    定时将 FT_HOLD_INFO 中 AREA=0 且满足处置单划分的在线 hold 合并写入 FT_HOLD_RECORD：
+    定时将 FT_HOLD_INFO 中 AREA=0、尚未关联 record、且满足处置单划分的 hold 合并写入 FT_HOLD_RECORD。
+    HOLDING=0 与 HOLDING=1 都捞（MES 已解 hold 也要留档）。
       - 普通：按 (WAFER_ID, RECORD_TYPE)；FT 028 与良率/缺陷率分列
       - 分片合批：按 (LOT_ID, RECORD_TYPE)；FT 028 同样分列
       - 梓一合批：同 LOT 已有 MES record 且 HOLD_DTTM 在合批间隔（默认 30 分钟）回看窗口内则追加，不按 STATUS
@@ -762,8 +759,8 @@ class HoldMergeScheduler(threading.Thread):
                 return
 
             self.logger.info(
-                f"从表 {self.hold_info_table} 查询到 {len(hold_infos)} 条在线 hold_info "
-                f"(AREA=0, HOLDING=0, HOLD_RECORD_ID∈{{NULL,0}}，已排除 -1 脏数据，"
+                f"从表 {self.hold_info_table} 查询到 {len(hold_infos)} 条待合批 hold_info "
+                f"(AREA=0, HOLD_RECORD_ID∈{{NULL,0}}，不限 HOLDING，已排除 -1 脏数据，"
                 f"已按处置单划分预过滤)"
             )
 

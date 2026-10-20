@@ -14,7 +14,7 @@ SOURCE_MES = 0
 SOURCE_MANUAL = 1
 RECORD_TYPE_FT = 0
 RECORD_TYPE_WLT = 2
-# 手提可选码：后续新增时同步扩这里，并视需要加入合批 _FT_HOLD_CODES / 分析例外。
+# 手提可选码。AQL_HOLD 不参与合批，不要为了手提把该码加回候选 SQL。
 FT_MANUAL_HOLD_CODES = frozenset({HOLD_CODE_AQL})
 WLT_MANUAL_HOLD_CODES = frozenset({'004', '022'})
 WLT_MANUAL_STATION = 'WLT2'

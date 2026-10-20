@@ -227,7 +227,7 @@ def api_holding_records_export():
 @engineer_bp.route('/api/dispose_actions', methods=['GET'])
 @engineer_required
 def api_dispose_actions():
-    """工程师可发起的处置行为：放行/降级/重测/可靠性分析（转交暂屏蔽）。"""
+    """工程师可发起的处置行为：放行/降级/重测/加抽/可靠性分析（转交暂屏蔽）。加抽仅 AQL_HOLD 单可用。"""
     success, msg, data = dispose_ctrl.list_dispose_actions(group='engineer')
     return jsonify({'code': 200, 'msg': msg, 'data': data})
 
@@ -250,7 +250,8 @@ def api_dispose():
     工程师处置（dispose_api.md「工程师处置」）。
     Body JSON:
       hold_record_id  (必填)
-      dispose         (非 WLT 必填：1放行 2降级 3重测 5可靠性分析；转交7暂屏蔽)
+      dispose         (非 WLT 必填：1放行 2降级 3重测 4加抽 5可靠性分析；转交7暂屏蔽)
+                      加抽仅 HOLD_CODE 含 AQL_HOLD；extra_samples 选填 [{grade, qty}]
                       WLT 可省略，由 wafer_actions 汇总；若传入须与汇总一致
       dispose_detail  (可选，规则化详情；一般由服务端生成；WLT 为直白中文按片描述)
       dispose_note    (可选，工程备注文本，最长 1024)
@@ -258,6 +259,7 @@ def api_dispose():
       confirm_interval (可选，距可靠性分析不足30分钟时须为 true)
       downgrades      (非 WLT 降级：[{from, to}, ...]，服务端生成 DISPOSE_DETAIL)
       retest_grades   (非 WLT 重测等级列表)
+      extra_samples   (加抽选填：[{grade, qty}, ...]，服务端生成 AS:F:10;HA:5)
       retest_code     (旧版 WLT 单 code，已由 wafer_actions 取代)
       wafer_actions   (WLT 必填：按片处置列表，须覆盖全部 wafer)
     须为当前负责人。工程师处置不改写 GRADE_NUM。
@@ -271,6 +273,7 @@ def api_dispose():
     downgrades = data.get('downgrades')
     retest_grades = data.get('retest_grades')
     retest_code = data.get('retest_code')
+    extra_samples = data.get('extra_samples')
     wafer_actions = data.get('wafer_actions')
     confirm_interval = data.get('confirm_interval')
 
@@ -294,6 +297,7 @@ def api_dispose():
         downgrades=downgrades,
         retest_grades=retest_grades,
         retest_code=retest_code,
+        extra_samples=extra_samples,
         wafer_actions=wafer_actions,
         confirm_interval=confirm_interval,
     )

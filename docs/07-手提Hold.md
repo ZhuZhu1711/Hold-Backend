@@ -27,7 +27,7 @@
 - **WLT**：`LOT_ID` 手输，格式 `LOT.NO`（`NO` 为本 lot 第一片片号，如 `C123456.01`）。未带 `.NO` 时用所选最小片号补上。`WAFER_ID` 由勾选的 1~25 片拼接，如 `#01#03#13`。也可传 `wafer_nos: [1,3,13]`。
 - 型号：`GET /admin/hold/api/manual_hold/products?line=FT|WLT`。创建时精确匹配，否则唯一前缀/包含命中则采用。工程师仅所属型号。
 
-FT `hold_code` 从允许列表中选，目前只有 `AQL_HOLD`；未传时默认该项。后续加码时同步更新允许列表、页面下拉，以及合批「FT 异常反馈单」码表。分析是否改看附件仍按码本身判断（目前仅 `AQL_HOLD` 跳过 `/api/analysis`）。
+FT `hold_code` 从允许列表中选，目前只有 `AQL_HOLD`；未传时默认该项。合批不再抓 `AQL_HOLD`，手提仍直接写 record。分析是否改看附件仍按码本身判断（目前仅 `AQL_HOLD` 跳过 `/api/analysis`）。
 
 `SOURCE`：`0` = MES 合批，`1` = 手提。流转 `DISPOSE_SOURCE` 在 `SOURCE=1` 时仍写 `JDY`（兼容旧数据）。
 

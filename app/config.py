@@ -148,7 +148,7 @@ class Config:
         '025',                           # 缺陷率
         '026',                           # 工程品
         '028',                           # 重码
-        'AQL_HOLD',                      # AQL / 手提 FT
+        # AQL_HOLD 不再合批；手提创建见 annex_util.FT_MANUAL_HOLD_CODES
     ]
     HOLD_MERGE_STATIONS = [
         'FATE-FA',

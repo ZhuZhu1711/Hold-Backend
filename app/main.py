@@ -2,7 +2,6 @@ import sys
 import os
 import argparse
 import signal
-import subprocess
 import threading
 from multiprocessing import freeze_support
 from cryptography import x509
@@ -78,31 +77,15 @@ def _wait_until_stop(stop_event, server_thread):
         stop_event.set()
 
 
-def _shutdown(schedulers, defect_sync_proc=None):
+def _shutdown(schedulers):
     print('\n正在退出...')
     for sched in schedulers:
         try:
             sched.stop()
         except Exception:
             pass
-    if defect_sync_proc is not None and defect_sync_proc.poll() is None:
-        defect_sync_proc.terminate()
     # Waitress / FTP 等阻塞调用在 Windows 上经常无法干净 join
     os._exit(0)
-
-
-def _spawn_defect_sync_process():
-    """release 才启动。子进程单独 thick 模式连 RPTDB，避免改掉 Web 的 thin 连接。"""
-    if getattr(sys, 'frozen', False):
-        cmd = [sys.executable, '--defect-sync', '--mode', 'release']
-        cwd = os.getcwd()
-    else:
-        script = os.path.join(
-            project_root_path, 'app', 'backend_schedule', 'FT_DEFECT_CODE_SYNC_sche.py',
-        )
-        cmd = [sys.executable, script, '--mode', 'release']
-        cwd = project_root_path
-    return subprocess.Popen(cmd, cwd=cwd)
 
 
 if __name__ == '__main__':
@@ -142,7 +125,6 @@ if __name__ == '__main__':
     stop_event = threading.Event()
     _install_interrupt_handlers(stop_event)
     schedulers = []
-    defect_sync_proc = None
 
     hold_merge_scheduler = HoldMergeScheduler()
     hold_merge_scheduler.start()
@@ -159,11 +141,7 @@ if __name__ == '__main__':
             schedulers.append(hold_predict_scheduler)
         else:
             print('HOLD_PREDICT_ENABLED=False，未启动可放行概率预测调度')
-        defect_sync_proc = _spawn_defect_sync_process()
-        print(
-            f'缺陷代码同步子进程已启动 pid={defect_sync_proc.pid}，'
-            f'每天 {getattr(Config, "DEFECT_SYNC_AT", "02:00")} 执行'
-        )
+        print('缺陷代码同步改为管理页手动触发，启动时不跑')
         server = threading.Thread(
             target=lambda: serve(app, host='0.0.0.0', port=50001),
             name='waitress',
@@ -181,5 +159,5 @@ if __name__ == '__main__':
 
     server.start()
     _wait_until_stop(stop_event, server)
-    _shutdown(schedulers, defect_sync_proc)
+    _shutdown(schedulers)
  

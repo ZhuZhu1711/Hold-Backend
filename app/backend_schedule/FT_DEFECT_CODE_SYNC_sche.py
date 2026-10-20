@@ -1,6 +1,7 @@
 """
-独立进程：每天把 RPTDB 缺陷配置全量同步到 FT_OWEN.DEFECT_CODE。
+独立进程：把 RPTDB 缺陷配置全量同步到 FT_OWEN.DEFECT_CODE，跑完一轮即退出。
 
+由管理页 root 手动触发，Web 启动时不再挂每日调度。
 RPTDB 性能弱：每一轮只发一条查询，放大拉取批量后立刻断开，
 不再按型号对源库发请求。后续写入只打 FT_OWEN。
 
@@ -16,14 +17,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
 import sys
-import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
 import oracledb
-import schedule
 
 current_file_path = os.path.abspath(__file__)
 project_root_path = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
@@ -85,16 +83,6 @@ def init_thick_client(lib_dir: str) -> None:
     if not lib_dir or not os.path.isdir(lib_dir):
         raise RuntimeError(f'Instant Client 目录不存在: {lib_dir or "(空)"}')
     oracledb.init_oracle_client(lib_dir=lib_dir)
-
-
-def sync_clock(config=None) -> str:
-    raw = str(getattr(config or Config, 'DEFECT_SYNC_AT', '02:00') or '02:00').strip()
-    if not re.fullmatch(r'\d{2}:\d{2}', raw):
-        return '02:00'
-    hour, minute = (int(part) for part in raw.split(':'))
-    if hour > 23 or minute > 59:
-        return '02:00'
-    return raw
 
 
 def _line_of(classify: str) -> str:
@@ -273,12 +261,12 @@ def run_job():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='缺陷代码每日全量同步')
+    parser = argparse.ArgumentParser(description='缺陷代码全量同步（跑完一轮即退出）')
     parser.add_argument(
         '--mode',
         choices=['debug', 'release'],
         default='debug',
-        help='debug 不写库；release 每天按 DEFECT_SYNC_AT 执行。',
+        help='debug 不写库；release 立即同步一轮后退出。',
     )
     args = parser.parse_args()
     if args.mode != 'release':
@@ -291,13 +279,8 @@ def main():
         logger.error('无法加载 Instant Client，同步进程退出: %s', exc)
         raise SystemExit(1) from exc
 
-    at_time = sync_clock(Config)
-    scheduler = schedule.Scheduler()
-    scheduler.every().day.at(at_time).do(run_job)
-    logger.info('缺陷代码同步已启动，每天 %s 执行，启动时不立即跑', at_time)
-    while True:
-        scheduler.run_pending()
-        time.sleep(1)
+    logger.info('缺陷代码同步开始（手动触发，跑完即退出）')
+    run_job()
 
 
 if __name__ == '__main__':

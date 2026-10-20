@@ -5,6 +5,7 @@
 | 放行 | 1 | 181 | ~ |
 | 降级 | 2 | 181 | ~ |
 | 重测 | 3 | 181 | ~ |
+| 加抽 | 4 | 181 | ~ |
 | 可靠性分析 | 5 | 操作工程师 | ~ |
 | 转交 | 7 | PRODUCT_INFO.PRO_ENG_ID | ~ |
 
@@ -30,19 +31,19 @@
 ~: 代指型号所属工程师的ID(PRODUCT_INFO.PRO_ENG_ID)
 
 > 工程师处置仅为意见：写入 CIRCULATION_HISTORY，并回写 FT_HOLD_RECORD.LAST_CIRCULATION_ID / STATUS；**不改写 GRADE_NUM**。真正落地由生产执行。
+> 加抽（`4`）仅 `HOLD_CODE` 含 `AQL_HOLD` 可发起。等级和数量选填，填写时服务端生成 `AS:F:10;HA:5`；不填则 `DISPOSE_DETAIL` 为空。可靠性分析之后不可加抽。WLT 按片不提供加抽。
 
 
 # 处置单划分
 | 处置单大类 | PRODUCT_ID | HOLD_CODE | STATION | RECORD_TYPE |
 | ----- | ----- | ----- | ----- | ----- |
-| FT异常反馈单 | *-3.5 | 023、024、025、027、028、AQL_HOLD | NOT IN ('FAOIFINISH', 'FFVI')，且排除 AQL_HOLD + FAOI-BACK | 0 |
+| FT异常反馈单 | *-3.5 | 023、024、025、027、028 | NOT IN ('FAOIFINISH', 'FFVI') | 0 |
 | FVI异常反馈单 | * | 023 | IN('FAOIFINISH', 'FFVI') | 1 |
-| FVI异常反馈单 | * | AQL_HOLD | FAOI-BACK | 1 |
 | WLT 异常反馈单 | *-2.6 | 004、022 | WOQC | 2 |
 
 > '*'是正则化写法，代表任意匹配  
 > 不满足表中规则的，无需转成record  
-> 手提创建（SOURCE=1）不经合批，直接写 record。AQL_HOLD 默认归 FT 异常反馈单；站点 `FAOI-BACK` 归 FVI。分析入口展示附件图。
+> 合批不再抓 `AQL_HOLD`。手提创建（SOURCE=1）不经合批，直接写 FT 异常反馈单。分析入口展示附件图。
 > `028`（重码风险）归 FT 异常反馈单，但合批时与同 lot/wafer 的良率、缺陷率 hold **分列**成独立 record。
 > `HOLD_CODE=025` 且 `STATION=FPQC` 且 `HOLD_REASON` 含 `FUTURE HOLD` 的 hold_info **不参与合批**（标记 `HOLD_RECORD_ID=-1`）。
 > WOQC info 的 LOT_ID 可为 `LOT.起始片号`（如 `679PK7.14`）；合批写入 record 时原样保留，分组键仍用去掉 `.NN` 后的前缀。

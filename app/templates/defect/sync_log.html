@@ -24,6 +24,10 @@
             background: #007bff; color: #fff; font-size: 14px;
         }
         .btn:hover { background: #0069d9; }
+        .btn.run { background: #28a745; }
+        .btn.run:hover { background: #218838; }
+        .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+        .run-msg { font-size: 13px; color: #333; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
         th { background: #f8f9fa; position: sticky; top: 0; }
@@ -46,8 +50,10 @@
     <main class="main">
         <div class="card">
             <h1>缺陷同步记录</h1>
-            <p class="sub">每天按型号全量同步 FT / WLT 缺陷配置。这里只显示记录，不触发同步。最多 200 条，时间倒序。</p>
+            <p class="sub">按型号全量同步 FT / WLT 缺陷配置。仅超级管理员可手动触发，启动时不再自动跑。最多 200 条，时间倒序。</p>
             <div class="filters">
+                <button type="button" class="btn run" id="run_btn">立即同步</button>
+                <span id="run_msg" class="run-msg"></span>
                 <input type="text" id="product_code" placeholder="型号" autocomplete="off">
                 <select id="prod_line">
                     <option value="">全部产线</option>
@@ -89,10 +95,37 @@
     const STATUS_TEXT = { OK: '成功', SKIPPED: '未建档', FAILED: '失败' };
 
     document.getElementById('search_btn').addEventListener('click', loadRows);
+    document.getElementById('run_btn').addEventListener('click', runSync);
     document.getElementById('product_code').addEventListener('keydown', function (event) {
         if (event.key === 'Enter') loadRows();
     });
     document.addEventListener('DOMContentLoaded', loadRows);
+
+    function runSync() {
+        if (!window.confirm('开始从 RPTDB 全量同步缺陷代码？')) return;
+        const btn = document.getElementById('run_btn');
+        const note = document.getElementById('run_msg');
+        btn.disabled = true;
+        note.textContent = '正在启动...';
+        fetch('/admin/defect-sync/api/run', { method: 'POST' })
+            .then(function (resp) { return resp.json().then(function (body) { return { ok: resp.ok, body: body }; }); })
+            .then(function (result) {
+                const msg = (result.body && result.body.msg) || (result.ok ? '已开始同步' : '启动失败');
+                note.textContent = msg;
+                if (!result.ok || !result.body || result.body.code !== 200) {
+                    showError(msg);
+                    return;
+                }
+                document.getElementById('error_msg').style.display = 'none';
+            })
+            .catch(function () {
+                note.textContent = '';
+                showError('启动失败');
+            })
+            .finally(function () {
+                btn.disabled = false;
+            });
+    }
 
     function loadRows() {
         const params = new URLSearchParams();

@@ -108,7 +108,7 @@
     <main class="main">
         <div class="card">
             <h1>物料处置报表</h1>
-            <p class="sub">只读查看全部型号已处置物料（放行 / 降级 / 重测）。未处理及其它流转不展示，不参与决策。</p>
+            <p class="sub">只读查看全部型号已处置物料（放行 / 降级 / 重测 / 加抽）。未处理及其它流转不展示，不参与决策。</p>
 
             <div class="filters">
                 <label>处置开始时间
@@ -123,10 +123,11 @@
                 </label>
                 <label>处置行为
                     <select id="dispose">
-                        <option value="">全部（放行/降级/重测）</option>
+                        <option value="">全部（放行/降级/重测/加抽）</option>
                         <option value="1">放行</option>
                         <option value="2">降级</option>
                         <option value="3">重测</option>
+                        <option value="4">加抽</option>
                     </select>
                 </label>
                 <label>Record 类型
@@ -312,7 +313,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="13" class="empty">该条件下无放行 / 降级 / 重测记录</td></tr>';
+                        '<tr><td colspan="13" class="empty">该条件下无放行 / 降级 / 重测 / 加抽记录</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => `
@@ -376,7 +377,7 @@
                 const record = (json.data && json.data.record) || {};
                 const disposes = (json.data && json.data.disposes) || [];
                 document.getElementById('drawerMeta').textContent =
-                    '共 ' + disposes.length + ' 次放行 / 降级 / 重测';
+                    '共 ' + disposes.length + ' 次放行 / 降级 / 重测 / 加抽';
 
                 const fields = [
                     ['型号', record.PRODUCT_ID],
@@ -396,7 +397,7 @@
 
                 if (!disposes.length) {
                     document.getElementById('timeline').innerHTML =
-                        '<div class="empty">暂无放行 / 降级 / 重测记录</div>';
+                        '<div class="empty">暂无放行 / 降级 / 重测 / 加抽记录</div>';
                     return;
                 }
                 document.getElementById('timeline').innerHTML = disposes.map(c => `

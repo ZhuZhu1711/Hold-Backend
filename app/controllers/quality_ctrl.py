@@ -1,7 +1,7 @@
 """
 质量部只读报表：全型号物料已处置情况。
 
-仅 CIRCULATION_HISTORY.DISPOSE ∈ {1放行, 2降级, 3重测}，不含未处理及其它流转。
+仅 CIRCULATION_HISTORY.DISPOSE ∈ {1放行, 2降级, 3重测, 4加抽}，不含未处理及其它流转。
 不提供任何处置/改写接口。
 """
 from sqlalchemy import text
@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import db
 from app.controllers.dispose_ctrl import (
     DISPOSE_DOWNGRADE,
+    DISPOSE_EXTRA_SAMPLE,
     DISPOSE_LABELS,
     DISPOSE_RELEASE,
     DISPOSE_RETEST,
@@ -24,7 +25,10 @@ from app.controllers.hold_report_ctrl import (
     _parse_page,
 )
 
-QUALITY_DISPOSES = (DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST)
+QUALITY_DISPOSES = (
+    DISPOSE_RELEASE, DISPOSE_DOWNGRADE, DISPOSE_RETEST, DISPOSE_EXTRA_SAMPLE,
+)
+_QUALITY_IN_SQL = ', '.join(str(int(code)) for code in QUALITY_DISPOSES)
 
 
 def _enrich_row(row):
@@ -63,7 +67,7 @@ def _parse_dispose(dispose):
     except (TypeError, ValueError):
         return False, 'dispose 无效'
     if code not in QUALITY_DISPOSES:
-        return False, 'dispose 仅支持 1放行 / 2降级 / 3重测'
+        return False, 'dispose 仅支持 1放行 / 2降级 / 3重测 / 4加抽'
     return True, code
 
 
@@ -102,7 +106,7 @@ def query_quality_disposes(
         if not ok:
             return False, rt, _page_payload([], 0, page, page_size)
 
-        where_sql = " WHERE c.DISPOSE IN (1, 2, 3)"
+        where_sql = f" WHERE c.DISPOSE IN ({_QUALITY_IN_SQL})"
         params = {'offset': offset, 'page_size': page_size}
 
         if start_norm:
@@ -230,7 +234,7 @@ def export_quality_disposes_xlsx(
 
 
 def get_quality_product_options(keyword=''):
-    """型号下拉：出现过放行/降级/重测的 PRODUCT_ID。"""
+    """型号下拉：出现过放行/降级/重测/加抽的 PRODUCT_ID。"""
     try:
         record_table = _record_table()
         sql = f"""
@@ -238,7 +242,7 @@ def get_quality_product_options(keyword=''):
             FROM {record_table} r
             INNER JOIN {_circ_table()} c ON c.HOLD_RECORD_ID = r.ID
             WHERE r.PRODUCT_ID IS NOT NULL
-              AND c.DISPOSE IN (1, 2, 3)
+              AND c.DISPOSE IN ({_QUALITY_IN_SQL})
         """
         params = {}
         if keyword:
@@ -253,7 +257,7 @@ def get_quality_product_options(keyword=''):
 
 
 def get_quality_route_options(keyword=''):
-    """ROUTE 下拉：出现过放行/降级/重测的 ROUTE_ID。"""
+    """ROUTE 下拉：出现过放行/降级/重测/加抽的 ROUTE_ID。"""
     try:
         record_table = _record_table()
         sql = f"""
@@ -261,7 +265,7 @@ def get_quality_route_options(keyword=''):
             FROM {record_table} r
             INNER JOIN {_circ_table()} c ON c.HOLD_RECORD_ID = r.ID
             WHERE r.ROUTE_ID IS NOT NULL
-              AND c.DISPOSE IN (1, 2, 3)
+              AND c.DISPOSE IN ({_QUALITY_IN_SQL})
         """
         params = {}
         if keyword:
@@ -276,7 +280,7 @@ def get_quality_route_options(keyword=''):
 
 
 def get_quality_record_detail(hold_record_id):
-    """只读：record 摘要 + 该单上的放行/降级/重测记录。"""
+    """只读：record 摘要 + 该单上的放行/降级/重测/加抽记录。"""
     try:
         rid = int(hold_record_id)
     except (TypeError, ValueError):
@@ -315,7 +319,7 @@ def get_quality_record_detail(hold_record_id):
                 FROM {_circ_table()} c
                 LEFT JOIN USERS u1 ON u1.ID = c.DISPOSED_OWNER_ID
                 WHERE c.HOLD_RECORD_ID = :rid
-                  AND c.DISPOSE IN (1, 2, 3)
+                  AND c.DISPOSE IN ({_QUALITY_IN_SQL})
                 ORDER BY c.DISPOSE_DTTM ASC NULLS LAST, c.ID ASC
             """),
             {'rid': rid},

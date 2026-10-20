@@ -25,7 +25,8 @@ from app.backend_schedule.defect_code_sync import (
     run_product_sync,
 )
 from app.config import Config
-from app.controllers.defect_code_sync_ctrl import query_sync_logs
+from app.controllers import defect_code_sync_ctrl
+from app.controllers.defect_code_sync_ctrl import query_sync_logs, trigger_defect_sync
 from app.routes.auth_routes import auth_bp
 from app.routes.defect_code_sync_routes import defect_sync_bp
 
@@ -223,6 +224,7 @@ class SyncLogPageTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
         self.assertIn('缺陷同步记录', html)
+        self.assertIn('立即同步', html)
         self.assertIn('全部产线', html)
         self.assertIn('未建档', html)
         self.assertIn('/admin/defect-sync/api', html)
@@ -255,6 +257,78 @@ class SyncLogPageTest(unittest.TestCase):
             sess['must_change_password'] = False
         resp = client.get('/admin/defect-sync')
         self.assertEqual(resp.status_code, 302)
+
+    def test_engineer_cannot_trigger_sync(self):
+        app = _page_app()
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = 2
+            sess['role'] = 1
+            sess['must_change_password'] = False
+        resp = client.post('/admin/defect-sync/api/run')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_debug_trigger_does_not_spawn(self):
+        with patch(
+            'app.routes.defect_code_sync_routes.trigger_defect_sync',
+            return_value=(False, '当前为 debug，不写正式表 DEFECT_CODE', None),
+        ) as trigger:
+            app = _page_app()
+            client = app.test_client()
+            with client.session_transaction() as sess:
+                sess['user_id'] = 1
+                sess['role'] = 0
+                sess['must_change_password'] = False
+            resp = client.post('/admin/defect-sync/api/run')
+        self.assertEqual(resp.status_code, 400)
+        body = resp.get_json()
+        self.assertIn('debug', body['msg'])
+        trigger.assert_called_once()
+
+
+class TriggerDefectSyncTest(unittest.TestCase):
+    def tearDown(self):
+        defect_code_sync_ctrl._sync_proc = None
+
+    def test_debug_mode_refuses_without_process(self):
+        with patch('app.controllers.defect_code_sync_ctrl.spawn_defect_sync_process') as spawn:
+            ok, msg, data = trigger_defect_sync(debug_mode=True)
+        self.assertFalse(ok)
+        self.assertIsNone(data)
+        self.assertIn('debug', msg)
+        spawn.assert_not_called()
+
+    def test_release_starts_once_and_rejects_overlap(self):
+        proc = MagicMock()
+        proc.poll.return_value = None
+        proc.pid = 42
+        with patch(
+            'app.controllers.defect_code_sync_ctrl.spawn_defect_sync_process',
+            return_value=proc,
+        ) as spawn:
+            ok, msg, data = trigger_defect_sync(debug_mode=False)
+            self.assertTrue(ok)
+            self.assertEqual(data['pid'], 42)
+            self.assertIn('已开始', msg)
+            again_ok, again_msg, again_data = trigger_defect_sync(debug_mode=False)
+        spawn.assert_called_once()
+        self.assertFalse(again_ok)
+        self.assertIsNone(again_data)
+        self.assertEqual(again_msg, '同步进行中')
+
+    def test_busy_route_returns_409(self):
+        app = _page_app()
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = 1
+            sess['role'] = 0
+            sess['must_change_password'] = False
+        with patch(
+            'app.routes.defect_code_sync_routes.trigger_defect_sync',
+            return_value=(False, '同步进行中', None),
+        ):
+            resp = client.post('/admin/defect-sync/api/run')
+        self.assertEqual(resp.status_code, 409)
 
 
 class SourceFetchTest(unittest.TestCase):
