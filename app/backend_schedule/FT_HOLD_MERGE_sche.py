@@ -617,7 +617,7 @@ def build_ziyi_append_updates(
 class HoldMergeScheduler(threading.Thread):
     """
     定时将 FT_HOLD_INFO 中 AREA=0、尚未关联 record、且满足处置单划分的 hold 合并写入 FT_HOLD_RECORD。
-    HOLDING=0 与 HOLDING=1 都捞（MES 已解 hold 也要留档）。
+    HOLDING=0 不限日期。HOLDING=1 只合 HOLD_DTTM 在 2026-10-15 及以后的 info。
       - 普通：按 (WAFER_ID, RECORD_TYPE)；FT 028 与良率/缺陷率分列
       - 分片合批：按 (LOT_ID, RECORD_TYPE)；FT 028 同样分列
       - 梓一合批：同 LOT 已有 MES record 且 HOLD_DTTM 在合批间隔（默认 30 分钟）回看窗口内则追加，不按 STATUS
@@ -760,7 +760,8 @@ class HoldMergeScheduler(threading.Thread):
 
             self.logger.info(
                 f"从表 {self.hold_info_table} 查询到 {len(hold_infos)} 条待合批 hold_info "
-                f"(AREA=0, HOLD_RECORD_ID∈{{NULL,0}}，不限 HOLDING，已排除 -1 脏数据，"
+                f"(AREA=0, HOLD_RECORD_ID∈{{NULL,0}}，HOLDING=0 或 "
+                f"2026-10-15 及以后的 HOLDING=1，已排除 -1 脏数据，"
                 f"已按处置单划分预过滤)"
             )
 

@@ -53,6 +53,9 @@ _CIRC_SEQ_MAP = {
 # 源表 HOLD_RECORD_ID：0/NULL=待处理；>0=已关联；-1=转换失败脏数据（需人工）
 HOLD_RECORD_ID_PENDING = 0
 HOLD_RECORD_ID_DIRTY = -1
+# HOLDING=1 只合这个时刻及以后的 info（HOLD_DTTM 为 YYYY-MM-DD HH24:MI:SS，可按字符串比较）。
+# 更早的已解 hold 不补成 record。
+HOLDING_RELEASED_MERGE_FROM = '2026-10-15 00:00:00'
 # 本系统只处理 AREA=0 的 FT_HOLD_INFO；其它区域的行不读不写。
 HOLD_INFO_AREA = 0
 
@@ -178,7 +181,8 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
     """
     查询指定表中尚未关联 hold_record 的 hold_info
     （AREA = 0 且 HOLD_RECORD_ID 为 NULL/0）。
-    HOLDING 不参与过滤：0（仍在 hold）与 1（MES 已解 hold）都捞，避免解 hold 早于合批导致漏单。
+    HOLDING=0 不限日期。HOLDING=1 只捞 HOLD_DTTM >= 2026-10-15 的行，
+    避免把更早已经解 hold 的 info 补成 record。
     其它 AREA 不属于本系统，不参与合批。
     HOLD_RECORD_ID = -1 视为转换失败/无需转换的脏数据，轮询一律跳过，需人工处置。
 
@@ -207,12 +211,20 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
         dsn=DSN
     )
     # 仅本系统 AREA=0、待处理(NULL/0)；排除已关联(>0)与脏数据(-1)。
-    # 不按 HOLDING 过滤：已解 hold（HOLDING=1）仍要合出 record。
+    # HOLDING=0 全捞；HOLDING=1 只捞 HOLD_DTTM 达到截止日期的行。
     # 处置单划分三选一（与 resolve_record_type 保持一致）
     area_sql = hold_info_area_sql()
+    released_from = HOLDING_RELEASED_MERGE_FROM
     base_filter = f"""
             {area_sql}
             AND NVL(HOLD_RECORD_ID, 0) = 0
+            AND (
+                HOLDING = 0
+                OR (
+                    HOLDING = 1
+                    AND HOLD_DTTM >= '{released_from}'
+                )
+            )
             AND (
                 (
                     PRODUCT_ID LIKE '%-3.5'
