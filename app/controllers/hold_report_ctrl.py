@@ -65,7 +65,9 @@ RECORD_TYPE_LABELS = {
     0: 'FT异常反馈单',
     1: 'FVI异常反馈单',
     2: 'WLT异常反馈单',
+    3: 'ENG预Hold',
 }
+RECORD_TYPE_ENG_FUTURE = 3
 
 
 def _table_names():
@@ -173,8 +175,10 @@ def get_holding_records(
                     FROM PRODUCT_INFO p
                     WHERE p.PRO_ENG_ID = :owner_eng_id
                 )
+                AND NVL(r.RECORD_TYPE, -1) <> :exclude_eng_future
             """
             params['owner_eng_id'] = int(owner_eng_id)
+            params['exclude_eng_future'] = RECORD_TYPE_ENG_FUTURE
 
         if current_owner_id is not None and str(current_owner_id).strip() != '':
             params['current_owner_id'] = int(current_owner_id)
@@ -222,7 +226,7 @@ def get_holding_records(
             except (TypeError, ValueError):
                 return False, 'record_type 无效', _page_payload([], 0, page, page_size)
             if rt not in RECORD_TYPE_LABELS:
-                return False, 'record_type 须为 0/1/2（FT/FVI/WLT）', _page_payload([], 0, page, page_size)
+                return False, 'record_type 须为 0/1/2/3（FT/FVI/WLT/ENG预Hold）', _page_payload([], 0, page, page_size)
             where_sql += " AND r.RECORD_TYPE = :record_type"
             params['record_type'] = rt
 

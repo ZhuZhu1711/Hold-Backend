@@ -1,13 +1,11 @@
 """
 独立进程：FTP /RAW_DATA/ CSV → Oracle TEST_WAFER / TEST_BINCODE。
 
-不挂 Web 主进程。启动方式：
-  python app/backend_schedule/FT_RAW_DATA_sche.py --mode debug    # 跑一轮后退出
-  python app/backend_schedule/FT_RAW_DATA_sche.py --mode release  # 常驻，默认每 60 分钟
+不挂 Web 主进程。启动后常驻，默认每 60 分钟。表由环境变量 HOLD_ENV 决定。
+  python app/backend_schedule/FT_RAW_DATA_sche.py
 """
 import sys
 import os
-import argparse
 import csv
 import json
 import threading
@@ -25,7 +23,7 @@ project_root_path = os.path.dirname(os.path.dirname(os.path.dirname(current_file
 if project_root_path not in sys.path:
     sys.path.insert(0, project_root_path)
 
-from app.config import Config
+from app.config import Config, is_test_env, reject_legacy_mode_arg
 from app.utils.database_util import DSN, PWD, USER
 from app.utils.mail_alert import install_severe_error_hooks, notify_severe_error
 from app.utils.rawdata_parse import (
@@ -373,28 +371,14 @@ class RawDataScheduler(threading.Thread):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Raw Data FTP→Oracle 定时任务。独立进程，不挂 Web。默认 debug。'
-    )
-    parser.add_argument(
-        '--mode',
-        choices=['debug', 'release'],
-        default='debug',
-        help='debug：立即执行一次后退出；release：按配置间隔循环调度。',
-    )
-    args = parser.parse_args()
-
-    print(f"运行模式: {args.mode}")
+    reject_legacy_mode_arg()
+    print(f"HOLD_ENV={'test' if is_test_env() else 'release'}")
     install_severe_error_hooks()
     scheduler = RawDataScheduler()
-
-    if args.mode == 'debug':
-        scheduler._run_job()
-    else:
-        scheduler.start()
-        try:
-            while scheduler.is_alive():
-                time.sleep(1)
-        except KeyboardInterrupt:
-            scheduler.stop()
-            scheduler.join(timeout=5)
+    scheduler.start()
+    try:
+        while scheduler.is_alive():
+            time.sleep(1)
+    except KeyboardInterrupt:
+        scheduler.stop()
+        scheduler.join(timeout=5)

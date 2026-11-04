@@ -6,7 +6,7 @@ import threading
 from sqlalchemy import func
 
 from app import db
-from app.config import argv_is_debug_mode
+from app.config import is_test_env
 from app.models.defect_code_sync_log import DefectCodeSyncLog
 
 _STATUS = {'OK', 'SKIPPED', 'FAILED'}
@@ -23,26 +23,26 @@ def _project_root():
 def spawn_defect_sync_process():
     """子进程 thick 模式连 RPTDB，跑完一轮退出。不要在 Web 进程里 init_oracle_client。"""
     if getattr(sys, 'frozen', False):
-        cmd = [sys.executable, '--defect-sync', '--mode', 'release']
+        cmd = [sys.executable, '--defect-sync']
         cwd = os.getcwd()
     else:
         root = _project_root()
         script = os.path.join(root, 'app', 'backend_schedule', 'FT_DEFECT_CODE_SYNC_sche.py')
-        cmd = [sys.executable, script, '--mode', 'release']
+        cmd = [sys.executable, script]
         cwd = root
     return subprocess.Popen(cmd, cwd=cwd)
 
 
-def trigger_defect_sync(debug_mode=None):
+def trigger_defect_sync(test_env=None):
     """
     root 手动触发一轮。
-    debug 不写正式表 DEFECT_CODE。
+    未设置 HOLD_ENV=release 时不写正式表 DEFECT_CODE。
     返回 (success, msg, data)。
     """
-    if debug_mode is None:
-        debug_mode = argv_is_debug_mode()
-    if debug_mode:
-        return False, '当前为 debug，不写正式表 DEFECT_CODE', None
+    if test_env is None:
+        test_env = is_test_env()
+    if test_env:
+        return False, '未设置 HOLD_ENV=release，不写正式表 DEFECT_CODE', None
 
     global _sync_proc
     with _sync_lock:

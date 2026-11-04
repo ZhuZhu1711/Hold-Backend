@@ -36,7 +36,7 @@
 X-Hold-Token: <双方约定的固定值>
 ```
 
-服务端按启动模式读环境变量：release 用 `HOLD_API_TOKEN`，`--mode debug` 用 `HOLD_API_TOKEN_DEBUG`。与 Header 值一致才放行；未配置则此通道关闭。匹配后不做角色校验。操作人记为系统用户（`SYSTEM_USER_ID=1`）。
+服务端按 `HOLD_ENV` 读 Token：不设置用 `HOLD_API_TOKEN_DEBUG`，`HOLD_ENV=release` 用 `HOLD_API_TOKEN`。与 Header 值一致才放行；未配置则此通道关闭。匹配后不做角色校验。操作人记为系统用户（`SYSTEM_USER_ID=1`）。
 
 ```http
 GET /admin/hold/api/holding_records?page=1&page_size=20 HTTP/1.1

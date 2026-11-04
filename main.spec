@@ -30,11 +30,14 @@ ML_PACKAGES = (
     'lightgbm',
     'scipy',
 )
-# 训练/评估脚本只在源码环境跑，冻结 exe 不需要
+# 训练/评估脚本只在源码环境跑，冻结 exe 不需要。
+# FT / CP 合批各打成 FT_HoldMerge.exe、CP_HoldMerge.exe，不打进本 exe。
 ML_APP_MODULES_PREFIX = (
     'app.hold_predict.train',
     'app.hold_predict.eval',
 )
+MERGE_SCRIPT_MODULE = 'app.backend_schedule.FT_HOLD_MERGE_sche'
+CP_MERGE_SCRIPT_MODULE = 'app.backend_schedule.CP_HOLD_MERGE_sche'
 
 datas = [
     (os.path.join(SPECDIR, 'app', 'templates'), os.path.join('app', 'templates')),
@@ -63,6 +66,11 @@ hiddenimports = [
 ]
 
 app_mods = collect_submodules('app')
+_merge_modules = (MERGE_SCRIPT_MODULE, CP_MERGE_SCRIPT_MODULE)
+app_mods = [
+    m for m in app_mods
+    if not any(m == mod or m.startswith(mod + '.') for mod in _merge_modules)
+]
 if not INCLUDE_HOLD_PREDICT_ML:
     app_mods = [
         m for m in app_mods
@@ -101,6 +109,8 @@ excludes = [
     'notebook',
     'pytest',
     'xlwings',
+    MERGE_SCRIPT_MODULE,
+    CP_MERGE_SCRIPT_MODULE,
 ]
 if not INCLUDE_HOLD_PREDICT_ML:
     excludes += list(ML_PACKAGES)

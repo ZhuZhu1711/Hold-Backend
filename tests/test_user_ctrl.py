@@ -4,8 +4,9 @@ from __future__ import annotations
 import unittest
 
 from app.controllers.auth_ctrl import normalize_login_password
-from app.controllers.user_ctrl import add_user
+from app.controllers.user_ctrl import ALLOWED_ROLES, add_user
 from app.models.user import User
+from app.utils.auth_decorators import ROLE_FT_PRODUCT_MANAGER
 
 
 class UserPasswordTest(unittest.TestCase):
@@ -43,7 +44,7 @@ class AddUserValidationTest(unittest.TestCase):
             'employee_no': 'A1',
             'name': '张三',
             'password': 'Hold26',
-            'role': 2,
+            'role': 3,
         })
         self.assertFalse(ok)
         self.assertIn('角色无效', msg)
@@ -83,6 +84,12 @@ class AddUserValidationTest(unittest.TestCase):
         })
         self.assertFalse(ok)
         self.assertIn('过于简单', msg)
+
+
+class FtProductManagerRoleTest(unittest.TestCase):
+    def test_role_20_is_allowed(self):
+        self.assertEqual(ROLE_FT_PRODUCT_MANAGER, 20)
+        self.assertIn(ROLE_FT_PRODUCT_MANAGER, ALLOWED_ROLES)
 
 
 if __name__ == '__main__':

@@ -11,5 +11,6 @@ class ProductInfo(db.Model):
     UPDATE_DTTM = Column(Date)
     
     PRO_ENG_ID = Column(Integer, ForeignKey('USERS.ID'))
+    PIE = Column(String(50))
 
     owner = db.relationship('User', back_populates='products')

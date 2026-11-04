@@ -33,8 +33,26 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$exe = Join-Path $PSScriptRoot 'dist\HoldBackend.exe'
+# 第二次不要 --clean，避免清掉刚打好的 HoldBackend.exe
+& $py -m PyInstaller --noconfirm FT_merge.spec
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+# 第三次同样不要 --clean，避免清掉前两个 exe
+& $py -m PyInstaller --noconfirm CP_merge.spec
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+$backend = Join-Path $PSScriptRoot 'dist\HoldBackend.exe'
+$merge = Join-Path $PSScriptRoot 'dist\FT_HoldMerge.exe'
+$cpMerge = Join-Path $PSScriptRoot 'dist\CP_HoldMerge.exe'
 Write-Host ""
-Write-Host "Build OK: $exe"
-Write-Host "启动: .\dist\HoldBackend.exe"
-Write-Host "调试模式: .\dist\HoldBackend.exe --mode debug"
+Write-Host "Build OK: $backend"
+Write-Host "Build OK: $merge"
+Write-Host "Build OK: $cpMerge"
+Write-Host "后台: .\dist\HoldBackend.exe"
+Write-Host "FT合批: .\dist\FT_HoldMerge.exe"
+Write-Host "CP合批: .\dist\CP_HoldMerge.exe"
+Write-Host "不设置 HOLD_ENV 为测试；正式机必须设 HOLD_ENV=release"

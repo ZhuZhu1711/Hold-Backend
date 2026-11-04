@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.config import argv_is_debug_mode
+from app.config import is_test_env
 from app.utils.markdown_render import markdown_to_html
 
 MAX_BYTES = 512 * 1024
@@ -42,7 +42,7 @@ def _data_dir(base_dir=None) -> Path:
 
 
 def _folder_name() -> str:
-    return 'release_notes_test' if argv_is_debug_mode() else 'release_notes'
+    return 'release_notes_test' if is_test_env() else 'release_notes'
 
 
 def notes_dir(base_dir=None) -> Path:

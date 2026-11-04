@@ -1,12 +1,19 @@
 from flask import Blueprint, render_template, request, jsonify, session
 from app.controllers import user_ctrl
-from app.utils.auth_decorators import current_role_name, root_required
+from app.utils.auth_decorators import (
+    ROLE_FT_PRODUCT_MANAGER,
+    ROLE_ROOT,
+    current_role_name,
+    role_required,
+)
+
+_USER_ADMIN = role_required(ROLE_ROOT, ROLE_FT_PRODUCT_MANAGER)
 
 user_bp = Blueprint('user', __name__, url_prefix='/admin/users')
 
 # --- 页面路由 ---
 @user_bp.route('')
-@root_required
+@_USER_ADMIN
 def user_list_page():
     """
     用户管理页面
@@ -20,7 +27,7 @@ def user_list_page():
 
 # --- 数据接口路由 ---
 @user_bp.route('/api', methods=['GET'])
-@root_required
+@_USER_ADMIN
 def get_users():
     """
     获取用户列表数据（支持搜索和排序）
@@ -48,7 +55,7 @@ def get_users():
         return jsonify({'code': 500, 'msg': msg, 'data': []})
 
 @user_bp.route('/api', methods=['POST'])
-@root_required
+@_USER_ADMIN
 def create_user():
     """
     新增用户
@@ -56,11 +63,16 @@ def create_user():
     数据格式: { "employee_no": "E1001", "name": "张三", "password": "明文（字母+数字至少6位）", "role": 1 }
     """
     data = request.get_json()
-    
-    # 简单校验
+
     if not data:
         return jsonify({'code': 400, 'msg': '请求数据为空'}), 400
-        
+
+    allowed, deny_msg = user_ctrl.actor_may_assign_role(
+        session.get('role'), data.get('role', 1),
+    )
+    if not allowed:
+        return jsonify({'code': 403, 'msg': deny_msg}), 403
+
     success, msg = user_ctrl.add_user(data)
     
     if success:
@@ -69,7 +81,7 @@ def create_user():
         return jsonify({'code': 400, 'msg': msg}), 400
 
 @user_bp.route('/api/<int:user_id>', methods=['DELETE'])
-@root_required
+@_USER_ADMIN
 def delete_user(user_id):
     """
     删除用户

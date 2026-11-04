@@ -9,12 +9,11 @@ RPTDB 版本低于 12.1，本进程使用 python-oracledb thick 模式。
 不要在 Web 进程里调用 init_oracle_client。
 
 启动方式：
-  python app/backend_schedule/FT_DEFECT_CODE_SYNC_sche.py --mode release
-debug 模式直接退出，不写正式表 DEFECT_CODE。
+  python app/backend_schedule/FT_DEFECT_CODE_SYNC_sche.py
+未设置 HOLD_ENV=release 时直接退出，不写正式表 DEFECT_CODE。
 """
 from __future__ import annotations
 
-import argparse
 import logging
 import os
 import sys
@@ -261,16 +260,11 @@ def run_job():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='缺陷代码全量同步（跑完一轮即退出）')
-    parser.add_argument(
-        '--mode',
-        choices=['debug', 'release'],
-        default='debug',
-        help='debug 不写库；release 立即同步一轮后退出。',
-    )
-    args = parser.parse_args()
-    if args.mode != 'release':
-        logger.info('debug 模式不执行缺陷代码同步，避免写入正式表 DEFECT_CODE')
+    from app.config import is_test_env, reject_legacy_mode_arg
+
+    reject_legacy_mode_arg()
+    if is_test_env():
+        logger.info('未设置 HOLD_ENV=release，不执行缺陷代码同步，避免写入正式表 DEFECT_CODE')
         return
 
     try:

@@ -72,8 +72,10 @@ class GetHoldingRecordsSqlTest(unittest.TestCase):
             self.assertIn('p.PRO_ENG_ID = :owner_eng_id', sql)
             self.assertIn('c.NEXT_OWNER_ID = :current_owner_id', sql)
             self.assertIn('NVL(r.STATUS, 0) <> :closed', sql)
+            self.assertIn('NVL(r.RECORD_TYPE, -1) <> :exclude_eng_future', sql)
         self.assertEqual(params.get('owner_eng_id'), 3)
         self.assertEqual(params.get('current_owner_id'), 3)
+        self.assertEqual(params.get('exclude_eng_future'), 3)
 
 
 def _root_client():

@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Hold 放行处置 API",
-    "description": "Hold 系统放行/处置相关接口，依据当前后端代码整理，可供 Apifox 导入。\n\n**导入**：Apifox → 项目 → 导入 → OpenAPI / Swagger → 选择本文件。\n\n**鉴权二选一**\n1. 先调 `POST /api/login`，后续请求自动带 Cookie `hold_session`。\n2. 外部系统每次请求带 Header `X-Hold-Token`（release 读 `HOLD_API_TOKEN`，debug 读 `HOLD_API_TOKEN_DEBUG`）。\n\n**端口**：release `50001`，debug `60001`。\n\n**工程师处置码**：1 放行 / 2 降级 / 3 重测 / 5 可靠性分析（转交 7 已屏蔽）。\n**生产处置码**：65 留样完成 / 8 回退 / 99 关闭。",
+    "description": "Hold 系统放行/处置相关接口，依据当前后端代码整理，可供 Apifox 导入。\n\n**导入**：Apifox → 项目 → 导入 → OpenAPI / Swagger → 选择本文件。\n\n**鉴权二选一**\n1. 先调 `POST /api/login`，后续请求自动带 Cookie `hold_session`。\n2. 外部系统每次请求带 Header `X-Hold-Token`（`HOLD_ENV=release` 读 `HOLD_API_TOKEN`，不设置时读 `HOLD_API_TOKEN_DEBUG`）。\n\n**端口**：测试 `60001`（默认），正式 `50001`（`HOLD_ENV=release`）。\n\n**工程师处置码**：1 放行 / 2 降级 / 3 重测 / 5 可靠性分析（转交 7 已屏蔽）。\n**生产处置码**：65 留样完成 / 8 回退 / 99 关闭。",
     "version": "2026-08-20",
     "contact": {
       "name": "Hold-Backend"
@@ -10,12 +10,12 @@
   },
   "servers": [
     {
-      "url": "http://localhost:50001",
-      "description": "release（默认）"
+      "url": "http://localhost:60001",
+      "description": "测试（不设置 HOLD_ENV）"
     },
     {
-      "url": "http://localhost:60001",
-      "description": "debug（--mode debug）"
+      "url": "http://localhost:50001",
+      "description": "正式（HOLD_ENV=release）"
     }
   ],
   "tags": [

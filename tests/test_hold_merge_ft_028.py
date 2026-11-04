@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 
 from app.backend_schedule.FT_HOLD_MERGE_sche import (
+    RECORD_TYPE_ENG_FUTURE,
     RECORD_TYPE_FT,
     build_rough_hold_records,
     resolve_record_type,
@@ -95,11 +96,47 @@ class FpqcFutureHoldSkipTest(unittest.TestCase):
         rows = [{
             **_row(1, '025', station='FATE-FA'),
             'HOLD_REASON': 'FUTURE HOLD',
+            'ROUTE_ID': 'FT-ENG',
         }]
         records, skipped = build_rough_hold_records(rows)
         self.assertEqual(skipped, [])
         self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].record_type, RECORD_TYPE_FT)
         self.assertEqual(records[0].items[0].hold_code, '025')
+
+    def test_eng_pqc_future_creates_unprocessed_type(self):
+        rows = [
+            _row(1, '023'),
+            {
+                **_row(2, '025', station='FPQC'),
+                'HOLD_REASON': 'defect future hold pending',
+                'ROUTE_ID': 'FT-ENG-01',
+            },
+            {
+                **_row(3, '099', station='PQC'),
+                'PRODUCT_ID': 'OTHER',
+                'HOLD_REASON': 'contains FUTURE text',
+                'ROUTE_ID': 'eng',
+            },
+        ]
+        records, skipped = build_rough_hold_records(rows)
+        self.assertEqual(skipped, [])
+        by_type = {}
+        for rec in records:
+            by_type.setdefault(rec.record_type, []).append(rec)
+        self.assertEqual(len(by_type[RECORD_TYPE_FT]), 1)
+        self.assertEqual(
+            [i.hold_code for i in by_type[RECORD_TYPE_FT][0].items],
+            ['023'],
+        )
+        future = by_type[RECORD_TYPE_ENG_FUTURE]
+        self.assertEqual(len(future), 1)
+        self.assertEqual(
+            {item.id for rec in future for item in rec.items},
+            {2, 3},
+        )
+        for rec in future:
+            self.assertEqual(rec.to_record_dict()['RECORD_TYPE'], RECORD_TYPE_ENG_FUTURE)
 
 
 class FaoiBackAqlHoldFviTest(unittest.TestCase):

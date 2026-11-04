@@ -5,9 +5,12 @@ import os
 import re
 from logging.handlers import RotatingFileHandler
 
-USER = "FT_OWEN"
-PWD = "Mee0MvpgXU!Lcp"
-DSN = "172.18.202.5:1521/jsqy"
+from app.config import Config
+
+# 地址和账号在 config.DB_PROFILES，这里只取当前环境那一套。
+USER = Config.DB_USER
+PWD = Config.DB_PASSWORD
+DSN = Config.DB_DSN
 
 # 1. 获取 logger 实例
 logger = logging.getLogger(__name__)
@@ -191,12 +194,12 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
             STATION∉(FAOIFINISH,FFVI)
       FVI : HOLD_CODE=023 + STATION∈(FAOIFINISH,FFVI)
       WLT : PRODUCT_ID LIKE '%-2.6', HOLD_CODE∈(004,022), STATION=WOQC
+      ENG预Hold : ROUTE_ID 含 ENG，STATION∈(FPQC,PQC)，HOLD_REASON 含 FUTURE
     AQL_HOLD 不参与合批（手提创建仍可直接写 record）。
     精确 RECORD_TYPE 仍由调用方按同样规则判定后写入 FT_HOLD_RECORD。
 
-    为保证 MES 多条同 wafer 记录插入完整：固定排除 HOLD_DTTM 最新的那个
-    WAFER_ID 的全部记录（HOLD_DTTM 为 VARCHAR2，格式 YYYY-MM-DD HH24:MI:SS，
-    可直接按字符串排序），留给下次轮询再处理。
+    同片多行未插完的扣片在合批任务里做：单片 / IQC_ATE / FVI 排除
+    HOLD_DTTM 最新的那个 WAFER_ID；梓一 / WLT 整组保留，按 info ID 等插入安静。
 
     返回 list[dict]，字段名与表列名一致；失败返回 None。
     """
@@ -240,12 +243,17 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
                     AND HOLD_CODE IN ('004', '022')
                     AND STATION = 'WOQC'
                 )
+                OR (
+                    UPPER(NVL(ROUTE_ID, '')) LIKE '%ENG%'
+                    AND UPPER(STATION) IN ('FPQC', 'PQC')
+                    AND UPPER(NVL(HOLD_REASON, '')) LIKE '%FUTURE%'
+                )
             )
     """
     tbl = table_name.upper()
 
-    # HOLD_DTTM 为 VARCHAR2(YYYY-MM-DD HH24:MI:SS)，字典序即时间序；
-    # 取 HOLD_DTTM 最大的一条所在 WAFER_ID，排除该 wafer 全部 N 条记录
+    # 候选一次捞全。扣掉全局最新 WAFER_ID 改在合批任务里按分组做，
+    # 避免 SQL 把梓一 / WLT 仍在插入的最后一片提前拿掉。
     sql = f"""
         SELECT
             ID,
@@ -268,15 +276,6 @@ def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
             {tbl}
         WHERE
             {base_filter}
-            AND WAFER_ID <> (
-                SELECT WAFER_ID FROM (
-                    SELECT WAFER_ID
-                    FROM {tbl}
-                    WHERE
-                        {base_filter}
-                    ORDER BY HOLD_DTTM DESC, ID DESC
-                ) WHERE ROWNUM = 1
-            )
         ORDER BY
             WAFER_ID, HOLD_DTTM, ID
     """

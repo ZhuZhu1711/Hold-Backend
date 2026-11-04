@@ -54,7 +54,7 @@
         }
         .modal-content {
             background: #fff; margin: 8% auto; padding: 20px; border-radius: 8px;
-            width: min(420px, 92vw); box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+            width: min(480px, 92vw); box-shadow: 0 8px 24px rgba(0,0,0,0.15);
         }
         .modal-content h3 { margin-bottom: 14px; font-size: 18px; }
         .form-group { margin-bottom: 14px; }
@@ -73,7 +73,7 @@
     <main class="main">
         <div class="card">
             <h1>产品管理</h1>
-            <p class="sub">维护产品型号、Gross Die 与负责工程师绑定。</p>
+            <p class="sub">工程师和 PIE 按型号配置。GC8613-3.5 与 GC8613-2.6 都记在 GC8613 上，Gross Die 仍按形态分别维护。</p>
 
             <div class="toolbar">
                 <div class="filters">
@@ -81,30 +81,28 @@
                     <select id="engineer-filter" onchange="applyFilters()">
                         <option value="">所有工程师</option>
                     </select>
-                    <input type="text" id="product-id-filter" placeholder="筛选产品ID" onkeyup="applyFilters()">
+                    <input type="text" id="pie-filter" placeholder="筛选 PIE" onkeyup="applyFilters()">
+                    <input type="text" id="product-id-filter" placeholder="筛选型号" onkeyup="applyFilters()">
                     <button class="btn btn-primary" onclick="loadProducts()">查询</button>
                 </div>
                 <button class="btn btn-primary" onclick="openModal()">+ 新增产品</button>
-            </div>
-
-            <div class="tabs">
-                <div class="tab active" onclick="switchTab('ate')">ATE 产品</div>
-                <div class="tab" onclick="switchTab('wlt')">WLT 产品</div>
             </div>
 
             <div style="overflow:auto; max-height:65vh;">
                 <table>
                     <thead>
                         <tr>
-                            <th onclick="sortBy('product_id')">产品ID <span id="sort-arrow-product_id" class="sort-arrow"></span></th>
-                            <th onclick="sortBy('gross_die')">Gross Die <span id="sort-arrow-gross_die" class="sort-arrow"></span></th>
+                            <th onclick="sortBy('family')">型号 <span id="sort-arrow-family" class="sort-arrow"></span></th>
+                            <th>形态</th>
+                            <th onclick="sortBy('gross_label')">Gross Die <span id="sort-arrow-gross_label" class="sort-arrow"></span></th>
                             <th onclick="sortBy('engineer_name')">负责工程师 <span id="sort-arrow-engineer_name" class="sort-arrow"></span></th>
+                            <th onclick="sortBy('pie')">PIE <span id="sort-arrow-pie" class="sort-arrow"></span></th>
                             <th onclick="sortBy('update_dt')">更新时间 <span id="sort-arrow-update_dt" class="sort-arrow"></span></th>
                             <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="product-table-body">
-                        <tr><td colspan="5" class="empty">加载中...</td></tr>
+                        <tr><td colspan="7" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -116,28 +114,33 @@
             <span class="close" onclick="closeModal()">&times;</span>
             <h3 id="modalTitle">产品信息</h3>
             <form id="productForm">
-                <input type="hidden" id="p_id">
-
                 <div class="form-group">
-                    <label>产品ID</label>
-                    <input type="text" id="p_product_id">
+                    <label id="p_product_id_label">完整型号</label>
+                    <input type="text" id="p_product_id" oninput="refreshLineTypePreview()" placeholder="例如 GC8613-3.5">
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" id="line-type-group">
                     <label>产品类型 (Line Type)</label>
-                    <input type="text" id="p_line_type_display" style="font-weight:bold;">
+                    <input type="text" id="p_line_type_display" readonly style="font-weight:bold; background:#f8f9fa;">
                 </div>
 
-                <div class="form-group">
+                <div class="form-group" id="add-gross-group">
                     <label>Gross Die</label>
-                    <input type="number" id="p_gross_die" required>
+                    <input type="number" id="p_gross_die">
                 </div>
+
+                <div id="edit-gross-fields"></div>
 
                 <div class="form-group">
                     <label>绑定工程师</label>
                     <select id="p_engineer">
                         <option value="">-- 未分配 --</option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label>所属 PIE</label>
+                    <input type="text" id="p_pie" maxlength="50" placeholder="工号或姓名，可留空">
                 </div>
 
                 <button type="button" class="btn btn-primary" style="width:100%" onclick="saveProduct()">保存</button>
@@ -148,9 +151,9 @@
     <script>
         let allProducts = [];
         let engineers = [];
-        let currentTab = 'ate';
+        let editingFamily = null;
         let currentSort = { column: '', direction: 'asc' };
-        let filters = { engineer: '', productId: '' };
+        let filters = { engineer: '', productId: '', pie: '' };
 
         function loadProducts() {
             const searchVal = document.getElementById('search-input').value;
@@ -164,25 +167,51 @@
                 });
         }
 
+        function formKind(lineType) {
+            if (lineType == 0) return 'ATE';
+            if (lineType == 1) return 'WLT';
+            return '其他';
+        }
+
+        function grossLabel(forms) {
+            return (forms || []).map(form => formKind(form.line_type) + ' ' + form.gross_die).join(' / ');
+        }
+
+        function formBadges(forms) {
+            return (forms || []).map(form => {
+                const kind = formKind(form.line_type);
+                const cls = form.line_type == 0 ? 'badge-ate' : (form.line_type == 1 ? 'badge-wlt' : '');
+                return `<span class="badge ${cls}">${kind}</span>`;
+            }).join(' ');
+        }
+
+        function matchesProduct(row, text) {
+            const query = text.toLowerCase();
+            if ((row.family || '').toLowerCase().includes(query)) return true;
+            return (row.forms || []).some(form => (form.product_id || '').toLowerCase().includes(query));
+        }
+
         function renderTable() {
             const tbody = document.getElementById('product-table-body');
             let html = '';
 
             let data = allProducts.filter(p => {
-                if (currentTab === 'ate') return p.line_type == 0;
-                return p.line_type != 0;
-            });
-
-            data = data.filter(p => {
                 if (filters.engineer && p.engineer_id != filters.engineer) return false;
-                if (filters.productId && !p.product_id.toLowerCase().includes(filters.productId.toLowerCase())) return false;
+                if (filters.productId && !matchesProduct(p, filters.productId)) return false;
+                if (filters.pie) {
+                    const pie = (p.pie || '').toLowerCase();
+                    if (!pie.includes(filters.pie.toLowerCase())) return false;
+                }
                 return true;
             });
+            data.forEach(row => { row.gross_label = grossLabel(row.forms); });
 
             if (currentSort.column) {
                 data.sort((a, b) => {
                     let aVal = a[currentSort.column];
                     let bVal = b[currentSort.column];
+                    if (aVal == null) aVal = '';
+                    if (bVal == null) bVal = '';
 
                     if (currentSort.column === 'update_dt') {
                         aVal = new Date(aVal);
@@ -203,14 +232,16 @@
             updateSortArrows();
 
             if (data.length === 0) {
-                html = '<tr><td colspan="5" class="empty">暂无数据</td></tr>';
+                html = '<tr><td colspan="7" class="empty">暂无数据</td></tr>';
             } else {
                 data.forEach(p => {
                     html += `
                         <tr>
-                            <td>${p.product_id}</td>
-                            <td>${p.gross_die}</td>
+                            <td>${p.family}</td>
+                            <td>${formBadges(p.forms)}</td>
+                            <td>${p.gross_label || '-'}</td>
                             <td>${p.engineer_name}</td>
+                            <td>${p.pie || '未分配'}</td>
                             <td>${p.update_dt}</td>
                             <td>
                                 <button class="btn btn-warning" onclick='editProduct(${JSON.stringify(p)})'>修改</button>
@@ -220,14 +251,6 @@
                 });
             }
             tbody.innerHTML = html;
-        }
-
-        function switchTab(type) {
-            currentTab = type;
-            const tabs = document.querySelectorAll('.tab');
-            tabs[0].className = type === 'ate' ? 'tab active' : 'tab';
-            tabs[1].className = type === 'wlt' ? 'tab active' : 'tab';
-            renderTable();
         }
 
         function sortBy(column) {
@@ -241,7 +264,7 @@
         }
 
         function updateSortArrows() {
-            const columns = ['product_id', 'gross_die', 'engineer_name', 'update_dt'];
+            const columns = ['family', 'gross_label', 'engineer_name', 'pie', 'update_dt'];
             columns.forEach(col => {
                 const arrowEl = document.getElementById(`sort-arrow-${col}`);
                 if (currentSort.column === col) {
@@ -274,31 +297,46 @@
         function applyFilters() {
             filters.engineer = document.getElementById('engineer-filter').value;
             filters.productId = document.getElementById('product-id-filter').value.trim();
+            filters.pie = document.getElementById('pie-filter').value.trim();
             renderTable();
+        }
+
+        function setFormMode(editing) {
+            editingFamily = editing;
+            document.getElementById('p_product_id').readOnly = editing;
+            document.getElementById('p_product_id_label').textContent = editing ? '型号' : '完整型号';
+            document.getElementById('line-type-group').style.display = editing ? 'none' : 'block';
+            document.getElementById('add-gross-group').style.display = editing ? 'none' : 'block';
+            document.getElementById('edit-gross-fields').style.display = editing ? 'block' : 'none';
+            if (!editing) {
+                document.getElementById('edit-gross-fields').innerHTML = '';
+            }
         }
 
         function openModal() {
             document.getElementById('productForm').reset();
-            document.getElementById('p_id').value = '';
             document.getElementById('p_product_id').value = '';
-            document.getElementById('p_line_type_display').value = '';
-            document.getElementById('modalTitle').innerText = "新增产品";
-
+            document.getElementById('p_pie').value = '';
+            setFormMode(false);
+            refreshLineTypePreview();
+            document.getElementById('modalTitle').innerText = "新增形态";
             fillEngineerSelect();
             document.getElementById('productModal').style.display = 'block';
         }
 
         function editProduct(p) {
-            document.getElementById('p_id').value = p.id;
-            document.getElementById('p_product_id').value = p.product_id;
-            document.getElementById('p_gross_die').value = p.gross_die;
-
-            const typeText = p.line_type == 0 ? "ATE (0)" : `WLT (${p.line_type})`;
-            document.getElementById('p_line_type_display').value = typeText;
-
+            setFormMode(true);
+            document.getElementById('p_product_id').value = p.family;
+            document.getElementById('p_pie').value = p.pie || '';
             fillEngineerSelect(p.engineer_id);
-
-            document.getElementById('modalTitle').innerText = "修改产品: " + p.product_id;
+            const box = document.getElementById('edit-gross-fields');
+            box.innerHTML = (p.forms || []).map(form => `
+                <div class="form-group">
+                    <label>${formKind(form.line_type)} Gross Die（${form.product_id}）</label>
+                    <input type="number" data-form-id="${form.id}" value="${form.gross_die}">
+                </div>
+            `).join('');
+            document.getElementById('modalTitle').innerText = "修改型号: " + p.family;
             document.getElementById('productModal').style.display = 'block';
         }
 
@@ -315,30 +353,50 @@
             document.getElementById('productModal').style.display = 'none';
         }
 
-        function saveProduct() {
-            const id = document.getElementById('p_id').value;
+        function lineTypeLabel(productId) {
+            const id = String(productId || '');
+            if (id.indexOf('-3.5') >= 0) return 'ATE (0)';
+            if (id.indexOf('-2.6') >= 0) return 'WLT (1)';
+            if (!id) return '';
+            return '未识别 (-1)';
+        }
+
+        function refreshLineTypePreview() {
             const productId = document.getElementById('p_product_id').value;
-            const grossDie = document.getElementById('p_gross_die').value;
+            document.getElementById('p_line_type_display').value = lineTypeLabel(productId);
+        }
+
+        function saveProduct() {
+            const productId = document.getElementById('p_product_id').value.trim();
             const engId = document.getElementById('p_engineer').value;
+            const pie = document.getElementById('p_pie').value.trim();
 
             if (!productId) {
-                alert("请输入产品ID");
+                alert(editingFamily ? "缺少型号" : "请输入完整型号");
                 return;
             }
 
-            let lineType = 0;
-            if (!id) {
-            }
-
-            const data = {
+            let url = '/admin/products/api';
+            let method = 'POST';
+            let data = {
                 product_id: productId,
-                gross_die: grossDie,
-                line_type: lineType,
-                engineer_id: engId === "" ? null : engId
+                gross_die: document.getElementById('p_gross_die').value,
+                engineer_id: engId === "" ? null : engId,
+                pie: pie
             };
-
-            const url = id ? `/admin/products/api/${id}` : '/admin/products/api';
-            const method = id ? 'PUT' : 'POST';
+            if (editingFamily) {
+                url = '/admin/products/api/family';
+                method = 'PUT';
+                data = {
+                    family: productId,
+                    engineer_id: engId === "" ? null : engId,
+                    pie: pie,
+                    forms: Array.from(document.querySelectorAll('[data-form-id]')).map(input => ({
+                        id: Number(input.dataset.formId),
+                        gross_die: input.value
+                    }))
+                };
+            }
 
             fetch(url, {
                 method: method,

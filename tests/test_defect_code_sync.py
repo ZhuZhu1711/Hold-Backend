@@ -292,10 +292,10 @@ class TriggerDefectSyncTest(unittest.TestCase):
 
     def test_debug_mode_refuses_without_process(self):
         with patch('app.controllers.defect_code_sync_ctrl.spawn_defect_sync_process') as spawn:
-            ok, msg, data = trigger_defect_sync(debug_mode=True)
+            ok, msg, data = trigger_defect_sync(test_env=True)
         self.assertFalse(ok)
         self.assertIsNone(data)
-        self.assertIn('debug', msg)
+        self.assertIn('HOLD_ENV=release', msg)
         spawn.assert_not_called()
 
     def test_release_starts_once_and_rejects_overlap(self):
@@ -306,11 +306,11 @@ class TriggerDefectSyncTest(unittest.TestCase):
             'app.controllers.defect_code_sync_ctrl.spawn_defect_sync_process',
             return_value=proc,
         ) as spawn:
-            ok, msg, data = trigger_defect_sync(debug_mode=False)
+            ok, msg, data = trigger_defect_sync(test_env=False)
             self.assertTrue(ok)
             self.assertEqual(data['pid'], 42)
             self.assertIn('已开始', msg)
-            again_ok, again_msg, again_data = trigger_defect_sync(debug_mode=False)
+            again_ok, again_msg, again_data = trigger_defect_sync(test_env=False)
         spawn.assert_called_once()
         self.assertFalse(again_ok)
         self.assertIsNone(again_data)

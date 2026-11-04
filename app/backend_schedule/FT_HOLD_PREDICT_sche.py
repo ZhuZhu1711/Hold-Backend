@@ -1,10 +1,10 @@
 """
 独立进程：FT 可放行概率静默打分 + 标签回填。
 
-不改处置接口 / UI。启动方式：
-  python app/backend_schedule/FT_HOLD_PREDICT_sche.py --mode debug    # 跑一轮后退出
-  python app/backend_schedule/FT_HOLD_PREDICT_sche.py --mode release  # 常驻
-也可由 main.py release 模式挂后台线程。
+不改处置接口 / UI。启动后常驻。表由环境变量 HOLD_ENV 决定。
+  python app/backend_schedule/FT_HOLD_PREDICT_sche.py
+  python app/backend_schedule/FT_HOLD_PREDICT_sche.py --force   # 不等待 TEST_WAFER，跑一轮后退出
+也可由正式环境的 main.py 挂后台线程。
 """
 from __future__ import annotations
 
@@ -166,18 +166,21 @@ class HoldPredictScheduler(threading.Thread):
 
 
 def main():
+    from app.config import is_test_env, reject_legacy_mode_arg
+
+    reject_legacy_mode_arg()
     parser = argparse.ArgumentParser(description='FT 可放行概率静默打分')
-    parser.add_argument('--mode', choices=['debug', 'release'], default='debug')
-    parser.add_argument('--force', action='store_true', help='不等待 TEST_WAFER/bysite')
+    parser.add_argument('--force', action='store_true', help='不等待 TEST_WAFER/bysite，跑一轮后退出')
     args = parser.parse_args()
     install_severe_error_hooks()
     cfg = Config()
     if not getattr(cfg, 'HOLD_PREDICT_ENABLED', False):
         logger.info('HOLD_PREDICT_ENABLED=False，退出（改 config.py 后重启即可启用）')
         return
-    if args.mode == 'debug':
-        stats = run_once(cfg, force=args.force)
-        logger.info('debug 单轮结束 %s', stats)
+    logger.info('HOLD_ENV=%s', 'test' if is_test_env() else 'release')
+    if args.force:
+        stats = run_once(cfg, force=True)
+        logger.info('force 单轮结束 %s', stats)
         return
     scheduler = HoldPredictScheduler()
     scheduler.start()

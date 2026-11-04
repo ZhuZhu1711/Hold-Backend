@@ -5,11 +5,13 @@ import logging
 from datetime import datetime
 
 from app.config import Config
-from app.backend_schedule.FT_HOLD_MERGE_sche import (
+from app.backend_schedule.hold_merge_rules import (
     HoldInfo,
+    RECORD_TYPE_ENG_FUTURE,
     RECORD_TYPE_FVI,
     RECORD_TYPE_FT,
     RECORD_TYPE_WLT,
+    is_eng_pqc_future_hold,
     RoughHoldRecord,
     resolve_record_type,
 )
@@ -28,6 +30,7 @@ RECORD_TYPE_LABELS = {
     RECORD_TYPE_FT: 'FT异常反馈单',
     RECORD_TYPE_FVI: 'FVI异常反馈单',
     RECORD_TYPE_WLT: 'WLT异常反馈单',
+    RECORD_TYPE_ENG_FUTURE: 'ENG预Hold',
 }
 
 _EMPTY_REASON = '历史数据无失败原因'
@@ -160,6 +163,8 @@ def _guess_record_type(infos):
         key=lambda x: (x.hold_dttm or datetime.min, x.id or 0),
     )
     for info in ordered:
+        if is_eng_pqc_future_hold(info.route_id, info.station, info.hold_reason):
+            return RECORD_TYPE_ENG_FUTURE
         rtype = resolve_record_type(info.product_id, info.hold_code, info.station)
         if rtype is not None:
             return rtype

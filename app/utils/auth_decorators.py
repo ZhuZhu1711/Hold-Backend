@@ -4,8 +4,10 @@
 角色约定（USERS.ROLE）：
   0 = root（最高权限，可查看全部数据）
   1 = 产品工程师（仅所属型号）
+  2 = CP生产（CP 客户端 /cp；不进 FT 生产 / 工程师 / 质量页面）
   8 = 质量部（只读：已处置物料报表，不参与决策）
   9 = 生产（查看生产节点 Hold / 流转）
+  20 = FT产品主管（仅 Web：用户增删、产品与工程师绑定。主管类占用 20–29，不进客户端）
 
 双通道：
   1) Session Cookie（人类用户登录）
@@ -25,14 +27,18 @@ API_TOKEN_EMPLOYEE_NO = 'API_TOKEN'
 
 ROLE_ROOT = 0
 ROLE_ENGINEER = 1
+ROLE_CP_PRODUCTION = 2
 ROLE_QUALITY = 8
 ROLE_PRODUCTION = 9
+ROLE_FT_PRODUCT_MANAGER = 20
 
 ROLE_NAMES = {
     ROLE_ROOT: '超级管理员',
     ROLE_ENGINEER: '产品工程师',
+    ROLE_CP_PRODUCTION: 'CP生产',
     ROLE_QUALITY: '质量部',
     ROLE_PRODUCTION: '生产',
+    ROLE_FT_PRODUCT_MANAGER: 'FT产品主管',
 }
 
 
@@ -190,6 +196,11 @@ def quality_required(f):
     return role_required(ROLE_QUALITY)(f)
 
 
+def cp_production_required(f):
+    """CP生产（ROLE=2）与 root（ROLE=0）可访问。产品工程师不可用。"""
+    return role_required(ROLE_CP_PRODUCTION, ROLE_ROOT)(f)
+
+
 def is_root():
     return session.get('role') == ROLE_ROOT
 
@@ -220,4 +231,8 @@ def home_endpoint_for_role(role=None):
         return 'production.dashboard'
     if role == ROLE_QUALITY:
         return 'quality.dashboard'
+    if role == ROLE_CP_PRODUCTION:
+        return 'auth.change_password_page'
+    if role == ROLE_FT_PRODUCT_MANAGER:
+        return 'product.product_list_page'
     return 'auth.dashboard'

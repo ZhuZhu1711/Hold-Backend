@@ -3,35 +3,100 @@ import sys
 from datetime import timedelta
 
 
-def argv_is_debug_mode(argv=None):
-    argv = sys.argv if argv is None else argv
-    for i, a in enumerate(argv):
-        a_l = a.lower()
-        if a_l.startswith('--mode='):
-            if a_l.split('=', 1)[1] == 'debug':
-                return True
-        if a_l == '--mode':
-            if i + 1 < len(argv) and argv[i + 1].lower() == 'debug':
-                return True
-        if a_l in ('mode==debug', 'mode=debug', 'debug'):
-            return True
-    return False
+# 服务器环境。不设置视为测试。正式机必须设 HOLD_ENV=release 才能启动正式表和正式端口。
+# 空 / test / debug → 测试；只有 release → 正式。其它值拒绝启动，避免写错库。
+_TEST_ENV_VALUES = frozenset({'', 'test', 'debug'})
+_RELEASE_ENV_VALUE = 'release'
 
 
-def hold_api_token_env_name(argv=None):
-    """release: HOLD_API_TOKEN；debug: HOLD_API_TOKEN_DEBUG。"""
-    return 'HOLD_API_TOKEN_DEBUG' if argv_is_debug_mode(argv) else 'HOLD_API_TOKEN'
-
-
-def load_hold_api_token(environ=None, argv=None):
+def hold_env(environ=None) -> str:
+    """返回 'test' 或 'release'。"""
     environ = os.environ if environ is None else environ
-    name = hold_api_token_env_name(argv)
+    raw = (environ.get('HOLD_ENV') or '').strip().lower()
+    if raw in _TEST_ENV_VALUES:
+        return 'test'
+    if raw == _RELEASE_ENV_VALUE:
+        return 'release'
+    raise SystemExit(
+        f'HOLD_ENV 未设置时为测试。正式环境必须设 HOLD_ENV=release，当前为 {raw!r}，已拒绝启动。'
+    )
+
+
+def is_test_env(environ=None) -> bool:
+    return hold_env(environ) != 'release'
+
+
+def cp_hold_tables(test_env: bool) -> tuple:
+    """CP 处置单和流转表。测试与正式分开，避免测试进程读正式表。"""
+    if test_env:
+        return 'CP_HOLD_RECORD_TEST', 'CP_CIRCULATION_HISTORY_TEST'
+    return 'CP_HOLD_RECORD', 'CP_CIRCULATION_HISTORY'
+
+
+def reject_legacy_mode_arg(argv=None):
+    """启动参数 --mode 已停用，避免和 HOLD_ENV 各说各话。"""
+    argv = sys.argv if argv is None else argv
+    for arg in argv[1:]:
+        if arg == '--mode' or str(arg).lower().startswith('--mode='):
+            raise SystemExit(
+                '不再使用 --mode。测试不设置 HOLD_ENV；正式环境必须设 HOLD_ENV=release。'
+            )
+
+
+def hold_api_token_env_name(environ=None):
+    """正式: HOLD_API_TOKEN；测试: HOLD_API_TOKEN_DEBUG。"""
+    return 'HOLD_API_TOKEN_DEBUG' if is_test_env(environ) else 'HOLD_API_TOKEN'
+
+
+def load_hold_api_token(environ=None):
+    environ = os.environ if environ is None else environ
+    name = hold_api_token_env_name(environ)
     return name, (environ.get(name) or '').strip()
+
+
+# 业务库。测试和正式并排放，改地址或账号只改对应这一段。
+# 不设置 HOLD_ENV 用 test；HOLD_ENV=release 用 release。
+DB_PROFILES = {
+    'test': {
+        'user': 'JSFT_TEST',
+        'password': 'Jsf5MncvKU!HBC',
+        'host': '172.18.252.24',
+        'port': 1521,
+        'service_name': 'mesdb',
+    },
+    'release': {
+        'user': 'FT_OWEN',
+        'password': 'Mee0MvpgXU!Lcp',
+        'host': '172.18.202.5',
+        'port': 1521,
+        'service_name': 'jsqy',
+    },
+}
+
+
+def db_profile(environ=None) -> dict:
+    key = 'test' if is_test_env(environ) else 'release'
+    return DB_PROFILES[key]
+
+
+def oracle_dsn(profile) -> str:
+    return f"{profile['host']}:{profile['port']}/{profile['service_name']}"
+
+
+def oracle_sqlalchemy_uri(profile) -> str:
+    return (
+        f"oracle+oracledb://{profile['user']}:{profile['password']}"
+        f"@{profile['host']}:{profile['port']}/?service_name={profile['service_name']}"
+    )
 
 
 class Config:
 
-    SQLALCHEMY_DATABASE_URI = 'oracle+oracledb://FT_OWEN:Mee0MvpgXU!Lcp@172.18.202.5:1521/?service_name=jsqy'
+    _db = db_profile()
+    DB_USER = _db['user']
+    DB_PASSWORD = _db['password']
+    DB_DSN = oracle_dsn(_db)
+    SQLALCHEMY_DATABASE_URI = oracle_sqlalchemy_uri(_db)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     # Flask Session 签名密钥：必须跨进程/重启稳定，否则持久 Cookie 登录态会失效
     # 生产环境请通过环境变量 HOLD_SECRET_KEY 覆盖
@@ -54,7 +119,7 @@ class Config:
     # 客户端「打开后台」一次性票据有效期（秒）
     WEB_SSO_TICKET_MAX_AGE = 60
     # 外部系统固定 Token（Header: X-Hold-Token）。空字符串 = 关闭该通道。
-    # release 读 HOLD_API_TOKEN，debug 读 HOLD_API_TOKEN_DEBUG。勿把真实值提交进仓库。
+    # 正式读 HOLD_API_TOKEN，测试（HOLD_ENV=test）读 HOLD_API_TOKEN_DEBUG。勿把真实值提交进仓库。
     HOLD_API_TOKEN_ENV, HOLD_API_TOKEN = load_hold_api_token()
 
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
@@ -83,7 +148,7 @@ class Config:
     RAW_DATA_LOCAL_DIR = 'RAW_DATA'
     RAW_DATA_INTERVAL_MINUTES = 60
 
-    # 缺陷代码每日全量同步（RPTDB → DEFECT_CODE）。只在 release 子进程里跑。
+    # 缺陷代码全量同步（RPTDB → DEFECT_CODE）。只在正式环境的子进程里跑。
     # RPTDB 低于 12.1，子进程用 thick 模式；Web 进程不初始化 Instant Client。
     RPTDB_DSN = '10.181.160.15:1521/RPTDB'
     RPTDB_USER = 'ZNZZ_USER'
@@ -101,12 +166,14 @@ class Config:
     )
 
     # Hold info 合并为 hold_record 的定时任务配置
-    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if argv_is_debug_mode() else 'FT_HOLD_INFO'
-    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if argv_is_debug_mode() else 'FT_HOLD_RECORD'
+    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if is_test_env() else 'FT_HOLD_INFO'
+    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if is_test_env() else 'FT_HOLD_RECORD'
     CIRCULATION_HISTORY_TABLE = (
-        'CIRCULATION_HISTORY_TEST' if argv_is_debug_mode() else 'CIRCULATION_HISTORY'
+        'CIRCULATION_HISTORY_TEST' if is_test_env() else 'CIRCULATION_HISTORY'
     )
-    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if argv_is_debug_mode() else 'FT_HOLD_PREDICT'
+    # CP 合批单独成表，不写 FT_HOLD_RECORD / CIRCULATION_HISTORY。
+    CP_HOLD_RECORD_TABLE, CP_CIRCULATION_TABLE = cp_hold_tables(is_test_env())
+    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if is_test_env() else 'FT_HOLD_PREDICT'
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30
@@ -123,8 +190,10 @@ class Config:
     SYSTEM_USER_ID = 1
     # 同 wafer + station + hold_code 且 HOLD_DTTM 相差在该小时数内 → 视为重复
     HOLD_DEDUP_WINDOW_HOURS = 1
-    # WLT 同 lot 多片可能分批到达：组内最新 HOLD_DTTM 距今不足该分钟数则本轮不建单
-    HOLD_WLT_SETTLE_MINUTES = 10
+    # 梓一 / WLT 同 lot：组内 max(info ID) 不再变大，且距上次变大已满该分钟数，才建单。
+    HOLD_LOT_QUIET_MINUTES = 30
+    # 自首次看到该组起超过该分钟数仍在进新行，用已有行建单，避免一直不进待办。
+    HOLD_LOT_QUIET_MAX_MINUTES = 120
 
     # FT 可放行概率静默打分（独立调度，不改处置/UI）。
     # 代码保留；改成 True 并重启后端即可重新启用。独立脚本 FT_HOLD_PREDICT_sche.py 同样看此开关。

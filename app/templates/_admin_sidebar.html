@@ -1,4 +1,5 @@
 {% set menu = active_menu|default('') %}
+{% set ft_product_manager = session.get('role') == 20 %}
 <style>
         .sidebar { width: 250px; background: #343a40; color: #fff; flex-shrink: 0; min-height: 100vh; }
         .sidebar-header { padding: 20px; text-align: center; background: #212529; }
@@ -32,6 +33,7 @@
             <p>{{ user_name or '-' }} · {{ role_name or '-' }}</p>
         </div>
         <ul class="nav-links">
+            {% if not ft_product_manager %}
             <li class="{% if menu == 'dashboard' %}active{% endif %}">
                 <a href="/dashboard">仪表盘</a>
             </li>
@@ -57,6 +59,7 @@
                     </ul>
                 </details>
             </li>
+            {% endif %}
             <li class="nav-group {% if menu in ['users', 'products', 'defects', 'defect_sync', 'software'] %}has-active{% endif %}">
                 <details {% if menu in ['users', 'products', 'defects', 'defect_sync', 'software'] %}open{% endif %}>
                     <summary>系统管理</summary>
@@ -67,6 +70,7 @@
                         <li class="{% if menu == 'products' %}active{% endif %}">
                             <a href="/admin/products">产品管理</a>
                         </li>
+                        {% if not ft_product_manager %}
                         <li class="{% if menu == 'defects' %}active{% endif %}">
                             <a href="/admin/defects">缺陷管理</a>
                         </li>
@@ -76,6 +80,7 @@
                         <li class="{% if menu == 'software' %}active{% endif %}">
                             <a href="/admin/software">客户端版本</a>
                         </li>
+                        {% endif %}
                     </ul>
                 </details>
             </li>

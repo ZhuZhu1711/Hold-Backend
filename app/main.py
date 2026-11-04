@@ -1,6 +1,5 @@
 import sys
 import os
-import argparse
 import signal
 import threading
 from multiprocessing import freeze_support
@@ -25,11 +24,10 @@ if project_root_path not in sys.path:
 # 应用初始化
 # ==========================================
 from app import create_app, db
-from app.config import Config
+from app.config import Config, is_test_env, reject_legacy_mode_arg
 # 直接从 routes 包中导入所有蓝图
-from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp, client_error_bp, software_bp, release_notes_bp, defect_sync_bp
+from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp, client_error_bp, software_bp, release_notes_bp, defect_sync_bp, cp_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
-from app.backend_schedule.FT_HOLD_MERGE_sche import HoldMergeScheduler
 
 app = create_app()
 
@@ -52,6 +50,7 @@ app.register_blueprint(client_error_bp)  # 客户端崩溃上报 (/api/client_er
 app.register_blueprint(software_bp)      # 客户端版本 SOFTWARE_INFO (/admin/software)
 app.register_blueprint(release_notes_bp) # 版本说明 Markdown（全员可读 / root 上传）
 app.register_blueprint(defect_sync_bp)   # 缺陷代码同步记录（/admin/defect-sync）
+app.register_blueprint(cp_bp)            # CP 客户端只读列表（/cp/...）
 
 # ==========================================
 # 程序入口
@@ -90,25 +89,18 @@ def _shutdown(schedulers):
 
 if __name__ == '__main__':
     freeze_support()
+    reject_legacy_mode_arg()
     if '--defect-sync' in sys.argv:
         sys.argv = [arg for arg in sys.argv if arg != '--defect-sync']
         from app.backend_schedule.FT_DEFECT_CODE_SYNC_sche import main as defect_sync_main
         defect_sync_main()
         raise SystemExit(0)
-    parser = argparse.ArgumentParser(description='启动 Flask 应用，可选 debug/release 模式。默认 release。')
-    parser.add_argument(
-        '--mode',
-        choices=['debug', 'release'],
-        default='release',
-        help='运行模式：debug 启动 Hold 合并调度；release 另启动 testlog / 预测等后台任务。',
-    )
-    args = parser.parse_args()
-    is_debug_mode = args.mode == 'debug'
+    test_env = is_test_env()
 
     with app.app_context():
         db.create_all()
-    
-    print(f"运行模式: {args.mode}")
+
+    print(f"HOLD_ENV={'test' if test_env else 'release'}")
     _token_env = getattr(Config, 'HOLD_API_TOKEN_ENV', 'HOLD_API_TOKEN')
     _token_on = bool((getattr(Config, 'HOLD_API_TOKEN', '') or '').strip())
     print(
@@ -126,11 +118,7 @@ if __name__ == '__main__':
     _install_interrupt_handlers(stop_event)
     schedulers = []
 
-    hold_merge_scheduler = HoldMergeScheduler()
-    hold_merge_scheduler.start()
-    schedulers.append(hold_merge_scheduler)
-
-    if not is_debug_mode:
+    if not test_env:
         task_scheduler = FlaskTaskScheduler()
         task_scheduler.start()
         schedulers.append(task_scheduler)

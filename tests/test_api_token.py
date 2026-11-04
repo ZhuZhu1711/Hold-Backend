@@ -145,37 +145,72 @@ class ApiTokenAuthTest(unittest.TestCase):
 
 
 class ApiTokenEnvNameTest(unittest.TestCase):
-    def test_release_reads_hold_api_token(self):
-        from app.config import hold_api_token_env_name, load_hold_api_token
+    def test_unset_reads_debug_token(self):
+        from app.config import hold_api_token_env_name, hold_env, load_hold_api_token
 
-        self.assertEqual(hold_api_token_env_name(['app.py', '--mode', 'release']), 'HOLD_API_TOKEN')
+        self.assertEqual(hold_env({}), 'test')
+        self.assertEqual(hold_api_token_env_name({}), 'HOLD_API_TOKEN_DEBUG')
         name, value = load_hold_api_token(
             environ={'HOLD_API_TOKEN': 'prod-secret', 'HOLD_API_TOKEN_DEBUG': 'dbg-secret'},
-            argv=['app.py', '--mode', 'release'],
-        )
-        self.assertEqual(name, 'HOLD_API_TOKEN')
-        self.assertEqual(value, 'prod-secret')
-
-    def test_debug_reads_hold_api_token_debug(self):
-        from app.config import hold_api_token_env_name, load_hold_api_token
-
-        self.assertEqual(hold_api_token_env_name(['app.py', '--mode', 'debug']), 'HOLD_API_TOKEN_DEBUG')
-        name, value = load_hold_api_token(
-            environ={'HOLD_API_TOKEN': 'prod-secret', 'HOLD_API_TOKEN_DEBUG': 'dbg-secret'},
-            argv=['app.py', '--mode', 'debug'],
         )
         self.assertEqual(name, 'HOLD_API_TOKEN_DEBUG')
         self.assertEqual(value, 'dbg-secret')
 
-    def test_debug_does_not_fallback_to_release_token(self):
+    def test_release_reads_hold_api_token(self):
+        from app.config import hold_api_token_env_name, hold_env, is_test_env, load_hold_api_token
+
+        environ = {
+            'HOLD_ENV': 'release',
+            'HOLD_API_TOKEN': 'prod-secret',
+            'HOLD_API_TOKEN_DEBUG': 'dbg-secret',
+        }
+        self.assertEqual(hold_env(environ), 'release')
+        self.assertFalse(is_test_env(environ))
+        self.assertEqual(hold_api_token_env_name(environ), 'HOLD_API_TOKEN')
+        name, value = load_hold_api_token(environ=environ)
+        self.assertEqual(name, 'HOLD_API_TOKEN')
+        self.assertEqual(value, 'prod-secret')
+
+    def test_test_env_reads_hold_api_token_debug(self):
+        from app.config import hold_api_token_env_name, is_test_env, load_hold_api_token
+
+        environ = {
+            'HOLD_ENV': 'test',
+            'HOLD_API_TOKEN': 'prod-secret',
+            'HOLD_API_TOKEN_DEBUG': 'dbg-secret',
+        }
+        self.assertTrue(is_test_env(environ))
+        self.assertEqual(hold_api_token_env_name(environ), 'HOLD_API_TOKEN_DEBUG')
+        name, value = load_hold_api_token(environ=environ)
+        self.assertEqual(name, 'HOLD_API_TOKEN_DEBUG')
+        self.assertEqual(value, 'dbg-secret')
+
+    def test_test_env_does_not_fallback_to_prod_token(self):
         from app.config import load_hold_api_token
 
         name, value = load_hold_api_token(
-            environ={'HOLD_API_TOKEN': 'prod-secret'},
-            argv=['app.py', '--mode', 'debug'],
+            environ={'HOLD_ENV': 'debug', 'HOLD_API_TOKEN': 'prod-secret'},
         )
         self.assertEqual(name, 'HOLD_API_TOKEN_DEBUG')
         self.assertEqual(value, '')
+
+    def test_db_profile_follows_hold_env(self):
+        from app.config import DB_PROFILES, db_profile, oracle_dsn, oracle_sqlalchemy_uri
+
+        test_profile = db_profile({})
+        release_profile = db_profile({'HOLD_ENV': 'release'})
+        self.assertIs(test_profile, DB_PROFILES['test'])
+        self.assertIs(release_profile, DB_PROFILES['release'])
+        self.assertIn(test_profile['host'], oracle_dsn(test_profile))
+        self.assertIn(test_profile['service_name'], oracle_sqlalchemy_uri(test_profile))
+        self.assertIn(release_profile['user'], oracle_sqlalchemy_uri(release_profile))
+
+    def test_unknown_hold_env_does_not_select_release(self):
+        from app.config import hold_env
+
+        for raw in ('staging', 'prod', 'production'):
+            with self.assertRaises(SystemExit):
+                hold_env({'HOLD_ENV': raw})
 
 
 if __name__ == '__main__':

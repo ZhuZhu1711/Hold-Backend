@@ -110,7 +110,6 @@
             <div class="advanced" id="advanced">
                 <label>SubCustomer <input id="sub_customer" value="GC" /></label>
                 <label>PackageType <input id="package_type" value="CIS" /></label>
-                <label>Factory <input id="factory" value="GC" /></label>
                 <label>Area <input id="area" value="FT" /></label>
             </div>
             <div class="meta" id="meta">请选择型号与时间后预览或导出</div>
@@ -126,12 +125,14 @@
                             <th>Hold Wafer</th>
                             <th>Wafer List</th>
                             <th>原因</th>
+                            <th>预处置人</th>
                             <th>测试程序</th>
                             <th>Hold 时间</th>
+                            <th>OA单号</th>
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="10" class="empty">暂无数据</td></tr>
+                        <tr><td colspan="12" class="empty">暂无数据</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -165,7 +166,7 @@
                 start_dttm: document.getElementById('start_dttm').value.trim(),
                 end_dttm: document.getElementById('end_dttm').value.trim(),
             });
-            ['sub_customer', 'package_type', 'factory', 'area'].forEach(id => {
+            ['sub_customer', 'package_type', 'area'].forEach(id => {
                 const v = document.getElementById(id).value.trim();
                 if (v) params.set(id, v);
             });
@@ -200,14 +201,14 @@
             }
             meta.className = 'meta';
             meta.textContent = '查询中...';
-            tbody.innerHTML = '<tr><td colspan="10" class="empty">查询中...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="12" class="empty">查询中...</td></tr>';
             try {
                 const resp = await fetch('/admin/hold/api/hold_info_export?' + params.toString());
                 const json = await resp.json();
                 if (json.code !== 200) {
                     meta.className = 'meta err';
                     meta.textContent = json.msg || '查询失败';
-                    tbody.innerHTML = '<tr><td colspan="10" class="empty">查询失败</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="12" class="empty">查询失败</td></tr>';
                     return;
                 }
                 const data = json.data || {};
@@ -220,7 +221,7 @@
                 meta.className = 'meta';
                 meta.textContent = note;
                 if (!items.length) {
-                    tbody.innerHTML = '<tr><td colspan="10" class="empty">该条件下无 Hold 记录</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="12" class="empty">该条件下无 Hold 记录</td></tr>';
                     return;
                 }
                 tbody.innerHTML = items.map(r => `<tr>
@@ -232,13 +233,15 @@
                     <td class="wafer-list">${esc(r.HOLD_WAFER_LIST)}</td>
                     <td class="wafer-list">${esc(r.WAFER_LIST)}</td>
                     <td class="reason">${esc(r.REASON)}</td>
+                    <td>${esc(r.PRE_HANDLER)}</td>
                     <td>${esc(r.TEST_PROGRAM)}</td>
                     <td>${esc(r.HOLD_DATETIME)}</td>
+                    <td>${esc(r.OA_NUMBER)}</td>
                 </tr>`).join('');
             } catch (e) {
                 meta.className = 'meta err';
                 meta.textContent = '查询失败：' + e;
-                tbody.innerHTML = '<tr><td colspan="10" class="empty">查询失败</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" class="empty">查询失败</td></tr>';
             }
         }
 

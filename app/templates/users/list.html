@@ -46,6 +46,7 @@
         .role-2 { background: #fff3e0; color: #ef6c00; }
         .role-8 { background: #f3e5f5; color: #6a1b9a; }
         .role-9 { background: #e8f5e9; color: #2e7d32; }
+        .role-20 { background: #e0f2f1; color: #00695c; }
         .modal-mask {
             display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35);
             z-index: 100; align-items: center; justify-content: center;
@@ -124,9 +125,13 @@
                 <label>角色</label>
                 <select id="new_role">
                     <option value="1">产品工程师</option>
+                    {% if session.get('role') != 20 %}
+                    <option value="2">CP生产</option>
                     <option value="9">生产</option>
                     <option value="8">质量部</option>
+                    <option value="20">FT产品主管</option>
                     <option value="0">超级管理员</option>
+                    {% endif %}
                 </select>
             </div>
             <div class="modal-actions">
@@ -157,13 +162,15 @@
                                 const roleClass = user.role === 0 ? 'role-0'
                                     : (user.role === 2 ? 'role-2'
                                     : (user.role === 8 ? 'role-8'
-                                    : (user.role === 9 ? 'role-9' : 'role-1')));
+                                    : (user.role === 9 ? 'role-9'
+                                    : (user.role === 20 ? 'role-20' : 'role-1'))));
                                 const roleMap = {
                                     0: '超级管理员',
                                     1: '产品工程师',
-                                    2: '管理员',
+                                    2: 'CP生产',
                                     8: '质量部',
-                                    9: '生产'
+                                    9: '生产',
+                                    20: 'FT产品主管'
                                 };
                                 const roleName = roleMap[user.role] || '未知角色';
                                 const isAdmin = user.role === 0;

@@ -1,12 +1,29 @@
 from app import db
 from app.models import User
 from app.controllers.auth_ctrl import normalize_login_password, password_matches
-from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_NAMES
+from app.utils.auth_decorators import (
+    ROLE_ENGINEER,
+    ROLE_FT_PRODUCT_MANAGER,
+    ROLE_NAMES,
+)
 from app.utils.password_policy import user_must_change_password, validate_new_password
 
 ALLOWED_ROLES = set(ROLE_NAMES.keys())
 EMPLOYEE_NO_MAX = 20
 NAME_MAX = 20
+
+
+def actor_may_assign_role(actor_role, requested_role):
+    """FT产品主管只能把新用户建成产品工程师。其它调用方不在这里限制。"""
+    if actor_role != ROLE_FT_PRODUCT_MANAGER:
+        return True, ''
+    try:
+        requested = int(requested_role)
+    except (TypeError, ValueError):
+        return False, 'FT产品主管只能新增产品工程师'
+    if requested != ROLE_ENGINEER:
+        return False, 'FT产品主管只能新增产品工程师'
+    return True, ''
 
 
 def login(employee_no, password_input):
@@ -159,7 +176,9 @@ def add_user(data):
     except (TypeError, ValueError):
         return False, '角色无效'
     if role not in ALLOWED_ROLES:
-        return False, '角色无效，须为超级管理员 / 产品工程师 / 质量部 / 生产'
+        return False, (
+            '角色无效，须为超级管理员 / 产品工程师 / CP生产 / 质量部 / 生产 / FT产品主管'
+        )
     ok, policy_msg = validate_new_password(employee_no, password)
     if not ok:
         return False, policy_msg

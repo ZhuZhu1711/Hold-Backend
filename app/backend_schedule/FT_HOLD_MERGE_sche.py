@@ -1,24 +1,27 @@
 import sys
 import os
-import argparse
+import json
 import threading
 import time
 import schedule
 import logging
 from logging.handlers import RotatingFileHandler
 
-# 直接运行本文件时补齐项目根路径（与 main.py 一致）
-current_file_path = os.path.abspath(__file__)
-project_root_path = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
+# 冻结后日志和水位文件写到 exe 旁边，不写到解包临时目录。
+if getattr(sys, 'frozen', False):
+    os.chdir(os.path.dirname(os.path.abspath(sys.executable)))
+    project_root_path = getattr(sys, '_MEIPASS', os.getcwd())
+else:
+    current_file_path = os.path.abspath(__file__)
+    project_root_path = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
 if project_root_path not in sys.path:
     sys.path.insert(0, project_root_path)
 
 from collections import defaultdict
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
-from app.config import Config
+from app.config import Config, is_test_env, reject_legacy_mode_arg
 from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
     HOLD_WAFER_ATTR_ZIYI,
@@ -42,61 +45,37 @@ from app.utils.database_util import (
 # AQL_HOLD 不再合批；手提创建仍可直接写 record。
 # 不满足以上规则的 hold_info 不转成 record。
 # 028（重码风险）仍为 RECORD_TYPE=0，但与同片/同批良率、缺陷率 hold 分列，不拼进同一条 record。
-# FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD 的 info 不参与合批。
-_FT_HOLD_CODES = frozenset({'023', '024', '025', '027', '028'})
-_FT_DUPCODE_HOLD_CODE = '028'
-_FVI_HOLD_CODES = frozenset({'023'})
-_WLT_HOLD_CODES = frozenset({'004', '022'})
-_FVI_STATIONS = frozenset({'FAOIFINISH', 'FFVI'})
-_WLT_STATIONS = frozenset({'WOQC'})
+# 非 ENG 的 FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD：仍不建单。
+# ENG 路线 + PQC/FPQC + 原因含 FUTURE：RECORD_TYPE=3，建单但不进入处置。
+from app.backend_schedule.hold_merge_rules import (
+    RECORD_TYPE_ENG_FUTURE,
+    RECORD_TYPE_FT,
+    RECORD_TYPE_WLT,
+    HoldInfo,
+    RoughHoldRecord,
+    _FT_DUPCODE_HOLD_CODE,
+    is_eng_pqc_future_hold,
+    resolve_record_type,
+)
+
 _FPQC_FUTURE_HOLD_CODE = '025'
 _FPQC_FUTURE_HOLD_STATION = 'FPQC'
 _FPQC_FUTURE_HOLD_REASON = 'FUTURE HOLD'
 
-RECORD_TYPE_FT = 0
-RECORD_TYPE_FVI = 1
-RECORD_TYPE_WLT = 2
+# 梓一 / WLT 同 lot：水位不再变大后，再安静这么久才建单。调度器优先读配置。
+_LOT_QUIET_MINUTES_DEFAULT = 30
+# 自首次看到该组起超过该时长仍在进新行，用已有行建单。
+_LOT_QUIET_MAX_MINUTES_DEFAULT = 120
 
-# WLT 同 lot 多片可能有时间差：组内最新 HOLD 未满该分钟数则本轮不建单
-_WLT_SETTLE_MINUTES_DEFAULT = 10
-
-
-def resolve_record_type(
-    product_id: str,
-    hold_code: str,
-    station: str,
-) -> Optional[int]:
-    """
-    按 dispose_api.md「处置单划分」判定 RECORD_TYPE。
-    不匹配任何规则时返回 None（无需转成 record）。
-    """
-    pid = (product_id or '').strip()
-    code = (hold_code or '').strip()
-    sta = (station or '').strip().upper()
-
-    # FVI：先判站点限定规则，避免与 FT 的「站点排除」交叉误伤
-    if code in _FVI_HOLD_CODES and sta in _FVI_STATIONS:
-        return RECORD_TYPE_FVI
-
-    if (
-        pid.endswith('-3.5')
-        and code in _FT_HOLD_CODES
-        and sta not in _FVI_STATIONS
-    ):
-        return RECORD_TYPE_FT
-
-    if (
-        pid.endswith('-2.6')
-        and code in _WLT_HOLD_CODES
-        and sta in _WLT_STATIONS
-    ):
-        return RECORD_TYPE_WLT
-
-    return None
 
 
 def _is_fpqc_future_hold(info: 'HoldInfo') -> bool:
-    """FPQC 站点 025 且 HOLD_REASON 含 FUTURE HOLD：预 hold，不参与合批。"""
+    """非 ENG 的 FPQC 025 且原因含 FUTURE HOLD：仍不建单。
+
+    ENG + PQC/FPQC + FUTURE 改走 RECORD_TYPE_ENG_FUTURE，不在这里排除。
+    """
+    if is_eng_pqc_future_hold(info.route_id, info.station, info.hold_reason):
+        return False
     code = (info.hold_code or '').strip()
     station = (info.station or '').strip().upper()
     reason = info.hold_reason or ''
@@ -133,276 +112,6 @@ logger.addHandler(file_handler)
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-
-# HOLD_DTTM 常见格式（VARCHAR2）
-_HOLD_DTTM_FORMATS = (
-    '%Y-%m-%d %H:%M:%S',
-    '%Y/%m/%d %H:%M:%S',
-    '%Y-%m-%d %H:%M:%S.%f',
-    '%Y/%m/%d %H:%M:%S.%f',
-    '%Y%m%d%H%M%S',
-    '%Y-%m-%dT%H:%M:%S',
-    '%Y-%m-%dT%H:%M:%S.%f',
-)
-
-
-def parse_hold_dttm(raw) -> Optional[datetime]:
-    """解析 HOLD_DTTM；无法解析时返回 None。"""
-    if raw is None:
-        return None
-    if isinstance(raw, datetime):
-        return raw
-    text = str(raw).strip()
-    if not text:
-        return None
-    for fmt in _HOLD_DTTM_FORMATS:
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    logger.warning(f"无法解析 HOLD_DTTM: {raw!r}")
-    return None
-
-
-def _join_unique(values, sep: str = '@', max_len: Optional[int] = None) -> Optional[str]:
-    """按出现顺序去重拼接；空结果返回 None。"""
-    seen = set()
-    parts = []
-    for raw in values:
-        if raw is None:
-            continue
-        text = str(raw).strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        parts.append(text)
-    if not parts:
-        return None
-    joined = sep.join(parts)
-    if max_len is not None and len(joined) > max_len:
-        return joined[:max_len]
-    return joined
-
-
-def _norm_grade_num(value) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text if text else None
-
-
-def _pick_wlt_lot_id(
-    items: List['HoldInfo'],
-    fallback: Optional[str] = None,
-) -> Optional[str]:
-    """
-    WLT 写入 RECORD 的 LOT_ID：保留 INFO 原值（LOT.NO），不用分组前缀。
-    同组混有前缀与 LOT.NO 时优先带 `.NN` 的值。
-    """
-    lots: List[str] = []
-    seen = set()
-    for item in items or []:
-        text = str(item.lot_id or '').strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        lots.append(text)
-    if not lots:
-        return fallback
-    dotted = [x for x in lots if '.' in x and normalize_lot_id(x) != x]
-    if dotted:
-        return dotted[0]
-    suffixed = [x for x in lots if normalize_lot_id(x) != x]
-    if suffixed:
-        return suffixed[0]
-    return lots[0]
-
-
-def _merge_grade_num(items: List['HoldInfo']) -> Optional[str]:
-    """
-    合并多条 hold_info 的 GRADE_NUM：
-      1) 全部相同（含全 NULL）→ 任取其一
-      2) 除 NULL 外仅一个非空值 → 用该值
-      3) 除 NULL 外有多个非空值 → 取 HOLD_DTTM 最新一行的值
-    """
-    if not items:
-        return None
-
-    norms = [_norm_grade_num(i.grade_num) for i in items]
-    unique_all = set(norms)
-    if len(unique_all) <= 1:
-        return norms[0] if norms else None
-
-    non_null = {v for v in unique_all if v is not None}
-    if len(non_null) == 1:
-        return next(iter(non_null))
-    if not non_null:
-        return None
-
-    latest = max(
-        items,
-        key=lambda x: (x.hold_dttm or datetime.min, x.id or 0),
-    )
-    return _norm_grade_num(latest.grade_num)
-
-
-@dataclass
-class HoldInfo:
-    """单条 FT_HOLD_INFO 的内存表示。"""
-    id: int
-    hold_dttm: Optional[datetime]
-    hold_dttm_raw: str
-    station: str
-    equip_id: str
-    product_id: str
-    lot_id: str
-    wafer_id: str
-    hold_code: str
-    hold_reason: str
-    source: int
-    second_code: Optional[str] = None
-    route_id: Optional[str] = None
-    grade_num: Optional[str] = None
-    hold_record_id: int = 0
-    holding: int = 0
-    remark: Optional[str] = None
-
-    @classmethod
-    def from_row(cls, row: dict) -> 'HoldInfo':
-        raw = row.get('HOLD_DTTM')
-        return cls(
-            id=row.get('ID'),
-            hold_dttm=parse_hold_dttm(raw),
-            hold_dttm_raw=str(raw) if raw is not None else '',
-            station=row.get('STATION') or '',
-            equip_id=row.get('EQUIP_ID') or '',
-            product_id=row.get('PRODUCT_ID') or '',
-            lot_id=row.get('LOT_ID') or '',
-            wafer_id=row.get('WAFER_ID') or '',
-            hold_code=row.get('HOLD_CODE') or '',
-            hold_reason=row.get('HOLD_REASON') or '',
-            source=row.get('SOURCE') if row.get('SOURCE') is not None else 0,
-            second_code=row.get('SECOND_CODE'),
-            route_id=row.get('ROUTE_ID'),
-            grade_num=row.get('GRADE_NUM'),
-            hold_record_id=(
-                row.get('HOLD_RECORD_ID')
-                if row.get('HOLD_RECORD_ID') is not None
-                else 0
-            ),
-            holding=row.get('HOLDING') if row.get('HOLDING') is not None else 0,
-            remark=row.get('REMARK'),
-        )
-
-
-@dataclass
-class RoughHoldRecord:
-    """
-    普通：按 (WAFER_ID, RECORD_TYPE, 重码桶) 分组；
-    分片合批（LOT_ID!=WAFER_ID 且 LOT 后缀数字>2位）：按 (LOT_ID, RECORD_TYPE, 重码桶) 分组；
-    WLT：同 lot（wafer/lot 中 '-' / `.NN` 前文本相同）合并，按 (lot_prefix, RECORD_TYPE) 分组。
-    FT 重码(028) 与同片/同批良率、缺陷率 hold 分列。
-    并对 (WAFER_ID, STATION, HOLD_CODE) 做时间窗去重后的粗糙 hold record。
-    items 为去重后用于拼装 FT_HOLD_RECORD 的条目；
-    all_source_ids 含去重前全部源 ID，写入成功后一并回写 HOLD_RECORD_ID。
-    """
-    wafer_id: str
-    record_type: int
-    items: List[HoldInfo] = field(default_factory=list)
-    all_source_ids: List[int] = field(default_factory=list)
-    # True：分片合批 / WLT 同 lot 合并，WAFER_ID 写入 #01#02 展示串
-    fragmented_merged: bool = False
-    # WLT：分组用的 lot 前缀；写入 RECORD.LOT_ID 仍用 INFO 原值。其它模式为 None
-    lot_id_override: Optional[str] = None
-    # FT 重码桶：'028' 或 ''
-    merge_code_bucket: str = ''
-
-    @property
-    def source_ids(self) -> List[int]:
-        return list(self.all_source_ids) or [
-            item.id for item in self.items if item.id is not None
-        ]
-
-    def summary(self) -> str:
-        codes = sorted({i.hold_code for i in self.items})
-        stations = sorted({i.station for i in self.items})
-        if self.lot_id_override is not None:
-            mode = 'wlt_lot'
-        elif self.fragmented_merged:
-            mode = 'fragmented_lot'
-        else:
-            mode = 'wafer'
-        lot_part = (
-            f", lot={self.lot_id_override}" if self.lot_id_override else ''
-        )
-        return (
-            f"mode={mode}, wafer={self.wafer_id}{lot_part}, "
-            f"record_type={self.record_type}, "
-            f"items={len(self.items)}, source_ids={len(self.source_ids)}, "
-            f"codes={codes}, stations={stations}"
-        )
-
-    def to_record_dict(
-        self,
-        status: int = 0,
-    ) -> Optional[dict]:
-        """
-        将去重后的 items 归纳为一条 FT_HOLD_RECORD 行数据。
-        基础字段取时间最早一条；HOLD_CODE / HOLD_REASON 按时间序去重后用 @ 拼接。
-        RECORD_TYPE 取本 rough record 按处置单划分判定的值。
-        分片合批 / WLT 同 lot：WAFER_ID 存多片展示串（如 #01#02）。
-        WLT：LOT_ID 保留源 INFO 原值（如 S83209.13）；lot_id_override 只作分组前缀。
-        """
-        if not self.items:
-            return None
-        ordered = sorted(
-            self.items,
-            key=lambda x: (x.hold_dttm or datetime.min, x.id or 0),
-        )
-        first = ordered[0]
-        hold_code = _join_unique(
-            (i.hold_code for i in ordered), sep='@', max_len=100
-        )
-        hold_reason = _join_unique(
-            (i.hold_reason for i in ordered), sep='@', max_len=512
-        )
-        second_code = next(
-            (i.second_code for i in ordered if i.second_code), None
-        )
-        route_id = next((i.route_id for i in ordered if i.route_id), None)
-        grade_num = _merge_grade_num(ordered)
-        if self.fragmented_merged:
-            wafer_out = build_merged_wafer_display(
-                (i.wafer_id for i in ordered), max_len=100
-            ) or self.wafer_id
-        else:
-            wafer_out = self.wafer_id
-        if self.lot_id_override is not None:
-            lot_out = _pick_wlt_lot_id(ordered, fallback=self.lot_id_override)
-        else:
-            lot_out = first.lot_id
-        # 属性用源 LOT/EQUIP/STATION（WLT 分组前缀截断前）
-        hold_wafer_attr = compute_hold_wafer_attr(
-            first.lot_id, first.equip_id, first.station
-        )
-        return {
-            'PRODUCT_ID': first.product_id,
-            'STATION': first.station,
-            'EQUIP_ID': first.equip_id,
-            'LOT_ID': lot_out,
-            'WAFER_ID': wafer_out,
-            'HOLD_CODE': hold_code,
-            'HOLD_REASON': hold_reason,
-            'SOURCE': first.source if first.source is not None else 0,
-            'SECOND_CODE': second_code,
-            'ROUTE_ID': route_id,
-            'GRADE_NUM': grade_num,
-            'RECORD_TYPE': self.record_type,
-            'STATUS': status,
-            # FT_HOLD_RECORD.HOLD_DTTM 为 DATE，取最早一条的时间
-            'HOLD_DTTM': first.hold_dttm,
-            'HOLD_WAFER_ATTR': hold_wafer_attr,
-        }
 
 
 def dedupe_hold_infos(
@@ -477,7 +186,10 @@ def build_rough_hold_records(
                 skipped_ids.append(info.id)
             continue
 
-        rtype = resolve_record_type(info.product_id, info.hold_code, info.station)
+        if is_eng_pqc_future_hold(info.route_id, info.station, info.hold_reason):
+            rtype = RECORD_TYPE_ENG_FUTURE
+        else:
+            rtype = resolve_record_type(info.product_id, info.hold_code, info.station)
         if rtype is None:
             logger.info(
                 f"hold_info id={info.id} 不满足处置单划分，无需转成 record "
@@ -545,32 +257,12 @@ def build_rough_hold_records(
     return records, skipped_ids
 
 
-def should_defer_wlt_record(
-    rec: RoughHoldRecord,
-    now: Optional[datetime] = None,
-    settle: timedelta = timedelta(minutes=_WLT_SETTLE_MINUTES_DEFAULT),
-) -> bool:
-    """
-    WLT 同 lot 多片可能分批到达：组内最新 HOLD_DTTM 距今不足 settle（默认 10 分钟）
-    则本轮不建单、不标脏，留给下次定时周期，避免先到的片单独成单。
-    非 WLT、或无法解析 HOLD_DTTM 时不推迟。
-    """
-    if rec.record_type != RECORD_TYPE_WLT:
-        return False
-    times = [i.hold_dttm for i in rec.items if i.hold_dttm is not None]
-    if not times:
-        return False
-    latest = max(times)
-    now = now if now is not None else datetime.now()
-    return (now - latest) < settle
-
-
 def is_ziyi_append_candidate(rec: RoughHoldRecord) -> bool:
     """
     梓一合批才走跨周期追加：分片合批、非 WLT、ATTR 含梓一 bit。
-    IQC_ATE / 普通单片不合此条件。
+    IQC_ATE / 普通单片 / ENG 预 Hold 不合此条件。
     """
-    if rec.record_type == RECORD_TYPE_WLT:
+    if rec.record_type in (RECORD_TYPE_WLT, RECORD_TYPE_ENG_FUTURE):
         return False
     if rec.lot_id_override is not None:
         return False
@@ -579,6 +271,276 @@ def is_ziyi_append_candidate(rec: RoughHoldRecord) -> bool:
     first = rec.items[0]
     attr = compute_hold_wafer_attr(first.lot_id, first.equip_id, first.station)
     return bool(attr & HOLD_WAFER_ATTR_ZIYI)
+
+
+def format_quiet_state_key(mode: str, key_id: str, record_type: int, bucket: str) -> str:
+    """水位文件里的分组键。028 分桶与合批分组键一致。"""
+    return f'{mode}|{key_id}|{int(record_type)}|{bucket or ""}'
+
+
+def quiet_state_key_for_row(row: dict) -> Optional[str]:
+    """
+    梓一分片合批或 WLT 同 lot 返回水位键；单片 / IQC_ATE / FVI / 不参与合批的行返回 None。
+    判定顺序与 build_rough_hold_records 的分组一致。
+    """
+    if not isinstance(row, dict):
+        return None
+    info = HoldInfo.from_row(row)
+    if not str(info.wafer_id or '').strip():
+        return None
+    if _is_fpqc_future_hold(info):
+        return None
+    if is_eng_pqc_future_hold(info.route_id, info.station, info.hold_reason):
+        return None
+    rtype = resolve_record_type(info.product_id, info.hold_code, info.station)
+    if rtype is None:
+        return None
+    bucket = _merge_code_bucket(rtype, info.hold_code)
+    if rtype == RECORD_TYPE_WLT:
+        lot_prefix = (
+            normalize_lot_id(info.wafer_id) or normalize_lot_id(info.lot_id)
+        )
+        if not lot_prefix:
+            return None
+        return format_quiet_state_key('wlt_lot', lot_prefix, rtype, bucket)
+    if is_fragmented_merged_lot(info.lot_id, info.wafer_id):
+        attr = compute_hold_wafer_attr(info.lot_id, info.equip_id, info.station)
+        if attr & HOLD_WAFER_ATTR_ZIYI:
+            return format_quiet_state_key('lot', info.lot_id, rtype, bucket)
+    return None
+
+
+def quiet_state_key_for_record(rec: RoughHoldRecord) -> Optional[str]:
+    """与 quiet_state_key_for_row 对齐的 record 水位键。非梓一 / WLT 返回 None。"""
+    if rec.record_type == RECORD_TYPE_WLT and rec.lot_id_override:
+        return format_quiet_state_key(
+            'wlt_lot', rec.lot_id_override, rec.record_type, rec.merge_code_bucket,
+        )
+    if is_ziyi_append_candidate(rec):
+        return format_quiet_state_key(
+            'lot', rec.items[0].lot_id, rec.record_type, rec.merge_code_bucket,
+        )
+    return None
+
+
+def pick_latest_wafer_id(rows: List[dict]) -> Optional[str]:
+    """
+    全局 HOLD_DTTM 最新的 WAFER_ID。HOLD_DTTM 为 VARCHAR2，字典序即时间序；
+    相同则 ID 更大者优先。与原先 SQL `ORDER BY HOLD_DTTM DESC, ID DESC` 一致。
+    """
+    best_key = None
+    best_wafer = None
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        wafer = str(row.get('WAFER_ID') or '').strip()
+        if not wafer:
+            continue
+        dttm = '' if row.get('HOLD_DTTM') is None else str(row.get('HOLD_DTTM'))
+        try:
+            row_id = int(row.get('ID') or 0)
+        except (TypeError, ValueError):
+            row_id = 0
+        key = (dttm, row_id)
+        if best_key is None or key > best_key:
+            best_key = key
+            best_wafer = wafer
+    return best_wafer
+
+
+def rows_for_merge(rows: List[dict]) -> List[dict]:
+    """
+    梓一 / WLT 行全部保留（含全局最新一片）。
+    其它行扣掉全局最新 WAFER_ID 的全部记录，等下一轮再合，避免同片多行未插完。
+    """
+    latest = pick_latest_wafer_id(rows)
+    kept: List[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if quiet_state_key_for_row(row):
+            kept.append(row)
+            continue
+        wafer = str(row.get('WAFER_ID') or '').strip()
+        if latest and wafer == latest:
+            continue
+        kept.append(row)
+    return kept
+
+
+def group_max_source_id(rec: RoughHoldRecord) -> Optional[int]:
+    """组内源 info 的最大 ID。后插入的行 ID 更大，用来判断 MES 是否还在写。"""
+    ids = []
+    for raw in rec.source_ids:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return None
+    return max(ids)
+
+
+def _format_quiet_time(value: datetime) -> str:
+    return value.strftime('%Y-%m-%dT%H:%M:%S')
+
+
+def _parse_quiet_time(raw) -> Optional[datetime]:
+    if isinstance(raw, datetime):
+        return raw
+    text = str(raw or '').strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _coerce_quiet_mark(mark) -> Optional[dict]:
+    if not isinstance(mark, dict):
+        return None
+    try:
+        max_id = int(mark.get('max_id'))
+    except (TypeError, ValueError):
+        return None
+    last_growth = _parse_quiet_time(mark.get('last_growth_at'))
+    first_seen = _parse_quiet_time(mark.get('first_seen_at'))
+    if last_growth is None or first_seen is None:
+        return None
+    return {
+        'max_id': max_id,
+        'last_growth_at': last_growth,
+        'first_seen_at': first_seen,
+    }
+
+
+def evaluate_lot_quiet(
+    mark,
+    max_id: int,
+    now: datetime,
+    quiet: timedelta,
+    max_wait: timedelta,
+) -> Tuple[str, Optional[dict]]:
+    """
+    判断一组梓一 / WLT 本轮是继续等还是建单。
+
+    返回 (status, mark)：
+      defer  首次出现，或 max(ID) 变大且未超过最长等待。mark 为要写回的水位。
+      ready  水位没涨，且距上次变大已满安静窗口。
+      cap    自首次看到已超过最长等待，用已有行建单。
+    建单时 mark 为 None，调用方删掉该键。
+    """
+    prev = _coerce_quiet_mark(mark)
+    try:
+        current = int(max_id)
+    except (TypeError, ValueError):
+        return 'ready', None
+    if prev is None or current > prev['max_id']:
+        first_seen = prev['first_seen_at'] if prev is not None else now
+        if prev is not None and (now - first_seen) >= max_wait:
+            return 'cap', None
+        return 'defer', {
+            'max_id': current,
+            'last_growth_at': _format_quiet_time(now),
+            'first_seen_at': _format_quiet_time(first_seen),
+        }
+    if (now - prev['last_growth_at']) >= quiet:
+        return 'ready', None
+    if (now - prev['first_seen_at']) >= max_wait:
+        return 'cap', None
+    return 'defer', {
+        'max_id': prev['max_id'],
+        'last_growth_at': _format_quiet_time(prev['last_growth_at']),
+        'first_seen_at': _format_quiet_time(prev['first_seen_at']),
+    }
+
+
+def prune_lot_quiet_state(
+    state: dict,
+    keep: set,
+    now: datetime,
+    max_wait: timedelta,
+) -> None:
+    """丢掉本轮没再出现、且上次变大已超过最长等待的水位。"""
+    for key in list(state):
+        if key in keep:
+            continue
+        coerced = _coerce_quiet_mark(state.get(key))
+        if coerced is None:
+            state.pop(key, None)
+            continue
+        if (now - coerced['last_growth_at']) >= max_wait:
+            state.pop(key, None)
+
+
+def decide_lot_quiet(
+    records: List[RoughHoldRecord],
+    state: Optional[dict],
+    now: datetime,
+    quiet: timedelta,
+    max_wait: timedelta,
+) -> Tuple[dict, List[RoughHoldRecord], List[RoughHoldRecord], dict]:
+    """
+    给梓一 / WLT record 标上 defer / ready / cap。其它 record 不在返回的 action 里。
+    不修改传入的 state。返回 (action_by_identity, deferred, capped, new_state)。
+    """
+    new_state = dict(state or {})
+    action_by_id = {}
+    deferred: List[RoughHoldRecord] = []
+    capped: List[RoughHoldRecord] = []
+    keep = set()
+    for rec in records:
+        key = quiet_state_key_for_record(rec)
+        if not key:
+            continue
+        max_id = group_max_source_id(rec)
+        if max_id is None:
+            new_state.pop(key, None)
+            action_by_id[id(rec)] = 'ready'
+            continue
+        status, mark = evaluate_lot_quiet(
+            new_state.get(key), max_id, now, quiet, max_wait,
+        )
+        action_by_id[id(rec)] = status
+        if status == 'defer' and mark is not None:
+            new_state[key] = mark
+            keep.add(key)
+            deferred.append(rec)
+            continue
+        new_state.pop(key, None)
+        if status == 'cap':
+            capped.append(rec)
+    prune_lot_quiet_state(new_state, keep, now, max_wait)
+    return action_by_id, deferred, capped, new_state
+
+
+def load_lot_quiet_state(path: str) -> dict:
+    """读取水位文件。缺失或损坏时按空水位，本组会先等一个安静周期。"""
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding='utf-8') as handle:
+            data = json.load(handle)
+    except Exception as exc:
+        logger.warning(f"读取同 lot 安静水位失败，本轮按空水位处理: {exc}")
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("同 lot 安静水位不是对象，本轮按空水位处理")
+        return {}
+    return data
+
+
+def save_lot_quiet_state(path: str, state: dict) -> None:
+    """原子替换水位文件，避免写到一半被下次调度读到。"""
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temporary = path + '.tmp'
+    with open(temporary, 'w', encoding='utf-8') as handle:
+        json.dump(state, handle, ensure_ascii=False, indent=2)
+        handle.write('\n')
+    os.replace(temporary, path)
 
 
 def build_ziyi_append_updates(
@@ -620,9 +582,10 @@ class HoldMergeScheduler(threading.Thread):
     HOLDING=0 不限日期。HOLDING=1 只合 HOLD_DTTM 在 2026-10-15 及以后的 info。
       - 普通：按 (WAFER_ID, RECORD_TYPE)；FT 028 与良率/缺陷率分列
       - 分片合批：按 (LOT_ID, RECORD_TYPE)；FT 028 同样分列
-      - 梓一合批：同 LOT 已有 MES record 且 HOLD_DTTM 在合批间隔（默认 30 分钟）回看窗口内则追加，不按 STATUS
+      - 梓一 / WLT：组内 max(info ID) 还在变大，或距上次变大未满安静窗口，则本轮整组不建单
+      - 梓一合批：安静期结束后，同 LOT 已有 MES record 且 HOLD_DTTM 在合批间隔回看窗口内则追加，不按 STATUS
       - WLT：按 (lot_prefix, RECORD_TYPE) 分组，LOT_ID 保留 INFO 原值（LOT.NO），WAFER_ID 为 #01#02
-      - WLT 组内最新 HOLD_DTTM 距今不足 HOLD_WLT_SETTLE_MINUTES（默认 10）则本轮不建单
+      - 单片 / IQC_ATE / FVI：仍扣掉全局 HOLD_DTTM 最新的那一个 WAFER_ID
     """
 
     def __init__(self):
@@ -637,10 +600,18 @@ class HoldMergeScheduler(threading.Thread):
         self.dedup_window = timedelta(
             hours=getattr(self.config, 'HOLD_DEDUP_WINDOW_HOURS', 1)
         )
-        self.wlt_settle_minutes = getattr(
-            self.config, 'HOLD_WLT_SETTLE_MINUTES', _WLT_SETTLE_MINUTES_DEFAULT
+        self.lot_quiet_minutes = getattr(
+            self.config, 'HOLD_LOT_QUIET_MINUTES', _LOT_QUIET_MINUTES_DEFAULT
         )
-        self.wlt_settle_window = timedelta(minutes=self.wlt_settle_minutes)
+        self.lot_quiet_max_minutes = getattr(
+            self.config, 'HOLD_LOT_QUIET_MAX_MINUTES', _LOT_QUIET_MAX_MINUTES_DEFAULT
+        )
+        self.lot_quiet = timedelta(minutes=self.lot_quiet_minutes)
+        self.lot_quiet_max = timedelta(minutes=self.lot_quiet_max_minutes)
+
+    def _quiet_state_path(self) -> str:
+        table = (self.hold_info_table or 'FT_HOLD_INFO').upper()
+        return os.path.join('logs', f'hold_merge_lot_quiet_{table}.json')
 
     def stop(self):
         self.logger.info("正在停止 Hold 合并调度器...")
@@ -765,8 +736,9 @@ class HoldMergeScheduler(threading.Thread):
                 f"已按处置单划分预过滤)"
             )
 
+            merge_rows = rows_for_merge(hold_infos)
             rough_records, skipped_ids = build_rough_hold_records(
-                hold_infos, window=self.dedup_window
+                merge_rows, window=self.dedup_window
             )
             if skipped_ids:
                 # 不满足划分规则 / FUTURE HOLD 排除：标记 -1，避免轮询反复捞取
@@ -782,30 +754,52 @@ class HoldMergeScheduler(threading.Thread):
 
             self.logger.info(
                 f"归纳得到 {len(rough_records)} 条粗糙 hold_record "
-                f"（去重窗口={self.dedup_window}）"
+                f"（去重窗口={self.dedup_window}，"
+                f"同 lot 安静={self.lot_quiet_minutes} 分钟）"
             )
 
             ok, fail, deferred = 0, 0, 0
             now = datetime.now()
+            state_path = self._quiet_state_path()
+            state = load_lot_quiet_state(state_path)
+            actions, _deferred_recs, capped, state = decide_lot_quiet(
+                rough_records,
+                state,
+                now,
+                self.lot_quiet,
+                self.lot_quiet_max,
+            )
+            capped_ids = {id(rec) for rec in capped}
             for rec in rough_records:
                 self.logger.info(f"  - {rec.summary()}")
-                if should_defer_wlt_record(
-                    rec, now=now, settle=self.wlt_settle_window
-                ):
+                action = actions.get(id(rec), 'ready')
+                if action == 'defer':
                     self.logger.info(
-                        f"WLT 最新 HOLD 未满 {self.wlt_settle_minutes} 分钟，"
-                        f"本轮不建单，等下次周期: {rec.summary()}"
+                        f"同 lot 仍有新 info，本轮不建单，"
+                        f"等 {self.lot_quiet_minutes} 分钟无新行: {rec.summary()}"
                     )
                     deferred += 1
                     continue
+                if id(rec) in capped_ids:
+                    self.logger.info(
+                        f"同 lot 自首次看到已超过 {self.lot_quiet_max_minutes} 分钟，"
+                        f"用已有行建单: {rec.summary()}"
+                    )
                 if self._persist_rough_record(rec) is None:
                     fail += 1
                 else:
                     ok += 1
 
+            try:
+                save_lot_quiet_state(state_path, state)
+            except Exception as save_exc:
+                self.logger.error(
+                    f"写入同 lot 安静水位失败: {save_exc}", exc_info=True
+                )
+
             self.logger.info(
                 f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"
-                f"跳过 {len(skipped_ids)}，WLT 等待下次 {deferred}"
+                f"跳过 {len(skipped_ids)}，同 lot 等待下次 {deferred}"
             )
         except Exception as e:
             self.logger.error(f"Hold 合并定时任务执行出错: {e}", exc_info=True)
@@ -835,27 +829,14 @@ class HoldMergeScheduler(threading.Thread):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Hold 合并定时任务，可选 debug/release 模式。默认 debug。')
-    parser.add_argument(
-        '--mode',
-        choices=['debug', 'release'],
-        default='debug',
-        help='debug：立即执行一次后退出；release：按配置间隔循环调度。'
-    )
-    args = parser.parse_args()
-
-    print(f"运行模式: {args.mode}")
+    reject_legacy_mode_arg()
+    print(f"HOLD_ENV={'test' if is_test_env() else 'release'} 源表={Config.HOLD_INFO_TABLE}")
+    # 独立进程常驻。Web 主程序不再拉起本调度。表由 HOLD_ENV 决定。
     scheduler = HoldMergeScheduler()
-
-    if args.mode == 'debug':
-        # 开发单次测试：立刻跑一遍任务逻辑，不进入定时循环
-        scheduler._run_job()
-    else:
-        # 作为独立进程常驻调度（主程序 release 模式通常走 HoldMergeScheduler.start()）
-        scheduler.start()
-        try:
-            while scheduler.is_alive():
-                time.sleep(1)
-        except KeyboardInterrupt:
-            scheduler.stop()
-            scheduler.join(timeout=5)
+    scheduler.start()
+    try:
+        while scheduler.is_alive():
+            time.sleep(1)
+    except KeyboardInterrupt:
+        scheduler.stop()
+        scheduler.join(timeout=5)

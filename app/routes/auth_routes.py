@@ -6,8 +6,10 @@ from app.utils.auth_decorators import (
     login_required,
     ROLE_ROOT,
     ROLE_ENGINEER,
+    ROLE_CP_PRODUCTION,
     ROLE_PRODUCTION,
     ROLE_QUALITY,
+    ROLE_FT_PRODUCT_MANAGER,
     home_endpoint_for_role,
     current_role_name,
     session_must_change_password,
@@ -22,8 +24,13 @@ from app.utils.rate_limit import (
 )
 from app.utils.web_sso import TicketError, consume_ticket, issue_ticket
 
-_LOGIN_ALLOWED_ROLES = (ROLE_ROOT, ROLE_ENGINEER, ROLE_PRODUCTION, ROLE_QUALITY)
-_LOGIN_ROLE_DENIED_MSG = '权限不足：仅超级管理员、产品工程师、生产或质量部可登录后台'
+_LOGIN_ALLOWED_ROLES = (
+    ROLE_ROOT, ROLE_ENGINEER, ROLE_CP_PRODUCTION, ROLE_PRODUCTION, ROLE_QUALITY,
+    ROLE_FT_PRODUCT_MANAGER,
+)
+_LOGIN_ROLE_DENIED_MSG = (
+    '权限不足：仅超级管理员、产品工程师、CP生产、生产、质量部或FT产品主管可登录后台'
+)
 
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/')
@@ -317,6 +324,8 @@ def dashboard():
             return redirect(url_for('production.dashboard'))
         if session.get('role') == ROLE_QUALITY:
             return redirect(url_for('quality.dashboard'))
+        if session.get('role') == ROLE_FT_PRODUCT_MANAGER:
+            return redirect(url_for('product.product_list_page'))
         return redirect(url_for('auth.login_page'))
 
     return render_template(

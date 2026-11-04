@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -43,8 +44,8 @@ def _parse_args():
 
 def main() -> int:
     args = _parse_args()
-    if not args.release:
-        sys.argv = [sys.argv[0], '--mode', 'debug']
+    # 本脚本用自己的开关选表，不跟机器上的 HOLD_ENV 走。
+    os.environ['HOLD_ENV'] = 'release' if args.release else 'test'
 
     from app import create_app
     from app.config import Config

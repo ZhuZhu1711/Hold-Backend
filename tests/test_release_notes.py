@@ -181,7 +181,7 @@ class ReleaseNotesStoreTest(unittest.TestCase):
         self.assertEqual(data['items'][0]['version'], '2.0.9')
         self.assertIn('迁入', data['items'][0]['markdown'])
 
-    @patch('app.controllers.release_notes_ctrl.argv_is_debug_mode', return_value=True)
+    @patch('app.controllers.release_notes_ctrl.is_test_env', return_value=True)
     def test_debug_uses_test_folder(self, _mock):
         ok, msg, data = release_notes_ctrl.save_release_notes(
             '2.0.1.md', b'# debug', base_dir=self.base,

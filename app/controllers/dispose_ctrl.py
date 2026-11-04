@@ -1849,6 +1849,12 @@ def dispose_record(
 
         if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
+        try:
+            record_type_now = int(record.get('RECORD_TYPE'))
+        except (TypeError, ValueError):
+            record_type_now = None
+        if record_type_now == 3:
+            return False, '该单无需处置', None
 
         attach_reliability_followup(record)
         after_analyze = bool(record.get('AFTER_RELIABILITY_ANALYZE'))

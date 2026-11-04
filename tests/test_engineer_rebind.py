@@ -88,6 +88,7 @@ class UpdateProductRebindTest(unittest.TestCase):
     def test_rebind_transfers_to_new_engineer(self, ProductInfo, User, transfer, db):
         product = self._product(3)
         ProductInfo.query.get.return_value = product
+        ProductInfo.query.filter.return_value.all.return_value = [product]
 
         def _user(uid):
             user = MagicMock()
@@ -112,6 +113,7 @@ class UpdateProductRebindTest(unittest.TestCase):
     def test_unchanged_binding_does_not_transfer(self, ProductInfo, User, transfer, db):
         product = self._product(3)
         ProductInfo.query.get.return_value = product
+        ProductInfo.query.filter.return_value.all.return_value = [product]
         User.query.get.return_value = MagicMock(NAME='张三')
 
         ok, msg = update_product(1, {'engineer_id': 3, 'gross_die': 9})

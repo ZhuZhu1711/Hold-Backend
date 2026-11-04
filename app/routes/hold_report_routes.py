@@ -557,7 +557,6 @@ def _export_query_args():
         'end_dttm': request.args.get('end_dttm', '').strip(),
         'sub_customer': request.args.get('sub_customer', '').strip(),
         'package_type': request.args.get('package_type', '').strip(),
-        'factory': request.args.get('factory', '').strip(),
         'area': request.args.get('area', '').strip(),
     }
 
@@ -614,6 +613,84 @@ def api_hold_info_export_xlsx():
             'Content-Disposition': f'attachment; filename="{filename}"',
         },
     )
+
+
+def _hold_info_query_response(success, msg, data):
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = _hold_info_export_status(msg)
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+
+
+@hold_report_bp.route('/api/hold_info/records', methods=['GET'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
+def api_hold_info_records():
+    """原始 FT_HOLD_RECORD 行，附带型号 PIE。客户端去重、补合批；ENG 预处置人另接口查询。"""
+    success, msg, data = hold_info_export_ctrl.query_hold_info_records(
+        product_id=request.args.get('product_id', '').strip(),
+        start_dttm=request.args.get('start_dttm', '').strip(),
+        end_dttm=request.args.get('end_dttm', '').strip(),
+        lot_id=request.args.get('lot_id', '').strip(),
+        route_id=request.args.get('route_id', '').strip(),
+        owner_eng_id=_export_owner_eng_id(),
+    )
+    return _hold_info_query_response(success, msg, data)
+
+
+@hold_report_bp.route('/api/hold_info/pre_handlers', methods=['POST'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
+def api_hold_info_pre_handlers():
+    """按 lot 查 MES OA 单号；ENG lot 同时返回已拼好的预处置人。"""
+    body = request.get_json(silent=True) or {}
+    success, msg, data = hold_info_export_ctrl.query_pre_handlers(
+        product_id=body.get('product_id', ''),
+        lot_ids=body.get('lot_ids'),
+        owner_eng_id=_export_owner_eng_id(),
+        pre_handler_lot_ids=(
+            body.get('pre_handler_lot_ids')
+            if 'pre_handler_lot_ids' in body else None
+        ),
+    )
+    return _hold_info_query_response(success, msg, data)
+
+
+@hold_report_bp.route('/api/hold_info/merge_sources', methods=['POST'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
+def api_hold_info_merge_sources():
+    """按目标片查合批源片，不和 hold 行合并。"""
+    body = request.get_json(silent=True) or {}
+    success, msg, data = hold_info_export_ctrl.query_merge_sources(
+        product_id=body.get('product_id', ''),
+        wafer_ids=body.get('wafer_ids'),
+        owner_eng_id=_export_owner_eng_id(),
+    )
+    return _hold_info_query_response(success, msg, data)
+
+
+@hold_report_bp.route('/api/hold_info/hold_wafers', methods=['POST'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
+def api_hold_info_hold_wafers():
+    """按 lot 前缀返回原始 LOT_ID / WAFER_ID。"""
+    body = request.get_json(silent=True) or {}
+    success, msg, data = hold_info_export_ctrl.query_hold_wafers(
+        product_id=body.get('product_id', ''),
+        lots=body.get('lots'),
+        owner_eng_id=_export_owner_eng_id(),
+    )
+    return _hold_info_query_response(success, msg, data)
+
+
+@hold_report_bp.route('/api/hold_info/test_programs', methods=['POST'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
+def api_hold_info_test_programs():
+    """按片号和 RouteType 查测试程序。ENGINEERING 按 TEST_WAFER.ROUTE 的 ENG 匹配。"""
+    body = request.get_json(silent=True) or {}
+    success, msg, data = hold_info_export_ctrl.query_test_programs(
+        product_id=body.get('product_id', ''),
+        items=body.get('items'),
+        owner_eng_id=_export_owner_eng_id(),
+    )
+    return _hold_info_query_response(success, msg, data)
 
 
 def _merge_fail_operator():
