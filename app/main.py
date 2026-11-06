@@ -26,7 +26,7 @@ if project_root_path not in sys.path:
 from app import create_app, db
 from app.config import Config, is_test_env, reject_legacy_mode_arg
 # 直接从 routes 包中导入所有蓝图
-from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp, client_error_bp, software_bp, release_notes_bp, defect_sync_bp, cp_bp, abnormal_feedback_bp
+from app.routes import user_bp, auth_bp, product_bp, defect_bp, test_data_bp, common_data_bp, rawdata_bp, hold_report_bp, dispose_bp, engineer_bp, production_bp, quality_bp, client_error_bp, software_bp, release_notes_bp, defect_sync_bp, cp_bp
 from app.backend_schedule.FT_WLT_TESTLOG_sche import FlaskTaskScheduler
 
 app = create_app()
@@ -51,7 +51,6 @@ app.register_blueprint(software_bp)      # 客户端版本 SOFTWARE_INFO (/admin
 app.register_blueprint(release_notes_bp) # 版本说明 Markdown（全员可读 / root 上传）
 app.register_blueprint(defect_sync_bp)   # 缺陷代码同步记录（/admin/defect-sync）
 app.register_blueprint(cp_bp)            # CP 客户端只读列表（/cp/...）
-app.register_blueprint(abnormal_feedback_bp)  # 异常反馈上游（/api/abnormal_feedback）
 
 # ==========================================
 # 程序入口

@@ -15,12 +15,11 @@ from app.routes.software_routes import software_bp
 from app.routes.release_notes_routes import release_notes_bp
 from app.routes.defect_code_sync_routes import defect_sync_bp
 from app.routes.cp_routes import cp_bp
-from app.routes.abnormal_feedback_routes import abnormal_feedback_bp
 
 __all__ = [
     'user_bp', 'auth_bp', 'product_bp', 'defect_bp',
     'test_data_bp', 'common_data_bp', 'rawdata_bp', 'hold_report_bp',
     'dispose_bp', 'engineer_bp', 'production_bp', 'quality_bp',
     'client_error_bp', 'software_bp', 'release_notes_bp', 'defect_sync_bp',
-    'cp_bp', 'abnormal_feedback_bp',
+    'cp_bp',
 ]

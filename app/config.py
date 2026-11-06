@@ -78,29 +78,6 @@ def db_profile(environ=None) -> dict:
     return DB_PROFILES[key]
 
 
-# 异常反馈上游。测试和正式各一套地址和 X-Api-Key，请求时按 HOLD_ENV 选取。
-# 地址或密钥为空则不发请求。密钥不要打进日志或接口返回。
-ABNORMAL_FEEDBACK_PROFILES = {
-    'test': {
-        'url': 'https://edms-alpha.gcoreinc.com/api/open/ncmr-reports',
-        'api_key': 'edms_7408d1df04c8a9c07d3912a58d0a3575b2b1df6d4635f330b056d3ae134aba90',
-    },
-    'release': {
-        'url': '',
-        'api_key': '',
-    },
-}
-
-
-def abnormal_feedback_profile(environ=None) -> dict:
-    key = 'test' if is_test_env(environ) else 'release'
-    profile = ABNORMAL_FEEDBACK_PROFILES[key]
-    return {
-        'url': (profile.get('url') or '').strip(),
-        'api_key': (profile.get('api_key') or '').strip(),
-    }
-
-
 def oracle_dsn(profile) -> str:
     return f"{profile['host']}:{profile['port']}/{profile['service_name']}"
 

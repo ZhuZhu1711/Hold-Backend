@@ -1226,22 +1226,6 @@ def enrich_record_grades(record):
     return record
 
 
-def _ncmr_no(record) -> str:
-    if not record:
-        return ''
-    raw = record.get('NCMR_NO')
-    if raw is None:
-        return ''
-    return str(raw).strip()
-
-
-def _reject_upstream_feedback(record):
-    """已反馈上游的单据不再在本系统处置。"""
-    if _ncmr_no(record):
-        return False, '已反馈上游，等待上游指令', None
-    return None
-
-
 def _load_record(record_id: int):
     record_table = _record_table()
     row = db.session.execute(
@@ -1250,7 +1234,7 @@ def _load_record(record_id: int):
                 r.ID, r.PRODUCT_ID, r.STATION, r.EQUIP_ID, r.LOT_ID, r.WAFER_ID,
                 r.HOLD_CODE, r.HOLD_REASON, r.SOURCE, r.SECOND_CODE, r.ROUTE_ID,
                 r.GRADE_NUM, r.RECORD_TYPE, r.STATUS, r.LAST_CIRCULATION_ID, r.HOLD_DTTM,
-                r.ANNEX_FTP_PATH, r.HOLD_WAFER_ATTR, r.NCMR_NO
+                r.ANNEX_FTP_PATH, r.HOLD_WAFER_ATTR
             FROM {record_table} r
             WHERE r.ID = :rid
         """),
@@ -1465,9 +1449,6 @@ def dispose_sample_done(
         record = _load_record(rid)
         if not record:
             return False, 'hold_record 不存在', None
-        blocked = _reject_upstream_feedback(record)
-        if blocked:
-            return blocked
         if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
 
@@ -1877,8 +1858,7 @@ def get_pending_records(
 ):
     """
     待办：最新流转 NEXT_OWNER_ID = owner_id，且 STATUS != 关闭（分页）。
-    已记下上游反馈单号的单据不再列出。
-    root 传 owner_id=None 时查全部未关闭且未反馈上游的单据。
+    root 传 owner_id=None 时查全部未关闭。
     成功返回 (True, msg, page_payload)。
     """
     try:
@@ -1890,7 +1870,7 @@ def get_pending_records(
         else:
             page, page_size, offset = _parse_page(page, page_size)
 
-        where_sql = " WHERE NVL(r.STATUS, 0) <> :closed AND r.NCMR_NO IS NULL"
+        where_sql = " WHERE NVL(r.STATUS, 0) <> :closed"
         params = {
             'closed': DISPOSE_CLOSE,
             'offset': offset,
@@ -2029,9 +2009,6 @@ def dispose_record(
         record = _load_record(rid)
         if not record:
             return False, 'hold_record 不存在', None
-        blocked = _reject_upstream_feedback(record)
-        if blocked:
-            return blocked
 
         if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
