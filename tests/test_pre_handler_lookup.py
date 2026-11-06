@@ -37,6 +37,7 @@ class FormatPreHandlerTest(unittest.TestCase):
 
     def test_already_prefixed_code(self):
         self.assertEqual(format_pre_handler('周星辰', 'A0004655'), '周星辰（A0004655）')
+        self.assertEqual(format_pre_handler('张三', '不是工号'), '张三')
 
     def test_query_code_strips_prefix(self):
         self.assertEqual(work_code_for_query('A0004655'), '4655')

@@ -5,7 +5,9 @@ from logging.handlers import RotatingFileHandler
 
 from flask import Blueprint, render_template, request, jsonify, session, Response
 
+from app.config import Config
 from app.controllers import (
+    dispose_ctrl,
     hold_report_ctrl,
     hold_merge_fail_ctrl,
     hold_info_export_ctrl,
@@ -89,6 +91,7 @@ def holding_record_page():
         'hold/holding_records.html',
         user_name=session.get('user_name'),
         role_name=current_role_name(),
+        system_user_id=Config.SYSTEM_USER_ID,
     )
 
 
@@ -156,9 +159,9 @@ def api_holding_records():
     record_type = request.args.get('record_type', '').strip()
     page = request.args.get('page', 1)
     page_size = request.args.get('page_size', 20)
-    engineer_id, eng_err = _optional_engineer_id()
-    if eng_err:
-        return jsonify({'code': 400, 'msg': eng_err, 'data': [], 'total': 0}), 400
+    owner_eng_id, current_owner_id, owner_err = _holding_owner_filters()
+    if owner_err:
+        return jsonify({'code': 400, 'msg': owner_err, 'data': [], 'total': 0}), 400
 
     success, msg, payload = hold_report_ctrl.get_holding_records(
         product_id=product_id,
@@ -167,8 +170,8 @@ def api_holding_records():
         record_type=record_type if record_type != '' else None,
         page=page,
         page_size=page_size,
-        owner_eng_id=engineer_id,
-        current_owner_id=engineer_id,
+        owner_eng_id=owner_eng_id,
+        current_owner_id=current_owner_id,
     )
     if success:
         return jsonify({
@@ -192,21 +195,85 @@ def api_holding_records_export():
     Query: product_id, station, keyword, record_type(0/1/2), engineer_id
     engineer_id：与列表相同，指定产品工程师的待办。
     """
-    engineer_id, eng_err = _optional_engineer_id()
-    if eng_err:
-        return jsonify({'code': 400, 'msg': eng_err}), 400
+    owner_eng_id, current_owner_id, owner_err = _holding_owner_filters()
+    if owner_err:
+        return jsonify({'code': 400, 'msg': owner_err}), 400
     success, msg, content = hold_report_ctrl.export_holding_records_xlsx(
         product_id=request.args.get('product_id', '').strip(),
         station=request.args.get('station', '').strip(),
         keyword=request.args.get('keyword', '').strip(),
         record_type=request.args.get('record_type', '').strip() or None,
-        owner_eng_id=engineer_id,
-        current_owner_id=engineer_id,
+        owner_eng_id=owner_eng_id,
+        current_owner_id=current_owner_id,
     )
     return xlsx_or_error(
         success, msg, content, stamp_filename('holding_records'),
         bad_keys=('无效', '须为'),
     )
+
+
+def _system_only_requested():
+    return request.args.get('system_only', '').strip().lower() in (
+        '1', 'true', 'yes', 'y',
+    )
+
+
+def _holding_owner_filters():
+    """
+    返回 (owner_eng_id, current_owner_id, err)。
+    system_only 只按当前负责人=系统用户，不要求型号已属于某工程师。
+    """
+    if _system_only_requested():
+        return None, int(Config.SYSTEM_USER_ID), None
+    engineer_id, eng_err = _optional_engineer_id()
+    if eng_err:
+        return None, None, eng_err
+    return engineer_id, engineer_id, None
+
+
+def _hold_action_status(msg):
+    bad_keys = (
+        '无效', '不存在', '尚未', '仅', '只能', '不能', '已关闭', '必填', '缺少',
+    )
+    return 400 if any(key in (msg or '') for key in bad_keys) else 500
+
+
+@hold_report_bp.route('/api/holding_records/rebind', methods=['POST'])
+@root_required
+def api_holding_records_rebind():
+    """
+    按型号把仍挂在系统用户上的未关闭单转给 PRODUCT_INFO 当前工程师。
+    Body: product_id 可空；空则重绑全部已配置型号。
+    """
+    data = request.get_json(silent=True) or {}
+    product_id = str(data.get('product_id') or '').strip()
+    ok, msg, moved = dispose_ctrl.rebind_system_owned_holds(
+        product_id or None,
+        session.get('user_id'),
+    )
+    status = 200 if ok else _hold_action_status(msg)
+    return jsonify({
+        'code': status,
+        'msg': msg,
+        'data': {'moved': moved},
+    }), status
+
+
+@hold_report_bp.route('/api/holding_records/transfer', methods=['POST'])
+@root_required
+def api_holding_records_transfer():
+    """
+    把一条系统用户名下的未关闭单转给指定产品工程师。
+    Body: hold_record_id, engineer_id。
+    """
+    data = request.get_json(silent=True) or {}
+    ok, msg, result = dispose_ctrl.transfer_system_owned_record(
+        data.get('hold_record_id'),
+        data.get('engineer_id'),
+        session.get('user_id'),
+    )
+    status = 200 if ok else _hold_action_status(msg)
+    return jsonify({'code': status, 'msg': msg, 'data': result}), status
 
 
 def _optional_engineer_id():

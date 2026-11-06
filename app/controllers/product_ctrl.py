@@ -264,6 +264,16 @@ def add_product(data):
         _apply_binding(siblings, eng_spec, pie_spec, today)
 
         db.session.add(new_product)
+        new_slot = owner_slot(eng)
+        system_slot = owner_slot(None)
+        if new_slot != system_slot:
+            note = (
+                f'新增型号绑定工程师，系统待办调整为 '
+                f'{_engineer_label(eng, new_slot)}'
+            )
+            transfer_open_holds_on_rebind(
+                product_id, system_slot, new_slot, note,
+            )
         db.session.commit()
         return True, "产品添加成功"
     except Exception as e:

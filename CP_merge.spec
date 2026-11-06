@@ -20,6 +20,7 @@ hiddenimports = [
     'oracledb',
     'schedule',
     'cryptography',
+    'app.backend_schedule.singleton_lock',
     'app.backend_schedule.CP_HOLD_MERGE_sche',
 ]
 

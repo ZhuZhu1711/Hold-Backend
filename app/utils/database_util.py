@@ -180,7 +180,7 @@ def query_testlog_history(test_date: date):
         connection.close()
 
 
-def query_online_hold_info(table_name: str = 'FT_HOLD_INFO_TEST'):
+def query_online_hold_info(table_name: str = 'FT_HOLD_INFO'):
     """
     查询指定表中尚未关联 hold_record 的 hold_info
     （AREA = 0 且 HOLD_RECORD_ID 为 NULL/0）。
@@ -298,7 +298,7 @@ _AUTO_CLOSE_DETAIL = 'MES已解hold，系统自动关闭'
 
 
 def query_released_unclosed_hold_records(
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     record_table: str = 'FT_HOLD_RECORD',
     limit: int = 200,
 ):
@@ -483,7 +483,7 @@ def auto_close_hold_records(
 
 def mark_hold_infos_dirty(
     source_info_ids,
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     reason: str = '',
 ):
     """
@@ -543,7 +543,7 @@ def mark_hold_infos_dirty(
 def insert_hold_record_and_link(
     record: dict,
     source_info_ids,
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     record_table: str = 'FT_HOLD_RECORD',
 ):
     """
@@ -851,7 +851,7 @@ def find_existing_ziyi_hold_record(
 
 def query_hold_infos_by_record_id(
     hold_record_id,
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
 ):
     """
     查询已挂到指定 hold_record 的 hold_info。
@@ -897,7 +897,7 @@ def append_hold_infos_to_record(
     record_id,
     updates: dict,
     source_info_ids,
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     record_table: str = 'FT_HOLD_RECORD',
 ):
     """
@@ -1183,7 +1183,7 @@ def update_manual_hold_annex_path(record_id, annex_ftp_path, record_table=None) 
 
 
 def query_dirty_hold_infos(
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     product_id: str = '',
     lot_id: str = '',
     wafer_id: str = '',
@@ -1279,7 +1279,7 @@ def query_dirty_hold_infos(
 
 def query_hold_infos_by_ids(
     source_info_ids,
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     require_dirty: bool = False,
 ):
     """
@@ -1328,7 +1328,7 @@ def query_hold_infos_by_ids(
 
 def reset_dirty_hold_infos(
     source_info_ids,
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     operator: str = '',
 ):
     """
@@ -1385,7 +1385,7 @@ def reset_dirty_hold_infos(
 def insert_hold_record_and_link_from_dirty(
     record: dict,
     source_info_ids,
-    info_table: str = 'FT_HOLD_INFO_TEST',
+    info_table: str = 'FT_HOLD_INFO',
     record_table: str = 'FT_HOLD_RECORD',
     operator: str = '',
 ):

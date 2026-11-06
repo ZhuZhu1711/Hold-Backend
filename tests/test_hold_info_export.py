@@ -8,6 +8,7 @@ from app.controllers.hold_info_export_ctrl import (
     LOOKUP_MAX_IDS,
     RECORDS_MAX_ROWS,
     _collect_rows,
+    _format_mp_pre_handler,
     _ensure_owned_product,
     _latest_hold_per_wafer,
     _parse_filters,
@@ -264,23 +265,47 @@ class CollectRowsDedupeTest(unittest.TestCase):
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
     def test_mp_pre_handler_uses_newest_pie(self, _program, _wafers, handler, _oa):
         cursor = Mock()
-        cursor.fetchall.return_value = [
+        pie_rows = [
             ('旧PIE', '2026-01-01', 1),
             ('  张三  ', '2026-02-01', 2),
             ('   ', '2026-03-01', 3),
         ]
+
+        def fetchall():
+            sql = cursor.execute.call_args[0][0]
+            if 'USERS' in sql:
+                return [('A0004655',)]
+            return pie_rows
+
+        cursor.fetchall.side_effect = fetchall
         hold = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3, route='PRODUCTION')
         _row, preview = _process_hold(
             cursor, hold,
             {'merge': {}, 'hold_wafers': {}, 'test_program': {}},
             {},
         )
-        self.assertEqual(preview['PRE_HANDLER'], '张三')
+        self.assertEqual(preview['PRE_HANDLER'], '张三（A0004655）')
         self.assertEqual(preview['OA_NUMBER'], 'ET.MP')
         handler.assert_not_called()
-        sql, binds = cursor.execute.call_args[0]
-        self.assertIn('PRODUCT_INFO', sql)
-        self.assertEqual(set(binds.values()), {'P1', 'P1-3.5', 'P1-2.6'})
+        product_call = next(
+            call for call in cursor.execute.call_args_list
+            if 'PRODUCT_INFO' in call[0][0]
+        )
+        self.assertEqual(set(product_call[0][1].values()), {'P1', 'P1-3.5', 'P1-2.6'})
+
+    def test_mp_pie_work_code_and_existing_display(self):
+        cursor = Mock()
+        cursor.fetchall.return_value = [('周星辰',)]
+        self.assertEqual(
+            _format_mp_pre_handler(cursor, '4655'),
+            '周星辰（A0004655）',
+        )
+        cursor.reset_mock()
+        self.assertEqual(
+            _format_mp_pre_handler(cursor, '周星辰（4655）'),
+            '周星辰（A0004655）',
+        )
+        cursor.execute.assert_not_called()
 
 
 class QueryHoldRecordsFilterTest(unittest.TestCase):
@@ -296,6 +321,8 @@ class QueryHoldRecordsFilterTest(unittest.TestCase):
         )
         sql, params = cursor.execute.call_args[0]
         self.assertIn('ROUTE_ID', sql)
+        self.assertLess(sql.find("LIKE '%ENG%'"), sql.find("LIKE '%MP%'"))
+        self.assertIn('UPPER(NVL(r.ROUTE_ID', sql)
         self.assertEqual(params['route_id'], '%MP%')
         self.assertNotIn('lot_id', params)
 
@@ -374,9 +401,12 @@ class QueryHoldInfoRecordsTest(unittest.TestCase):
         )
         self.assertTrue(ok, msg)
         self.assertEqual(data['pie'], '李四')
-        _sql, binds = cursor.execute.call_args[0]
+        product_call = next(
+            call for call in cursor.execute.call_args_list
+            if 'PRODUCT_INFO' in call[0][0]
+        )
         self.assertEqual(
-            set(binds.values()),
+            set(product_call[0][1].values()),
             {'GC1084', 'GC1084-3.5', 'GC1084-2.6'},
         )
 

@@ -8,7 +8,7 @@ class EngNote(db.Model):
     ID = db.Column(
         db.Numeric(38, 0),
         primary_key=True,
-        server_default=Sequence('SEQ_FT_ENG_NOTES', schema='FT_OWEN').next_value(),
+        server_default=Sequence('SEQ_FT_ENG_NOTES').next_value(),
     )
     PRODUCT_ID = db.Column(db.Numeric(38, 0), db.ForeignKey('PRODUCT_INFO.ID'))
     NOTE = db.Column(db.String(500))

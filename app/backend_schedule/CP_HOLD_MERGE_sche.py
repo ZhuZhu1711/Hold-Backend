@@ -25,6 +25,7 @@ from typing import List, Optional, Tuple
 
 import oracledb
 
+from app.backend_schedule.singleton_lock import LOCK_CP_HOLD_MERGE, hold_singleton
 from app.config import Config, is_test_env, reject_legacy_mode_arg
 from app.utils.database_util import USER, PWD, DSN, build_merged_wafer_display
 from app.utils.mail_alert import notify_severe_error
@@ -729,10 +730,10 @@ class CpHoldMergeScheduler(threading.Thread):
         self.logger = logger
         self.config = Config()
         self.interval_minutes = getattr(self.config, 'HOLD_MERGE_INTERVAL_MINUTES', 30)
-        self.hold_info_table = getattr(self.config, 'HOLD_INFO_TABLE', 'FT_HOLD_INFO_TEST')
-        self.hold_record_table = getattr(self.config, 'CP_HOLD_RECORD_TABLE', 'CP_HOLD_RECORD_TEST')
+        self.hold_info_table = getattr(self.config, 'HOLD_INFO_TABLE', 'FT_HOLD_INFO')
+        self.hold_record_table = getattr(self.config, 'CP_HOLD_RECORD_TABLE', 'CP_HOLD_RECORD')
         self.circ_table = getattr(
-            self.config, 'CP_CIRCULATION_TABLE', 'CP_CIRCULATION_HISTORY_TEST'
+            self.config, 'CP_CIRCULATION_TABLE', 'CP_CIRCULATION_HISTORY'
         )
         self.record_status = getattr(self.config, 'HOLD_RECORD_STATUS', 0)
         self.dedup_window = timedelta(
@@ -878,6 +879,8 @@ if __name__ == '__main__':
         f"HOLD_ENV={'test' if is_test_env() else 'release'} "
         f"源表={Config.HOLD_INFO_TABLE} 目标={Config.CP_HOLD_RECORD_TABLE}"
     )
+    # 同一套库上只留一个进程。和 FT 合批不是同一把锁。
+    hold_singleton(LOCK_CP_HOLD_MERGE, logger)
     scheduler = CpHoldMergeScheduler()
     scheduler.start()
     try:

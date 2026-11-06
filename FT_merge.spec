@@ -26,6 +26,7 @@ hiddenimports = [
     'sqlalchemy.dialects.oracle',
     'sqlalchemy.dialects.oracle.oracledb',
     'app.backend_schedule.hold_merge_rules',
+    'app.backend_schedule.singleton_lock',
     'app.backend_schedule.FT_HOLD_MERGE_sche',
 ]
 

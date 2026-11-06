@@ -3,7 +3,7 @@ import sys
 from datetime import timedelta
 
 
-# 服务器环境。不设置视为测试。正式机必须设 HOLD_ENV=release 才能启动正式表和正式端口。
+# 服务器环境。不设置视为测试。正式机必须设 HOLD_ENV=release 才能启动正式库和正式端口。
 # 空 / test / debug → 测试；只有 release → 正式。其它值拒绝启动，避免写错库。
 _TEST_ENV_VALUES = frozenset({'', 'test', 'debug'})
 _RELEASE_ENV_VALUE = 'release'
@@ -26,10 +26,9 @@ def is_test_env(environ=None) -> bool:
     return hold_env(environ) != 'release'
 
 
-def cp_hold_tables(test_env: bool) -> tuple:
-    """CP 处置单和流转表。测试与正式分开，避免测试进程读正式表。"""
-    if test_env:
-        return 'CP_HOLD_RECORD_TEST', 'CP_CIRCULATION_HISTORY_TEST'
+def cp_hold_tables(test_env: bool = False) -> tuple:
+    """CP 处置单和流转表。两个库的表名相同，靠连接分开。"""
+    del test_env
     return 'CP_HOLD_RECORD', 'CP_CIRCULATION_HISTORY'
 
 
@@ -58,11 +57,11 @@ def load_hold_api_token(environ=None):
 # 不设置 HOLD_ENV 用 test；HOLD_ENV=release 用 release。
 DB_PROFILES = {
     'test': {
-        'user': 'JSFT_TEST',
-        'password': 'Jsf5MncvKU!HBC',
-        'host': '172.18.252.24',
+        'user': 'fc_admin',
+        'password': 'Fca3GvpcKU!BTP',
+        'host': '172.18.252.121',
         'port': 1521,
-        'service_name': 'mesdb',
+        'service_name': 'mestdb',
     },
     'release': {
         'user': 'FT_OWEN',
@@ -77,6 +76,29 @@ DB_PROFILES = {
 def db_profile(environ=None) -> dict:
     key = 'test' if is_test_env(environ) else 'release'
     return DB_PROFILES[key]
+
+
+# 异常反馈上游。测试和正式各一套地址和 X-Api-Key，请求时按 HOLD_ENV 选取。
+# 地址或密钥为空则不发请求。密钥不要打进日志或接口返回。
+ABNORMAL_FEEDBACK_PROFILES = {
+    'test': {
+        'url': 'https://edms-alpha.gcoreinc.com/api/open/ncmr-reports',
+        'api_key': 'edms_7408d1df04c8a9c07d3912a58d0a3575b2b1df6d4635f330b056d3ae134aba90',
+    },
+    'release': {
+        'url': '',
+        'api_key': '',
+    },
+}
+
+
+def abnormal_feedback_profile(environ=None) -> dict:
+    key = 'test' if is_test_env(environ) else 'release'
+    profile = ABNORMAL_FEEDBACK_PROFILES[key]
+    return {
+        'url': (profile.get('url') or '').strip(),
+        'api_key': (profile.get('api_key') or '').strip(),
+    }
 
 
 def oracle_dsn(profile) -> str:
@@ -165,15 +187,14 @@ class Config:
         ('1_PD_DCG_DC_2_DN_WLT', 'GC3003-3.5'),
     )
 
-    # Hold info 合并为 hold_record 的定时任务配置
-    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if is_test_env() else 'FT_HOLD_INFO'
-    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if is_test_env() else 'FT_HOLD_RECORD'
-    CIRCULATION_HISTORY_TABLE = (
-        'CIRCULATION_HISTORY_TEST' if is_test_env() else 'CIRCULATION_HISTORY'
-    )
+    # Hold info 合并为 hold_record 的定时任务配置。
+    # 测试库和正式库表名相同，环境只切换 DB_PROFILES 里的连接。
+    HOLD_INFO_TABLE = 'FT_HOLD_INFO'
+    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD'
+    CIRCULATION_HISTORY_TABLE = 'CIRCULATION_HISTORY'
     # CP 合批单独成表，不写 FT_HOLD_RECORD / CIRCULATION_HISTORY。
-    CP_HOLD_RECORD_TABLE, CP_CIRCULATION_TABLE = cp_hold_tables(is_test_env())
-    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if is_test_env() else 'FT_HOLD_PREDICT'
+    CP_HOLD_RECORD_TABLE, CP_CIRCULATION_TABLE = cp_hold_tables()
+    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT'
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30

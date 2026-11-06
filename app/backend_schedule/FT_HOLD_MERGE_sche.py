@@ -21,6 +21,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
+from app.backend_schedule.singleton_lock import LOCK_FT_HOLD_MERGE, hold_singleton
 from app.config import Config, is_test_env, reject_legacy_mode_arg
 from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
@@ -594,7 +595,7 @@ class HoldMergeScheduler(threading.Thread):
         self.logger = logger
         self.config = Config()
         self.interval_minutes = getattr(self.config, 'HOLD_MERGE_INTERVAL_MINUTES', 30)
-        self.hold_info_table = getattr(self.config, 'HOLD_INFO_TABLE', 'FT_HOLD_INFO_TEST')
+        self.hold_info_table = getattr(self.config, 'HOLD_INFO_TABLE', 'FT_HOLD_INFO')
         self.hold_record_table = getattr(self.config, 'HOLD_RECORD_TABLE', 'FT_HOLD_RECORD')
         self.record_status = getattr(self.config, 'HOLD_RECORD_STATUS', 0)
         self.dedup_window = timedelta(
@@ -831,7 +832,8 @@ class HoldMergeScheduler(threading.Thread):
 if __name__ == '__main__':
     reject_legacy_mode_arg()
     print(f"HOLD_ENV={'test' if is_test_env() else 'release'} 源表={Config.HOLD_INFO_TABLE}")
-    # 独立进程常驻。Web 主程序不再拉起本调度。表由 HOLD_ENV 决定。
+    # 独立进程常驻。同一套库上只留一个进程，锁在库会话里。
+    hold_singleton(LOCK_FT_HOLD_MERGE, logger)
     scheduler = HoldMergeScheduler()
     scheduler.start()
     try:

@@ -7,8 +7,11 @@ from unittest.mock import MagicMock, patch
 from app.controllers.dispose_ctrl import (
     DISPOSE_TRANSFER,
     find_stale_engineer_holds,
+    rebind_system_owned_holds,
     transfer_open_holds_on_rebind,
+    transfer_system_owned_record,
 )
+from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_PRODUCTION
 from app.controllers.product_ctrl import update_product
 
 
@@ -54,6 +57,22 @@ class TransferOpenHoldsTest(unittest.TestCase):
             self.assertIn('LAST_CIRCULATION_ID', sql)
             self.assertNotIn('STATUS', sql)
         db.session.commit.assert_not_called()
+
+    @patch('app.controllers.dispose_ctrl._circ_seq', return_value='CIRCULATION_HISTORY_TEST_SEQ')
+    @patch('app.controllers.dispose_ctrl._circ_table', return_value='CIRCULATION_HISTORY_TEST')
+    @patch('app.controllers.dispose_ctrl._record_table', return_value='FT_HOLD_RECORD_TEST')
+    @patch('app.controllers.dispose_ctrl.db')
+    def test_record_id_limits_the_select(self, db, _record, _circ, _circ_seq):
+        db.session.execute.return_value.fetchall.return_value = []
+        moved = transfer_open_holds_on_rebind(
+            'P1', 1, 7, '指定转交', disposed_owner_id=9, record_id=11,
+        )
+        self.assertEqual(moved, 0)
+        sql = _sqls(db)[0]
+        params = db.session.execute.call_args.args[1]
+        self.assertIn('r.ID = :record_id', sql)
+        self.assertEqual(params['record_id'], 11)
+        self.assertEqual(params['from_owner'], 1)
 
     @patch('app.controllers.dispose_ctrl.db')
     def test_same_owner_writes_nothing(self, db):
@@ -135,6 +154,109 @@ class UpdateProductRebindTest(unittest.TestCase):
         self.assertTrue(ok, msg)
         transfer.assert_not_called()
         self.assertEqual(product.PRO_ENG_ID, 3)
+
+
+class RebindSystemHoldsTest(unittest.TestCase):
+    @patch('app.controllers.dispose_ctrl.db')
+    @patch('app.controllers.dispose_ctrl.transfer_open_holds_on_rebind', return_value=2)
+    @patch('app.controllers.dispose_ctrl._lookup_pro_eng_id', return_value=7)
+    def test_bound_product_moves_system_holds(self, _lookup, transfer, db):
+        ok, msg, moved = rebind_system_owned_holds('P1', 9)
+        self.assertTrue(ok, msg)
+        self.assertEqual(moved, 2)
+        transfer.assert_called_once_with(
+            'P1', 1, 7, '按型号重绑：系统待办调整为工程师 7',
+            disposed_owner_id=9,
+        )
+        db.session.commit.assert_called_once()
+
+    @patch('app.controllers.dispose_ctrl.db')
+    @patch('app.controllers.dispose_ctrl.transfer_open_holds_on_rebind')
+    @patch('app.controllers.dispose_ctrl._lookup_pro_eng_id', return_value=1)
+    def test_unbound_product_does_not_write(self, _lookup, transfer, db):
+        ok, msg, moved = rebind_system_owned_holds('NEW', 9)
+        self.assertFalse(ok)
+        self.assertIn('尚未绑定', msg)
+        self.assertEqual(moved, 0)
+        transfer.assert_not_called()
+        db.session.commit.assert_not_called()
+        db.session.execute.assert_not_called()
+
+    @patch('app.controllers.dispose_ctrl.db')
+    @patch(
+        'app.controllers.dispose_ctrl._lookup_pro_eng_id',
+        side_effect=lambda pid: {'A': 7, 'B': 1}[pid],
+    )
+    @patch(
+        'app.controllers.dispose_ctrl._product_ids_owned_by_system',
+        return_value=['A', 'B'],
+    )
+    @patch('app.controllers.dispose_ctrl.transfer_open_holds_on_rebind', return_value=1)
+    def test_rebind_all_skips_products_still_unbound(self, transfer, _products, _lookup, db):
+        ok, msg, moved = rebind_system_owned_holds(None, 9)
+        self.assertTrue(ok, msg)
+        self.assertEqual(moved, 1)
+        transfer.assert_called_once()
+        self.assertEqual(transfer.call_args.args[0], 'A')
+        self.assertEqual(transfer.call_args.args[1], 1)
+        self.assertEqual(transfer.call_args.args[2], 7)
+
+
+class TransferSystemHoldTest(unittest.TestCase):
+    def _hold(self, owner=1, status=0, product='NEW-1'):
+        return {
+            'id': 11,
+            'product_id': product,
+            'status': status,
+            'owner_id': owner,
+        }
+
+    @patch('app.controllers.dispose_ctrl.db')
+    @patch('app.controllers.dispose_ctrl.transfer_open_holds_on_rebind')
+    @patch('app.controllers.dispose_ctrl._load_system_hold')
+    def test_rejects_when_owner_is_not_system(self, load, transfer, db):
+        load.return_value = self._hold(owner=7)
+        ok, msg, data = transfer_system_owned_record(11, 8, 9)
+        self.assertFalse(ok)
+        self.assertIn('仅系统', msg)
+        self.assertIsNone(data)
+        transfer.assert_not_called()
+        db.session.commit.assert_not_called()
+
+    @patch('app.controllers.dispose_ctrl.db')
+    @patch('app.controllers.dispose_ctrl.transfer_open_holds_on_rebind')
+    @patch('app.controllers.dispose_ctrl._user_role', return_value=ROLE_PRODUCTION)
+    @patch('app.controllers.dispose_ctrl._load_system_hold')
+    def test_rejects_non_engineer_target(self, load, _role, transfer, db):
+        load.return_value = self._hold()
+        ok, msg, data = transfer_system_owned_record(11, 8, 9)
+        self.assertFalse(ok)
+        self.assertIn('产品工程师', msg)
+        self.assertIsNone(data)
+        transfer.assert_not_called()
+        db.session.commit.assert_not_called()
+
+    @patch('app.controllers.dispose_ctrl.db')
+    @patch('app.controllers.dispose_ctrl.transfer_open_holds_on_rebind', return_value=1)
+    @patch('app.controllers.dispose_ctrl._user_role', return_value=ROLE_ENGINEER)
+    @patch('app.controllers.dispose_ctrl._load_system_hold')
+    def test_transfers_one_system_hold(self, load, _role, transfer, db):
+        load.return_value = self._hold()
+        ok, msg, data = transfer_system_owned_record(11, 8, 9)
+        self.assertTrue(ok, msg)
+        transfer.assert_called_once_with(
+            'NEW-1', 1, 8, '指定转交：由系统用户转给工程师 8',
+            disposed_owner_id=9,
+            record_id=11,
+        )
+        db.session.commit.assert_called_once()
+        self.assertEqual(data['next_owner_id'], 8)
+
+    def test_rejects_system_user_as_target(self):
+        ok, msg, data = transfer_system_owned_record(11, 1, 9)
+        self.assertFalse(ok)
+        self.assertIn('不能转交', msg)
+        self.assertIsNone(data)
 
 
 if __name__ == '__main__':

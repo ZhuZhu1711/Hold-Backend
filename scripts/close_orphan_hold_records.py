@@ -12,7 +12,7 @@ FT_HOLD_INFO.HOLD_RECORD_ID = record.ID，且尚未关闭（STATUS <> 99）。
 用法（在 Hold-Backend 根目录）:
   python scripts/close_orphan_hold_records.py --dry-run
   python scripts/close_orphan_hold_records.py
-  python scripts/close_orphan_hold_records.py --test          # 测试表
+  python scripts/close_orphan_hold_records.py --test          # 测试库，表名与正式相同
   python scripts/close_orphan_hold_records.py --dry-run --limit 50
 """
 
@@ -44,8 +44,8 @@ _ALLOWED = {
 
 
 def _tables(use_test: bool) -> tuple[str, str]:
-    if use_test:
-        return 'FT_HOLD_INFO_TEST', 'FT_HOLD_RECORD_TEST'
+    # 测试库和正式库表名相同，连接由 HOLD_ENV 决定。
+    del use_test
     return 'FT_HOLD_INFO', 'FT_HOLD_RECORD'
 
 
@@ -112,7 +112,7 @@ def main() -> int:
     parser.add_argument(
         '--test',
         action='store_true',
-        help='使用 FT_HOLD_INFO_TEST / FT_HOLD_RECORD_TEST',
+        help='保留参数。表名与正式库相同，不设置 HOLD_ENV 即连测试库',
     )
     parser.add_argument(
         '--limit',

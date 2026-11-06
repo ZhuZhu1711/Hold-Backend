@@ -3,12 +3,12 @@
 
 逻辑：
   1. 主数据取 FT_HOLD_RECORD（合批任务已合并，不再对 HOLD_INFO 做 1 分钟窗口）
-  2. ROUTE_ID 含 MP → PRODUCTION，含 ENG → ENGINEERING
+  2. ROUTE_ID 含 ENG → ENGINEERING，否则含 MP → PRODUCTION。ENG 优先。
   3. 合批片（LOT/WAFER 后缀位数>2）查 SPLIT_MERGE_HISTORY 还原源 lot / wafer
   4. 补 TEST_WAFER.TEST_PROGRAM
   5. 同一 wafer 多条 record 只保留最新一条（相同时间取 ID 更大的）；Hold Time 统一用该 lot 最早的 HOLD_DTTM
   6. 预处置人：ROUTE 含 ENG 时按 lot 查 OA（形如「周星辰（A0004655）」）；
-     含 MP 的 PRODUCTION 用该型号族 PRODUCT_INFO.PIE，查不到留空
+     含 MP 的 PRODUCTION 用该型号族 PRODUCT_INFO.PIE，按 USERS 补成同样的「姓名（工号）」
   7. 末列 OA单号按 lot 查 MES get_lot_order 的 data.OA；没有记录留空
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +26,14 @@ from app.utils.database_util import (
     normalize_lot_id, resolve_hold_record_table,
 )
 from app.controllers.product_ctrl import family_product_ids
-from app.utils.pre_handler_lookup import lookup_lot_oa, lookup_pre_handler
+from app.utils.pre_handler_lookup import (
+    format_pre_handler,
+    format_work_code,
+    looks_like_work_code,
+    lookup_lot_oa,
+    lookup_pre_handler,
+    split_pre_handler,
+)
 
 EXPORT_MAX_ROWS = 5000
 PREVIEW_MAX_ROWS = 100
@@ -121,8 +128,8 @@ def _query_hold_records(
             TO_CHAR(r.HOLD_DTTM, 'YYYY-MM-DD HH24:MI:SS') AS HOLD_DATETIME,
             r.HOLD_REASON AS REASON,
             CASE
-                WHEN r.ROUTE_ID LIKE '%MP%' THEN 'PRODUCTION'
-                WHEN r.ROUTE_ID LIKE '%ENG%' THEN 'ENGINEERING'
+                WHEN UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%' THEN 'ENGINEERING'
+                WHEN UPPER(NVL(r.ROUTE_ID, '')) LIKE '%MP%' THEN 'PRODUCTION'
             END AS ROUTE_TYPE,
             r.LOT_ID,
             r.ROUTE_ID,
@@ -246,12 +253,69 @@ def _query_product_pie(cursor, product_id, cache):
         )
         rows = cursor.fetchall()
         if isinstance(rows, list):
-            value = _newest_pie(rows)
+            value = _format_mp_pre_handler(cursor, _newest_pie(rows))
     except Exception as exc:
         logger.warning('型号 PIE 查询失败 product=%s: %s', key, exc)
         value = ''
     cache[key] = value
     return value
+
+
+def _format_mp_pre_handler(cursor, pie: str) -> str:
+    """PIE 是工号或姓名。导出成与 ENG 相同的「姓名（A0004655）」。对不上就留原值。"""
+    text = (pie or '').strip()
+    if not text:
+        return ''
+    person, code = split_pre_handler(text)
+    if person and code:
+        return format_pre_handler(person, code)
+    if looks_like_work_code(text):
+        return format_pre_handler(_lookup_user_name(cursor, text), text)
+    employee_no = _lookup_employee_no(cursor, text)
+    if not employee_no:
+        return text
+    return format_pre_handler(text, employee_no)
+
+
+def _lookup_user_name(cursor, work_code: str) -> str:
+    formatted = format_work_code(work_code)
+    cursor.execute(
+        """
+        SELECT NAME
+        FROM USERS
+        WHERE EMPLOYEE_NO = :raw OR EMPLOYEE_NO = :formatted
+        ORDER BY ID
+        """,
+        {'raw': work_code, 'formatted': formatted},
+    )
+    names = []
+    for row in cursor.fetchall() or []:
+        name = str(row[0] or '').strip() if row else ''
+        if name and name not in names:
+            names.append(name)
+    if len(names) != 1:
+        return ''
+    return names[0]
+
+
+def _lookup_employee_no(cursor, name: str) -> str:
+    cursor.execute(
+        """
+        SELECT EMPLOYEE_NO
+        FROM USERS
+        WHERE NAME = :name
+        ORDER BY ID
+        """,
+        {'name': name},
+    )
+    codes = []
+    for row in cursor.fetchall() or []:
+        code = str(row[0] or '').strip() if row else ''
+        if looks_like_work_code(code) and code not in codes:
+            codes.append(code)
+    if len(codes) != 1:
+        return ''
+    return codes[0]
 
 
 def _pre_handler_for(cursor, route, lot_id, product_id, caches):

@@ -4,7 +4,8 @@
 匹配：STATUS<>99，当前负责人不是生产，且不等于该型号现在的 PRO_ENG_ID
 （绑定为空则按系统用户）。已在生产节点的单不抽回。
 
-默认只查测试表，且不写库。正式表必须同时带 --release 与 --apply。
+默认连测试库，且不写库。正式库必须同时带 --release 与 --apply。
+两个库的表名相同。
 
 用法（在 Hold-Backend 根目录）:
   python scripts/reassign_rebind_holds.py
@@ -37,7 +38,7 @@ def _parse_args():
     parser.add_argument(
         '--release',
         action='store_true',
-        help='使用正式表 FT_HOLD_RECORD / CIRCULATION_HISTORY。省略时只用 *_TEST',
+        help='连接正式库。省略时连接测试库。两边表名相同',
     )
     return parser.parse_args()
 
@@ -57,16 +58,8 @@ def main() -> int:
 
     record_table = Config.HOLD_RECORD_TABLE
     circ_table = Config.CIRCULATION_HISTORY_TABLE
-    if args.release:
-        if record_table.endswith('_TEST') or circ_table.endswith('_TEST'):
-            print('已指定 --release，但当前仍是测试表，已中止', file=sys.stderr)
-            return 1
-        print(f'正式表: {record_table} / {circ_table}')
-    else:
-        if not record_table.endswith('_TEST') or not circ_table.endswith('_TEST'):
-            print('未指定 --release，但当前不是测试表，已中止', file=sys.stderr)
-            return 1
-        print(f'测试表: {record_table} / {circ_table}')
+    which = '正式库' if args.release else '测试库'
+    print(f'{which}: {record_table} / {circ_table}')
 
     app = create_app()
     with app.app_context():

@@ -71,7 +71,7 @@ RECORD_TYPE_ENG_FUTURE = 3
 
 
 def _table_names():
-    info_table = (getattr(Config, 'HOLD_INFO_TABLE', None) or 'FT_HOLD_INFO_TEST').upper()
+    info_table = (getattr(Config, 'HOLD_INFO_TABLE', None) or 'FT_HOLD_INFO').upper()
     record_table = resolve_hold_record_table()
     circ_table = resolve_circulation_table(record_table=record_table)
     link_col = (getattr(Config, 'HOLD_INFO_LINK_COLUMN', None) or 'HOLD_RECORD_ID').upper()

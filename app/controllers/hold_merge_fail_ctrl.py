@@ -37,7 +37,7 @@ _EMPTY_REASON = '历史数据无失败原因'
 
 
 def _info_table():
-    return (getattr(Config, 'HOLD_INFO_TABLE', None) or 'FT_HOLD_INFO_TEST').upper()
+    return (getattr(Config, 'HOLD_INFO_TABLE', None) or 'FT_HOLD_INFO').upper()
 
 
 def _record_table():

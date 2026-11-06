@@ -36,23 +36,21 @@ class _Row:
 
 
 class CpTableNameTest(unittest.TestCase):
-    def test_test_and_release_tables_differ(self):
+    def test_test_and_release_tables_match(self):
         self.assertEqual(
             cp_hold_tables(True),
-            ('CP_HOLD_RECORD_TEST', 'CP_CIRCULATION_HISTORY_TEST'),
-        )
-        self.assertEqual(
-            cp_hold_tables(False),
             ('CP_HOLD_RECORD', 'CP_CIRCULATION_HISTORY'),
         )
+        self.assertEqual(cp_hold_tables(False), cp_hold_tables(True))
 
     def test_current_config_matches_env(self):
         record, circ = cp_hold_tables(is_test_env())
         self.assertEqual(Config.CP_HOLD_RECORD_TABLE, record)
         self.assertEqual(Config.CP_CIRCULATION_TABLE, circ)
-        if is_test_env():
-            self.assertTrue(record.endswith('_TEST'))
-            self.assertTrue(circ.endswith('_TEST'))
+        self.assertEqual(Config.HOLD_INFO_TABLE, 'FT_HOLD_INFO')
+        self.assertEqual(Config.HOLD_RECORD_TABLE, 'FT_HOLD_RECORD')
+        self.assertEqual(Config.CIRCULATION_HISTORY_TABLE, 'CIRCULATION_HISTORY')
+        self.assertEqual(Config.HOLD_PREDICT_TABLE, 'FT_HOLD_PREDICT')
 
 
 @patch(

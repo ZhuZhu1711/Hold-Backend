@@ -80,13 +80,28 @@ def lookup_pre_handler(lot_id, cache=None, oa_cache=None) -> str:
     return value
 
 
+_DISPLAY_RE = re.compile(r'^(.+?)[（(]([^）)]+)[）)]$')
+
+
+def looks_like_work_code(value) -> bool:
+    return bool(_digits(value))
+
+
 def format_pre_handler(name, work_code) -> str:
     """周星辰 + 4655 → 周星辰（A0004655）。工号按 A + 7 位数字展示。"""
     person = (name or '').strip()
-    code = format_work_code(work_code)
+    code = format_work_code(work_code) if looks_like_work_code(work_code) else ''
     if person and code:
         return f'{person}（{code}）'
     return person or code or ''
+
+
+def split_pre_handler(text) -> tuple:
+    """已是「姓名（工号）」时拆开。工号不像 A 码则不算已格式化。"""
+    matched = _DISPLAY_RE.fullmatch((text or '').strip())
+    if not matched or not looks_like_work_code(matched.group(2)):
+        return '', ''
+    return matched.group(1).strip(), matched.group(2).strip()
 
 
 def format_work_code(work_code) -> str:

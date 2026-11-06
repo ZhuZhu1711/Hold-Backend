@@ -8,12 +8,11 @@ from sqlalchemy.orm import relationship
 
 
 class TestWafer(db.Model):
-    # 指定表名和 Schema
+    # 表在当前登录用户下。正式是 FT_OWEN，测试库是 fc_admin。
     __tablename__ = 'TEST_WAFER'
-    __table_args__ = {'schema': 'FT_OWEN'}
     
     # ID: NUMBER(38,0), 对应 Oracle 序列
-    ID = Column(Integer, primary_key=True, server_default=Sequence('SEQ_TEST_WAFER', schema='FT_OWEN').next_value())
+    ID = Column(Integer, primary_key=True, server_default=Sequence('SEQ_TEST_WAFER').next_value())
     
     # WAFER_ID: VARCHAR2(50)
     WAFER_ID = Column(String(50), nullable=False)
@@ -88,15 +87,14 @@ class TestWafer(db.Model):
     
     
 class TestBincode(db.Model):
-    # 指定表名和 Schema
+    # 表在当前登录用户下。正式是 FT_OWEN，测试库是 fc_admin。
     __tablename__ = 'TEST_BINCODE'
-    __table_args__ = {'schema': 'FT_OWEN'}
     
     # ID: NUMBER(38,0), 对应 Oracle 序列
-    ID = Column(Integer, primary_key=True, server_default=Sequence('SEQ_TEST_BINCODE', schema='FT_OWEN').next_value())
+    ID = Column(Integer, primary_key=True, server_default=Sequence('SEQ_TEST_BINCODE').next_value())
     
     # TEST_WAFER_SEQ: NUMBER(38,0), 外键关联 TEST_WAFER.ID
-    TEST_WAFER_SEQ = Column(Integer, ForeignKey('FT_OWEN.TEST_WAFER.ID', ondelete='CASCADE'), nullable=False)
+    TEST_WAFER_SEQ = Column(Integer, ForeignKey('TEST_WAFER.ID', ondelete='CASCADE'), nullable=False)
     
     # WAFER_ID: VARCHAR2(50)
     WAFER_ID = Column(String(50), nullable=False)

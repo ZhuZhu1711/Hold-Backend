@@ -61,10 +61,11 @@ class LineTypeTest(unittest.TestCase):
         self.assertEqual(product_family('GC8613'), 'GC8613')
         self.assertEqual(product_family('X-2.6-3.5'), 'X-2.6')
 
+    @patch('app.controllers.product_ctrl.transfer_open_holds_on_rebind', return_value=0)
     @patch('app.controllers.product_ctrl.User')
     @patch('app.controllers.product_ctrl.db')
     @patch('app.controllers.product_ctrl.ProductInfo')
-    def test_add_product_ignores_request_line_type(self, product_cls, db, user_cls):
+    def test_add_product_ignores_request_line_type(self, product_cls, db, user_cls, transfer):
         product_cls.query.filter_by.return_value.first.return_value = None
         product_cls.query.filter.return_value.all.return_value = []
         user_cls.query.get.return_value = MagicMock(NAME='工程师')
@@ -83,6 +84,11 @@ class LineTypeTest(unittest.TestCase):
         self.assertIsNone(created.PIE)
         db.session.add.assert_called_once_with(created)
         db.session.commit.assert_called_once()
+        transfer.assert_called_once()
+        self.assertEqual(transfer.call_args.args[0], 'GC4103-2.6')
+        self.assertEqual(transfer.call_args.args[1], 1)
+        self.assertEqual(transfer.call_args.args[2], 4)
+        self.assertIn('新增型号', transfer.call_args.args[3])
 
     @patch('app.controllers.product_ctrl.db')
     @patch('app.controllers.product_ctrl.ProductInfo')
@@ -374,15 +380,18 @@ class PieBindingTest(unittest.TestCase):
         self.assertEqual(product.PRO_ENG_ID, 3)
         product_cls.query.filter.assert_not_called()
 
+    @patch('app.controllers.product_ctrl.User')
+    @patch('app.controllers.product_ctrl.transfer_open_holds_on_rebind', return_value=0)
     @patch('app.controllers.product_ctrl.db')
     @patch('app.controllers.product_ctrl.ProductInfo')
-    def test_new_form_inherits_family_binding(self, product_cls, db):
+    def test_new_form_inherits_family_binding(self, product_cls, db, transfer, user_cls):
         sibling = _Product()
         sibling.PRODUCT_ID = 'GC8613-3.5'
         sibling.PRO_ENG_ID = 4
         sibling.PIE = '张三'
         product_cls.query.filter_by.return_value.first.return_value = None
         product_cls.query.filter.return_value.all.return_value = [sibling]
+        user_cls.query.get.return_value = MagicMock(NAME='李四')
         created = product_cls.return_value
 
         ok, msg = add_product({'product_id': 'GC8613-2.6', 'gross_die': 8})
@@ -394,6 +403,10 @@ class PieBindingTest(unittest.TestCase):
         self.assertEqual(created.PIE, '张三')
         self.assertEqual(sibling.PRO_ENG_ID, 4)
         self.assertEqual(sibling.PIE, '张三')
+        transfer.assert_called_once()
+        self.assertEqual(transfer.call_args.args[0], 'GC8613-2.6')
+        self.assertEqual(transfer.call_args.args[1], 1)
+        self.assertEqual(transfer.call_args.args[2], 4)
 
     def test_lookup_blank_pie_is_rejected(self):
         ok, msg, data = lookup_products_by_pie('   ')

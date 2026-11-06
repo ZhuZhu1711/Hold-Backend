@@ -105,6 +105,10 @@ class RootEngineerPendingRouteTest(unittest.TestCase):
         html = resp.get_data(as_text=True)
         self.assertIn('id="engineer_id"', html)
         self.assertIn('不限工程师待办', html)
+        self.assertIn('仅系统待办', html)
+        self.assertIn('当前负责人', html)
+        self.assertIn('重绑全部已配置型号', html)
+        self.assertIn('按型号重绑', html)
 
     @patch('app.routes.hold_report_routes.hold_report_ctrl.get_holding_records')
     def test_engineer_id_filters_pending(self, get_holding):
@@ -129,6 +133,33 @@ class RootEngineerPendingRouteTest(unittest.TestCase):
         kwargs = get_holding.call_args.kwargs
         self.assertIsNone(kwargs.get('owner_eng_id'))
         self.assertIsNone(kwargs.get('current_owner_id'))
+
+    @patch('app.routes.hold_report_routes.hold_report_ctrl.get_holding_records')
+    def test_system_only_filters_owner_not_product(self, get_holding):
+        get_holding.return_value = (
+            True, 'ok',
+            {'items': [], 'total': 0, 'page': 1, 'page_size': 20, 'pages': 1},
+        )
+        resp = self.client.get(
+            '/admin/hold/api/holding_records?system_only=1&engineer_id=7',
+        )
+        self.assertEqual(resp.status_code, 200)
+        kwargs = get_holding.call_args.kwargs
+        self.assertIsNone(kwargs.get('owner_eng_id'))
+        self.assertEqual(kwargs.get('current_owner_id'), 1)
+
+    @patch(
+        'app.routes.hold_report_routes.dispose_ctrl.rebind_system_owned_holds',
+        return_value=(False, '型号尚未绑定工程师', 0),
+    )
+    def test_rebind_unbound_is_400(self, rebind):
+        resp = self.client.post(
+            '/admin/hold/api/holding_records/rebind',
+            json={'product_id': 'NEW'},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('尚未绑定', resp.get_json()['msg'])
+        rebind.assert_called_once_with('NEW', 1)
 
     def test_invalid_engineer_id(self):
         resp = self.client.get('/admin/hold/api/holding_records?engineer_id=abc')
