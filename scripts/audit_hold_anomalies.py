@@ -46,12 +46,8 @@ _NOT_CLOSED = 'NVL(r.STATUS, 0) <> :closed'
 
 
 def _tables(use_test: bool) -> TableTriple:
-    if use_test:
-        return (
-            'FT_HOLD_INFO_TEST',
-            'FT_HOLD_RECORD_TEST',
-            'CIRCULATION_HISTORY_TEST',
-        )
+    # 测试库和正式库表名相同，连接由 HOLD_ENV 决定。
+    del use_test
     return 'FT_HOLD_INFO', 'FT_HOLD_RECORD', 'CIRCULATION_HISTORY'
 
 
@@ -374,7 +370,7 @@ def main() -> int:
     parser.add_argument(
         '--test',
         action='store_true',
-        help='使用 *_TEST 表',
+        help='保留参数。表名与正式库相同，不设置 HOLD_ENV 即连测试库',
     )
     parser.add_argument(
         '--limit',

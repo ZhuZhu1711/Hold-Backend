@@ -11,7 +11,7 @@ class ClientError(db.Model):
     ID = db.Column(
         db.Numeric(38, 0),
         primary_key=True,
-        server_default=Sequence('SEQ_FT_CLIENT_ERROR', schema='FT_OWEN').next_value(),
+        server_default=Sequence('SEQ_FT_CLIENT_ERROR').next_value(),
     )
     REPORT_ID = db.Column(db.String(36), unique=True, nullable=False)
     OCCURRED_AT = db.Column(db.DateTime)

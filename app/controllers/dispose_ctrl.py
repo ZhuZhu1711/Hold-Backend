@@ -30,7 +30,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
 from app.config import Config
-from app.utils.auth_decorators import ROLE_ROOT, ROLE_PRODUCTION
+from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_ROOT, ROLE_PRODUCTION
 from app.utils.annex_util import hold_code_is_aql, parse_annex_ftp_paths
 from app.utils.database_util import (
     _ALLOWED_SEQS,
@@ -52,6 +52,7 @@ DISPOSE_ANALYZE = 5          # 可靠性分析（下一节点仍是工程师）
 DISPOSE_ANALYZE_RETURN = 6   # 分析(返回) — 已废弃，仅历史展示
 DISPOSE_TRANSFER = 7         # 转交
 DISPOSE_ROLLBACK = 8         # 回退
+DISPOSE_NCMR_REPORTED = 9    # 已上报 NCMR — 系统写入，工程师不可再处置
 DISPOSE_SAMPLE_DONE = 65     # 留样完成 — 生产侧，不改当前节点
 DISPOSE_PROD_ANALYZE_RETURN = 66  # 分析(返回) — 已废弃，仅历史展示
 DISPOSE_CLOSE = 99           # 关闭
@@ -91,6 +92,7 @@ DISPOSE_LABELS = {
     DISPOSE_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_TRANSFER: '转交',
     DISPOSE_ROLLBACK: '回退',
+    DISPOSE_NCMR_REPORTED: '已上报',
     DISPOSE_SAMPLE_DONE: '留样完成',
     DISPOSE_PROD_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_CLOSE: '关闭',
@@ -160,10 +162,15 @@ def owner_slot(eng_id):
     return int(eng_id)
 
 
-def transfer_open_holds_on_rebind(product_code, from_owner_id, to_owner_id, note):
+def transfer_open_holds_on_rebind(
+    product_code, from_owner_id, to_owner_id, note,
+    *, disposed_owner_id=None, record_id=None,
+):
     """
     型号改绑：未关闭且当前负责人仍是原工程师的单，插入 DISPOSE=7 交给新工程师。
+    record_id 有值时只转这一条。
     不改 STATUS，不提交事务。返回转交条数。
+    disposed_owner_id 缺省为系统用户；页面操作传入当前登录人。
     """
     product_code = str(product_code or '').strip()
     from_owner_id = int(from_owner_id)
@@ -174,9 +181,19 @@ def transfer_open_holds_on_rebind(product_code, from_owner_id, to_owner_id, note
     note_text = (note or '').strip()
     if len(note_text) > DISPOSE_NOTE_MAX_LEN:
         note_text = note_text[:DISPOSE_NOTE_MAX_LEN]
+    writer_id = _system_user_id() if disposed_owner_id is None else int(disposed_owner_id)
 
     record_table = _record_table()
     circ_table = _circ_table()
+    params = {
+        'product_id': product_code,
+        'closed': DISPOSE_CLOSE,
+        'from_owner': from_owner_id,
+    }
+    record_sql = ''
+    if record_id is not None:
+        record_sql = ' AND r.ID = :record_id'
+        params['record_id'] = int(record_id)
     rows = db.session.execute(
         text(f"""
             SELECT r.ID
@@ -186,12 +203,9 @@ def transfer_open_holds_on_rebind(product_code, from_owner_id, to_owner_id, note
             WHERE r.PRODUCT_ID = :product_id
               AND NVL(r.STATUS, 0) <> :closed
               AND c.NEXT_OWNER_ID = :from_owner
+              {record_sql}
         """),
-        {
-            'product_id': product_code,
-            'closed': DISPOSE_CLOSE,
-            'from_owner': from_owner_id,
-        },
+        params,
     ).fetchall()
 
     record_ids = [int(row[0]) for row in rows if row[0] is not None]
@@ -228,7 +242,7 @@ def transfer_open_holds_on_rebind(product_code, from_owner_id, to_owner_id, note
             {
                 'circ_id': circ_id,
                 'hold_record_id': rid,
-                'disposed_owner_id': _system_user_id(),
+                'disposed_owner_id': writer_id,
                 'dispose': DISPOSE_TRANSFER,
                 'next_owner_id': to_owner_id,
                 'dispose_source': 'SYS',
@@ -245,6 +259,157 @@ def transfer_open_holds_on_rebind(product_code, from_owner_id, to_owner_id, note
             {'circ_id': circ_id, 'rid': rid},
         )
     return len(record_ids)
+
+
+def _load_system_hold(record_id):
+    """未关闭判断用：记录、型号、状态、当前负责人。不存在返回 None。"""
+    row = db.session.execute(
+        text(f"""
+            SELECT r.ID, r.PRODUCT_ID, r.STATUS, c.NEXT_OWNER_ID
+            FROM {_record_table()} r
+            LEFT JOIN {_circ_table()} c
+                ON c.ID = r.LAST_CIRCULATION_ID
+            WHERE r.ID = :rid
+        """),
+        {'rid': int(record_id)},
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        'id': int(row[0]),
+        'product_id': row[1],
+        'status': int(row[2] or 0),
+        'owner_id': None if row[3] is None else int(row[3]),
+    }
+
+
+def _user_role(user_id):
+    row = db.session.execute(
+        text('SELECT ROLE FROM USERS WHERE ID = :id'),
+        {'id': int(user_id)},
+    ).fetchone()
+    if not row or row[0] is None:
+        return None
+    return int(row[0])
+
+
+def _product_ids_owned_by_system():
+    """仍挂在系统用户上、且型号已有工程师的未关闭单，按型号去重。"""
+    system_id = _system_user_id()
+    rows = db.session.execute(
+        text(f"""
+            SELECT DISTINCT r.PRODUCT_ID
+            FROM {_record_table()} r
+            INNER JOIN {_circ_table()} c
+                ON c.ID = r.LAST_CIRCULATION_ID
+            INNER JOIN PRODUCT_INFO p
+                ON p.PRODUCT_ID = r.PRODUCT_ID
+            WHERE NVL(r.STATUS, 0) <> :closed
+              AND c.NEXT_OWNER_ID = :system_id
+              AND p.PRO_ENG_ID IS NOT NULL
+        """),
+        {'closed': DISPOSE_CLOSE, 'system_id': system_id},
+    ).fetchall()
+    return [row[0] for row in rows if row[0]]
+
+
+def _rebind_product(product_id, eng_id, actor_user_id):
+    return transfer_open_holds_on_rebind(
+        product_id,
+        _system_user_id(),
+        eng_id,
+        f'按型号重绑：系统待办调整为工程师 {eng_id}',
+        disposed_owner_id=actor_user_id,
+    )
+
+
+def rebind_system_owned_holds(product_id, actor_user_id):
+    """
+    把仍挂在系统用户上的未关闭单，按 PRODUCT_INFO.PRO_ENG_ID 转给工程师。
+    product_id 为空时处理全部已配置型号。型号还没有工程师时不写库。
+    有写入时提交事务。返回 (ok, msg, moved)。
+    """
+    try:
+        actor = int(actor_user_id)
+    except (TypeError, ValueError):
+        return False, '参数无效', 0
+
+    system_id = _system_user_id()
+    product_id = str(product_id or '').strip()
+    try:
+        if product_id:
+            eng = _lookup_pro_eng_id(product_id)
+            if eng == system_id:
+                return False, '型号尚未绑定工程师', 0
+            moved = _rebind_product(product_id, eng, actor)
+        else:
+            moved = 0
+            for pid in _product_ids_owned_by_system():
+                eng = _lookup_pro_eng_id(pid)
+                if eng == system_id:
+                    continue
+                moved += _rebind_product(pid, eng, actor)
+            if moved == 0:
+                return True, '没有可重绑的待办', 0
+        if moved:
+            db.session.commit()
+        return True, f'已重绑 {moved} 条', moved
+    except Exception as e:
+        db.session.rollback()
+        return False, f'重绑失败: {e}', 0
+
+
+def transfer_system_owned_record(hold_record_id, engineer_id, actor_user_id):
+    """
+    把一条当前负责人是系统用户的未关闭单转给指定产品工程师。
+    不要求型号已在 PRODUCT_INFO。成功时提交事务。
+    返回 (ok, msg, data|None)。
+    """
+    try:
+        rid = int(hold_record_id)
+        eng = int(engineer_id)
+        actor = int(actor_user_id)
+    except (TypeError, ValueError):
+        return False, '参数无效', None
+
+    system_id = _system_user_id()
+    if eng == system_id:
+        return False, '不能转交给系统用户', None
+    try:
+        hold = _load_system_hold(rid)
+        if not hold:
+            return False, 'hold_record 不存在', None
+        if hold['status'] == DISPOSE_CLOSE:
+            return False, '记录已关闭，无法转交', None
+        if hold['owner_id'] != system_id:
+            return False, '仅系统用户名下的待办可转交', None
+        role = _user_role(eng)
+        if role is None:
+            return False, '目标用户不存在', None
+        if role != ROLE_ENGINEER:
+            return False, '只能转交给产品工程师', None
+        product_id = str(hold['product_id'] or '').strip()
+        if not product_id:
+            return False, '记录缺少型号，无法转交', None
+        moved = transfer_open_holds_on_rebind(
+            product_id,
+            system_id,
+            eng,
+            f'指定转交：由系统用户转给工程师 {eng}',
+            disposed_owner_id=actor,
+            record_id=rid,
+        )
+        if moved != 1:
+            return False, '没有可转交的待办', None
+        db.session.commit()
+        return True, '已转交', {
+            'hold_record_id': rid,
+            'next_owner_id': eng,
+            'moved': moved,
+        }
+    except Exception as e:
+        db.session.rollback()
+        return False, f'转交失败: {e}', None
 
 
 def find_stale_engineer_holds():
@@ -1847,8 +2012,18 @@ def dispose_record(
         if not record:
             return False, 'hold_record 不存在', None
 
-        if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
+        try:
+            status_now = int(record.get('STATUS') or 0)
+        except (TypeError, ValueError):
+            status_now = 0
+        if status_now == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
+        try:
+            role_now = int(actor_role)
+        except (TypeError, ValueError):
+            role_now = actor_role
+        if role_now == ROLE_ENGINEER and status_now == DISPOSE_NCMR_REPORTED:
+            return False, '已上报，不能处置', None
         try:
             record_type_now = int(record.get('RECORD_TYPE'))
         except (TypeError, ValueError):

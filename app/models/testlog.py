@@ -5,12 +5,12 @@ from app import db
 from sqlalchemy import Column, Integer, String, Date, Sequence
 
 class FtWltTestlog(db.Model):
-    # 指定表名和 Schema
+    # 表在当前登录用户下。正式是 FT_OWEN，测试库是 fc_admin。
     __tablename__ = 'FT_WLT_TESTLOG'
     
     # ID: NUMBER, 对应 Oracle 序列
     # 注意：Oracle 需要显式指定序列默认值
-    ID = Column(Integer, primary_key=True, server_default=Sequence('FT_WLT_LOG_SEQ', schema='FT_OWEN').next_value())
+    ID = Column(Integer, primary_key=True, server_default=Sequence('FT_WLT_LOG_SEQ').next_value())
     
     # CREATE_TIME: DATE, 默认 SYSDATE
     CREATE_TIME = Column(Date, nullable=False)

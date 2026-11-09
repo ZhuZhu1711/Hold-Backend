@@ -3,7 +3,7 @@ import sys
 from datetime import timedelta
 
 
-# 服务器环境。不设置视为测试。正式机必须设 HOLD_ENV=release 才能启动正式表和正式端口。
+# 服务器环境。不设置视为测试。正式机必须设 HOLD_ENV=release 才能启动正式库和正式端口。
 # 空 / test / debug → 测试；只有 release → 正式。其它值拒绝启动，避免写错库。
 _TEST_ENV_VALUES = frozenset({'', 'test', 'debug'})
 _RELEASE_ENV_VALUE = 'release'
@@ -26,10 +26,9 @@ def is_test_env(environ=None) -> bool:
     return hold_env(environ) != 'release'
 
 
-def cp_hold_tables(test_env: bool) -> tuple:
-    """CP 处置单和流转表。测试与正式分开，避免测试进程读正式表。"""
-    if test_env:
-        return 'CP_HOLD_RECORD_TEST', 'CP_CIRCULATION_HISTORY_TEST'
+def cp_hold_tables(test_env: bool = False) -> tuple:
+    """CP 处置单和流转表。两个库的表名相同，靠连接分开。"""
+    del test_env
     return 'CP_HOLD_RECORD', 'CP_CIRCULATION_HISTORY'
 
 
@@ -58,11 +57,11 @@ def load_hold_api_token(environ=None):
 # 不设置 HOLD_ENV 用 test；HOLD_ENV=release 用 release。
 DB_PROFILES = {
     'test': {
-        'user': 'JSFT_TEST',
-        'password': 'Jsf5MncvKU!HBC',
-        'host': '172.18.252.24',
+        'user': 'fc_admin',
+        'password': 'Fca3GvpcKU!BTP',
+        'host': '172.18.252.121',
         'port': 1521,
-        'service_name': 'mesdb',
+        'service_name': 'mestdb',
     },
     'release': {
         'user': 'FT_OWEN',
@@ -122,6 +121,25 @@ class Config:
     # 正式读 HOLD_API_TOKEN，测试（HOLD_ENV=test）读 HOLD_API_TOKEN_DEBUG。勿把真实值提交进仓库。
     HOLD_API_TOKEN_ENV, HOLD_API_TOKEN = load_hold_api_token()
 
+    # NCMR 处置单批量导入。网页和客户端都经本服务转发。
+    # 默认用固定账号登录，token 只留在进程内存，不进客户端、不进日志。
+    # HOLD_NCMR_IMPORT_URL / HOLD_NCMR_LOGIN_URL / HOLD_NCMR_USERNAME /
+    # HOLD_NCMR_PASSWORD 可覆盖。HOLD_NCMR_TOKEN 若显式设置则跳过登录。
+    NCMR_IMPORT_URL = os.environ.get(
+        'HOLD_NCMR_IMPORT_URL',
+        'http://172.19.15.11/ncmr-api/factory/v1/disposalOrder/batchImport',
+    )
+    NCMR_LOGIN_URL = os.environ.get(
+        'HOLD_NCMR_LOGIN_URL',
+        'http://172.19.15.11/user-center-api/login',
+    )
+    NCMR_USERNAME = os.environ.get('HOLD_NCMR_USERNAME', 'dongxian_zhu')
+    NCMR_PASSWORD = os.environ.get(
+        'HOLD_NCMR_PASSWORD',
+        'vJMtrdKSCbjkn5E4IXBjkA==',
+    )
+    NCMR_BEARER_TOKEN = os.environ.get('HOLD_NCMR_TOKEN', '')
+
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
     # 手提 Hold 附件图 FTP（独立于 TESTLOG；请自行填写 HOST / USER / PASSWD）
@@ -165,15 +183,14 @@ class Config:
         ('1_PD_DCG_DC_2_DN_WLT', 'GC3003-3.5'),
     )
 
-    # Hold info 合并为 hold_record 的定时任务配置
-    HOLD_INFO_TABLE = 'FT_HOLD_INFO_TEST' if is_test_env() else 'FT_HOLD_INFO'
-    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD_TEST' if is_test_env() else 'FT_HOLD_RECORD'
-    CIRCULATION_HISTORY_TABLE = (
-        'CIRCULATION_HISTORY_TEST' if is_test_env() else 'CIRCULATION_HISTORY'
-    )
+    # Hold info 合并为 hold_record 的定时任务配置。
+    # 测试库和正式库表名相同，环境只切换 DB_PROFILES 里的连接。
+    HOLD_INFO_TABLE = 'FT_HOLD_INFO'
+    HOLD_RECORD_TABLE = 'FT_HOLD_RECORD'
+    CIRCULATION_HISTORY_TABLE = 'CIRCULATION_HISTORY'
     # CP 合批单独成表，不写 FT_HOLD_RECORD / CIRCULATION_HISTORY。
-    CP_HOLD_RECORD_TABLE, CP_CIRCULATION_TABLE = cp_hold_tables(is_test_env())
-    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT_TEST' if is_test_env() else 'FT_HOLD_PREDICT'
+    CP_HOLD_RECORD_TABLE, CP_CIRCULATION_TABLE = cp_hold_tables()
+    HOLD_PREDICT_TABLE = 'FT_HOLD_PREDICT'
     # 源表关联 hold_record 的字段（TEST=HOLD_RECORD_ID；正式表迁移后同步修改）
     HOLD_INFO_LINK_COLUMN = 'HOLD_RECORD_ID'
     HOLD_MERGE_INTERVAL_MINUTES = 30

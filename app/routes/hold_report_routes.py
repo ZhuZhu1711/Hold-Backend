@@ -5,7 +5,9 @@ from logging.handlers import RotatingFileHandler
 
 from flask import Blueprint, render_template, request, jsonify, session, Response
 
+from app.config import Config
 from app.controllers import (
+    dispose_ctrl,
     hold_report_ctrl,
     hold_merge_fail_ctrl,
     hold_info_export_ctrl,
@@ -89,6 +91,7 @@ def holding_record_page():
         'hold/holding_records.html',
         user_name=session.get('user_name'),
         role_name=current_role_name(),
+        system_user_id=Config.SYSTEM_USER_ID,
     )
 
 
@@ -117,7 +120,7 @@ def merge_failed_page():
 @hold_report_bp.route('/export')
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def hold_info_export_page():
-    """FT_HOLD_RECORD 按型号+时间导出 FT ATE Hold Lot（root 全量 / 工程师仅所属型号）"""
+    """NCMR 上报清单：按型号+时间导出（root 全量 / 工程师仅所属型号）"""
     nav_area = 'eng' if session.get('role') == ROLE_ENGINEER else 'admin'
     return render_template(
         'hold/export.html',
@@ -156,9 +159,9 @@ def api_holding_records():
     record_type = request.args.get('record_type', '').strip()
     page = request.args.get('page', 1)
     page_size = request.args.get('page_size', 20)
-    engineer_id, eng_err = _optional_engineer_id()
-    if eng_err:
-        return jsonify({'code': 400, 'msg': eng_err, 'data': [], 'total': 0}), 400
+    owner_eng_id, current_owner_id, owner_err = _holding_owner_filters()
+    if owner_err:
+        return jsonify({'code': 400, 'msg': owner_err, 'data': [], 'total': 0}), 400
 
     success, msg, payload = hold_report_ctrl.get_holding_records(
         product_id=product_id,
@@ -167,8 +170,8 @@ def api_holding_records():
         record_type=record_type if record_type != '' else None,
         page=page,
         page_size=page_size,
-        owner_eng_id=engineer_id,
-        current_owner_id=engineer_id,
+        owner_eng_id=owner_eng_id,
+        current_owner_id=current_owner_id,
     )
     if success:
         return jsonify({
@@ -192,21 +195,85 @@ def api_holding_records_export():
     Query: product_id, station, keyword, record_type(0/1/2), engineer_id
     engineer_id：与列表相同，指定产品工程师的待办。
     """
-    engineer_id, eng_err = _optional_engineer_id()
-    if eng_err:
-        return jsonify({'code': 400, 'msg': eng_err}), 400
+    owner_eng_id, current_owner_id, owner_err = _holding_owner_filters()
+    if owner_err:
+        return jsonify({'code': 400, 'msg': owner_err}), 400
     success, msg, content = hold_report_ctrl.export_holding_records_xlsx(
         product_id=request.args.get('product_id', '').strip(),
         station=request.args.get('station', '').strip(),
         keyword=request.args.get('keyword', '').strip(),
         record_type=request.args.get('record_type', '').strip() or None,
-        owner_eng_id=engineer_id,
-        current_owner_id=engineer_id,
+        owner_eng_id=owner_eng_id,
+        current_owner_id=current_owner_id,
     )
     return xlsx_or_error(
         success, msg, content, stamp_filename('holding_records'),
         bad_keys=('无效', '须为'),
     )
+
+
+def _system_only_requested():
+    return request.args.get('system_only', '').strip().lower() in (
+        '1', 'true', 'yes', 'y',
+    )
+
+
+def _holding_owner_filters():
+    """
+    返回 (owner_eng_id, current_owner_id, err)。
+    system_only 只按当前负责人=系统用户，不要求型号已属于某工程师。
+    """
+    if _system_only_requested():
+        return None, int(Config.SYSTEM_USER_ID), None
+    engineer_id, eng_err = _optional_engineer_id()
+    if eng_err:
+        return None, None, eng_err
+    return engineer_id, engineer_id, None
+
+
+def _hold_action_status(msg):
+    bad_keys = (
+        '无效', '不存在', '尚未', '仅', '只能', '不能', '已关闭', '必填', '缺少',
+    )
+    return 400 if any(key in (msg or '') for key in bad_keys) else 500
+
+
+@hold_report_bp.route('/api/holding_records/rebind', methods=['POST'])
+@root_required
+def api_holding_records_rebind():
+    """
+    按型号把仍挂在系统用户上的未关闭单转给 PRODUCT_INFO 当前工程师。
+    Body: product_id 可空；空则重绑全部已配置型号。
+    """
+    data = request.get_json(silent=True) or {}
+    product_id = str(data.get('product_id') or '').strip()
+    ok, msg, moved = dispose_ctrl.rebind_system_owned_holds(
+        product_id or None,
+        session.get('user_id'),
+    )
+    status = 200 if ok else _hold_action_status(msg)
+    return jsonify({
+        'code': status,
+        'msg': msg,
+        'data': {'moved': moved},
+    }), status
+
+
+@hold_report_bp.route('/api/holding_records/transfer', methods=['POST'])
+@root_required
+def api_holding_records_transfer():
+    """
+    把一条系统用户名下的未关闭单转给指定产品工程师。
+    Body: hold_record_id, engineer_id。
+    """
+    data = request.get_json(silent=True) or {}
+    ok, msg, result = dispose_ctrl.transfer_system_owned_record(
+        data.get('hold_record_id'),
+        data.get('engineer_id'),
+        session.get('user_id'),
+    )
+    status = 200 if ok else _hold_action_status(msg)
+    return jsonify({'code': status, 'msg': msg, 'data': result}), status
 
 
 def _optional_engineer_id():
@@ -570,7 +637,9 @@ def _export_owner_eng_id():
 def _hold_info_export_status(msg):
     if '不属于' in msg:
         return 403
-    if any(k in msg for k in ('请指定', '不能早于', '无效')):
+    if any(k in msg for k in (
+        '请指定', '不能早于', '无效', '没有可上报', '一次最多', '不能手动上报',
+    )):
         return 400
     return 500
 
@@ -578,7 +647,7 @@ def _hold_info_export_status(msg):
 @hold_report_bp.route('/api/hold_info_export', methods=['GET'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_preview():
-    """预览 FT_HOLD_RECORD 导出结果（最多 100 条）。工程师仅所属型号。"""
+    """预览 NCMR 上报清单（最多 5000 条，已按表拆开）。工程师仅所属型号。"""
     success, msg, data = hold_info_export_ctrl.preview_hold_info_export(
         owner_eng_id=_export_owner_eng_id(),
         **_export_query_args(),
@@ -589,13 +658,45 @@ def api_hold_info_export_preview():
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
-@hold_report_bp.route('/api/hold_info_export/xlsx', methods=['GET'])
+def _export_body_args():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return None, None
+
+    def text(key):
+        return str(body.get(key) or '').strip()
+
+    args = {
+        'product_id': text('product_id'),
+        'lot_id': text('lot_id'),
+        'route_id': text('route_id'),
+        'start_dttm': text('start_dttm'),
+        'end_dttm': text('end_dttm'),
+        'sub_customer': text('sub_customer'),
+        'package_type': text('package_type'),
+        'area': text('area'),
+    }
+    engineering_ids = body.get('engineering_ids') if 'engineering_ids' in body else None
+    return args, engineering_ids, text('sheet')
+
+
+@hold_report_bp.route('/api/hold_info_export/xlsx', methods=['GET', 'POST'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_xlsx():
-    """导出 FT_HOLD_RECORD 为 FT ATE Hold Lot xlsx（最多 5000 条）。工程师仅所属型号。"""
-    args = _export_query_args()
+    """导出当前选项卡。sheet=eng_pqc 或 engineering；MP 工程测试可带 engineering_ids。"""
+    if request.method == 'POST':
+        parsed = _export_body_args()
+        if parsed[0] is None:
+            return jsonify({'code': 400, 'msg': '请求体无效', 'data': None}), 400
+        args, engineering_ids, sheet = parsed
+    else:
+        args = _export_query_args()
+        engineering_ids = None
+        sheet = request.args.get('sheet', '').strip()
     success, msg, content = hold_info_export_ctrl.export_hold_info_xlsx(
         owner_eng_id=_export_owner_eng_id(),
+        engineering_ids=engineering_ids,
+        sheet=sheet,
         **args,
     )
     if not success:
@@ -605,7 +706,11 @@ def api_hold_info_export_xlsx():
     product = _safe_filename(args.get('product_id') or 'hold')
     lot = _safe_filename(args.get('lot_id') or '')
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'hold_info_{product}_{lot}_{stamp}.xlsx' if lot else f'hold_info_{product}_{stamp}.xlsx'
+    kind = 'eng_pqc' if sheet == 'eng_pqc' else 'engineering'
+    filename = (
+        f'ncmr_{kind}_{product}_{lot}_{stamp}.xlsx' if lot
+        else f'ncmr_{kind}_{product}_{stamp}.xlsx'
+    )
     return Response(
         content,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -613,6 +718,31 @@ def api_hold_info_export_xlsx():
             'Content-Disposition': f'attachment; filename="{filename}"',
         },
     )
+
+
+@hold_report_bp.route('/api/hold_info_export/ncmr', methods=['POST'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
+def api_hold_info_export_ncmr():
+    """把当前选项卡上报到 NCMR。带 rows 时直接转发；否则按筛选重新取导出行。"""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'code': 400, 'msg': '请求体无效', 'data': None}), 400
+    if 'rows' in body:
+        success, msg, data = hold_info_export_ctrl.import_ncmr_rows(
+            body.get('rows'), record_ids=body.get('record_ids'),
+        )
+    else:
+        args, engineering_ids, sheet = _export_body_args()
+        success, msg, data = hold_info_export_ctrl.import_hold_info_ncmr(
+            owner_eng_id=_export_owner_eng_id(),
+            engineering_ids=engineering_ids,
+            sheet=sheet,
+            **args,
+        )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = _hold_info_export_status(msg)
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
 def _hold_info_query_response(success, msg, data):

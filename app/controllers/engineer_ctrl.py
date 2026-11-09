@@ -279,10 +279,15 @@ def get_owned_holding_records(
             item_type = int(item.get('RECORD_TYPE')) if item.get('RECORD_TYPE') is not None else None
         except (TypeError, ValueError):
             item_type = None
+        try:
+            item_status = int(item.get('STATUS')) if item.get('STATUS') is not None else 0
+        except (TypeError, ValueError):
+            item_status = 0
         item['CAN_DISPOSE'] = bool(
             eng_id is not None
             and owner == eng_id
             and not item.get('IS_CLOSED')
+            and item_status != dispose_ctrl.DISPOSE_NCMR_REPORTED
             and item_type != hold_report_ctrl.RECORD_TYPE_ENG_FUTURE
         )
     dispose_ctrl.attach_reliability_followup_many(items)
@@ -369,6 +374,7 @@ def get_owned_dispose_record(eng_user_id, hold_record_id):
         current_owner_id is not None
         and int(current_owner_id) == eng_id
         and not record['IS_CLOSED']
+        and status_val != dispose_ctrl.DISPOSE_NCMR_REPORTED
         and rt != hold_report_ctrl.RECORD_TYPE_ENG_FUTURE
     )
     dispose_ctrl.attach_reliability_followup(record)

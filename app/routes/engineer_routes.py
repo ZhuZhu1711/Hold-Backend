@@ -89,7 +89,7 @@ def manual_hold_page():
 @engineer_bp.route('/export')
 @engineer_required
 def hold_info_export_page():
-    """Hold Info 导出：仅所属型号。"""
+    """NCMR 上报清单导出：仅所属型号。"""
     return render_template(
         'hold/export.html',
         **_page_ctx(nav_area='eng', products_api='/eng/api/products'),

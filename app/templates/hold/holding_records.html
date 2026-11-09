@@ -77,6 +77,15 @@
         .btn-sm { padding: 4px 10px; font-size: 12px; }
         .btn-ghost { background: #e9ecef; color: #333; }
         .btn-ghost:hover { background: #dee2e6; }
+        .btn-warn { background: #e67e22; }
+        .btn-warn:hover { background: #cf6d17; }
+        .check-filter {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 14px; color: #333;
+        }
+        .owner-system { color: #b35c00; font-weight: 600; }
+        .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+        #transferEngineer { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
         .modal.lg { width: 960px; max-width: 96vw; }
         .section-title {
             font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333;
@@ -132,12 +141,15 @@
     <main class="main">
         <div class="card">
             <h1>Holding Record 报表</h1>
-            <p class="sub">查询在线的Hold报表。可指定工程师查看其待办（型号归该工程师，且当前负责人也是他）。FVI 记录可点击原因查看缺陷明细；可点「分析」查看 bysite / raw_data。</p>
+            <p class="sub">查询在线的Hold报表。可指定工程师查看其待办（型号归该工程师，且当前负责人也是他）。当前负责人是系统用户时，可按型号重绑或转交给工程师。FVI 记录可点击原因查看缺陷明细；可点「分析」查看 bysite / raw_data。</p>
 
             <div class="filters">
                 <select id="engineer_id">
                     <option value="">不限工程师待办</option>
                 </select>
+                <label class="check-filter" title="只看当前负责人是系统用户的待办，不按型号归属过滤">
+                    <input type="checkbox" id="system_only" /> 仅系统待办
+                </label>
                 <select id="record_type">
                     <option value="">全部处置单类型</option>
                     <option value="0">FT异常反馈单</option>
@@ -147,8 +159,9 @@
                 <input id="product_id" placeholder="型号 PRODUCT_ID" />
                 <input id="station" placeholder="站点 STATION" />
                 <input id="keyword" placeholder="Wafer / Lot / Code / Reason" />
-                <button class="btn" onclick="loadData()">查询</button>
-                <button class="btn btn-success" onclick="exportXlsx()">导出 xlsx</button>
+                <button class="btn" type="button" onclick="loadData()">查询</button>
+                <button class="btn btn-success" type="button" onclick="exportXlsx()">导出 xlsx</button>
+                <button class="btn btn-warn" type="button" onclick="rebindProduct('')">重绑全部已配置型号</button>
             </div>
             <div class="meta" id="meta">加载中...</div>
             <div style="overflow:auto; max-height:70vh;">
@@ -163,18 +176,33 @@
                             <th>等级/数量</th>
                             <th>原因</th>
                             <th>Hold 时间</th>
+                            <th>当前负责人</th>
                             <th>状态</th>
                             <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="tbody">
-                        <tr><td colspan="10" class="empty">加载中...</td></tr>
+                        <tr><td colspan="11" class="empty">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
             <div class="pager" id="pager"></div>
         </div>
     </main>
+
+    <div class="modal-mask" id="transferModal">
+        <div class="modal">
+            <h3>转交</h3>
+            <div class="modal-sub" id="transferSub">选择产品工程师</div>
+            <select id="transferEngineer">
+                <option value="">选择产品工程师</option>
+            </select>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" type="button" onclick="closeTransfer()">取消</button>
+                <button class="btn" type="button" onclick="submitTransfer()">确认转交</button>
+            </div>
+        </div>
+    </div>
 
     <div class="modal-mask" id="fviModal">
         <div class="modal">
@@ -216,6 +244,10 @@
     <script>
         const REASON_MAX_LEN = 80;
         const RECORD_TYPE_FVI = 1;
+        const SYSTEM_OWNER_ID = {{ system_user_id|int }};
+        const TABLE_COLS = 11;
+        let engineers = [];
+        let transferRecordId = null;
 
         function resolveAnalysisStation(recordType, lotId) {
             const rt = Number(recordType);
@@ -649,9 +681,104 @@
             }, extra || {}));
             const recordType = document.getElementById('record_type').value;
             if (recordType !== '') params.set('record_type', recordType);
-            const engineerId = document.getElementById('engineer_id').value;
-            if (engineerId) params.set('engineer_id', engineerId);
+            if (document.getElementById('system_only').checked) {
+                params.set('system_only', '1');
+            } else {
+                const engineerId = document.getElementById('engineer_id').value;
+                if (engineerId) params.set('engineer_id', engineerId);
+            }
             return params;
+        }
+
+        function fillEngineerSelect(select, rows) {
+            (rows || []).forEach(u => {
+                const opt = document.createElement('option');
+                opt.value = String(u.id);
+                opt.textContent = (u.name || '-') + '（' + (u.employee_no || '') + '）';
+                select.appendChild(opt);
+            });
+        }
+
+        function ownerCell(row) {
+            const id = row.CURRENT_OWNER_ID;
+            const name = row.CURRENT_OWNER_NAME || '';
+            const isSystem = Number(id) === SYSTEM_OWNER_ID;
+            const text = name || (id === null || id === undefined || id === '' ? '-' : id);
+            const cls = isSystem ? ' class="owner-system"' : '';
+            return `<td${cls}>${esc(text)}</td>`;
+        }
+
+        function systemActions(row) {
+            if (Number(row.CURRENT_OWNER_ID) !== SYSTEM_OWNER_ID) return '';
+            const pid = esc(row.PRODUCT_ID);
+            const rid = esc(row.ID);
+            return `
+                <button type="button" class="btn btn-sm btn-warn" data-rebind-product="${pid}">按型号重绑</button>
+                <button type="button" class="btn btn-sm btn-ghost" data-transfer-id="${rid}" data-transfer-product="${pid}">转交</button>
+            `;
+        }
+
+        async function postJson(url, body) {
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body || {}),
+            });
+            const json = await resp.json().catch(() => ({}));
+            return json;
+        }
+
+        async function rebindProduct(productId) {
+            const tip = productId
+                ? `按型号 ${productId} 重新查 PRODUCT_INFO，把仍挂在系统用户上的未关闭单转给当前工程师？`
+                : '把所有已配置工程师、仍挂在系统用户上的未关闭单重绑给对应工程师？';
+            if (!window.confirm(tip)) return;
+            try {
+                const json = await postJson('/admin/hold/api/holding_records/rebind', {
+                    product_id: productId || '',
+                });
+                window.alert(json.msg || (json.code === 200 ? '已重绑' : '重绑失败'));
+                if (json.code === 200) loadData(false);
+            } catch (e) {
+                window.alert('请求失败: ' + e);
+            }
+        }
+
+        function openTransfer(recordId, productId) {
+            transferRecordId = recordId;
+            document.getElementById('transferSub').textContent =
+                `型号 ${productId || '-'} · 记录 ${recordId}`;
+            const sel = document.getElementById('transferEngineer');
+            sel.innerHTML = '<option value="">选择产品工程师</option>';
+            fillEngineerSelect(sel, engineers);
+            document.getElementById('transferModal').classList.add('show');
+        }
+
+        function closeTransfer() {
+            transferRecordId = null;
+            document.getElementById('transferModal').classList.remove('show');
+        }
+
+        async function submitTransfer() {
+            const engineerId = document.getElementById('transferEngineer').value;
+            if (!transferRecordId) return;
+            if (!engineerId) {
+                window.alert('请选择产品工程师');
+                return;
+            }
+            try {
+                const json = await postJson('/admin/hold/api/holding_records/transfer', {
+                    hold_record_id: Number(transferRecordId),
+                    engineer_id: Number(engineerId),
+                });
+                window.alert(json.msg || (json.code === 200 ? '已转交' : '转交失败'));
+                if (json.code === 200) {
+                    closeTransfer();
+                    loadData(false);
+                }
+            } catch (e) {
+                window.alert('请求失败: ' + e);
+            }
         }
 
         async function loadEngineers() {
@@ -660,12 +787,8 @@
                 const resp = await fetch('/admin/hold/api/engineers');
                 const json = await resp.json();
                 if (json.code !== 200) return;
-                (json.data || []).forEach(u => {
-                    const opt = document.createElement('option');
-                    opt.value = String(u.id);
-                    opt.textContent = (u.name || '-') + '（' + (u.employee_no || '') + '）';
-                    sel.appendChild(opt);
-                });
+                engineers = json.data || [];
+                fillEngineerSelect(sel, engineers);
             } catch (e) {
                 /* 名单失败时仍可查全部 */
             }
@@ -684,7 +807,7 @@
                 if (json.code !== 200) {
                     document.getElementById('meta').textContent = json.msg || '查询失败';
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="10" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
+                        '<tr><td colspan="' + TABLE_COLS + '" class="empty">' + esc(json.msg || '查询失败') + '</td></tr>';
                     document.getElementById('pager').innerHTML = '';
                     return;
                 }
@@ -698,7 +821,7 @@
                 renderPager(total, page, pages, size);
                 if (!rows.length) {
                     document.getElementById('tbody').innerHTML =
-                        '<tr><td colspan="10" class="empty">暂无在线 Holding Record</td></tr>';
+                        '<tr><td colspan="' + TABLE_COLS + '" class="empty">暂无在线 Holding Record</td></tr>';
                     return;
                 }
                 document.getElementById('tbody').innerHTML = rows.map(r => {
@@ -717,8 +840,10 @@
                         <td title="${esc(r.GRADE_NUM || '')}">${esc(r.GRADE_NUM_DISPLAY || r.GRADE_NUM || '-')}</td>
                         <td class="${reasonCls}" ${reasonAttrs}>${formatReason(r.HOLD_REASON, isFvi)}</td>
                         <td>${esc(r.HOLD_DTTM || '-')}</td>
+                        ${ownerCell(r)}
                         <td><span class="badge">Holding</span></td>
                         <td>
+                            <div class="row-actions">
                             <button class="btn btn-sm btn-ghost"
                                 data-analyze-id="${esc(r.ID)}"
                                 data-analyze-wafer="${esc(r.WAFER_ID)}"
@@ -726,6 +851,8 @@
                                 data-analyze-type="${esc(r.RECORD_TYPE ?? '')}"
                                 data-analyze-aql="${r.IS_AQL_HOLD ? '1' : '0'}"
                                 data-annex-count="${esc(r.ANNEX_COUNT ?? 0)}">${r.IS_AQL_HOLD ? '附件' : '分析'}</button>
+                            ${systemActions(r)}
+                            </div>
                         </td>
                     </tr>`;
                 }).join('');
@@ -765,6 +892,22 @@
         });
         document.getElementById('record_type').addEventListener('change', () => loadData(true));
         document.getElementById('engineer_id').addEventListener('change', () => loadData(true));
+        document.getElementById('system_only').addEventListener('change', () => loadData(true));
+        document.getElementById('tbody').addEventListener('click', (ev) => {
+            const rebind = ev.target.closest('[data-rebind-product]');
+            if (rebind) {
+                const pid = rebind.dataset.rebindProduct || '';
+                if (pid) rebindProduct(pid);
+                return;
+            }
+            const transfer = ev.target.closest('[data-transfer-id]');
+            if (transfer) {
+                openTransfer(transfer.dataset.transferId, transfer.dataset.transferProduct || '');
+            }
+        });
+        document.getElementById('transferModal').addEventListener('click', (e) => {
+            if (e.target.id === 'transferModal') closeTransfer();
+        });
         document.getElementById('fviModal').addEventListener('click', (e) => {
             if (e.target.id === 'fviModal') closeFviModal();
         });

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hold Info 导出</title>
+    <title>NCMR上报清单导出</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; display: flex; min-height: 100vh; }
@@ -39,6 +39,8 @@
         .btn-ok:hover { background: #218838; }
         .btn-ghost { background: #e9ecef; color: #333; }
         .btn-ghost:hover { background: #dee2e6; }
+        .btn-ncmr { background: #fd7e14; }
+        .btn-ncmr:hover { background: #e36c0a; }
         .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
         .meta.err { color: #b02a37; }
         .advanced {
@@ -52,6 +54,15 @@
         .empty { padding: 40px; text-align: center; color: #888; }
         .reason { max-width: 280px; line-height: 1.45; color: #444; word-break: break-word; }
         .wafer-list { max-width: 220px; word-break: break-all; color: #555; }
+        .tabs { display: flex; align-items: center; gap: 4px; margin-top: 8px; border-bottom: 1px solid #dee2e6; }
+        .tab {
+            padding: 8px 16px; border: none; background: transparent; cursor: pointer;
+            font-size: 14px; color: #555; border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .tab.active { color: #007bff; border-bottom-color: #007bff; font-weight: 600; }
+        .panel { display: none; }
+        .panel.show { display: block; }
+        .pick-all { font-size: 13px; color: #444; margin-left: auto; }
     </style>
 </head>
 <body>
@@ -67,7 +78,7 @@
             <li><a href="/eng/defects">缺陷 / BSL</a></li>
             <li><a href="/eng/notes">工程备注</a></li>
             <li><a href="/eng/holds">Hold Record</a></li>
-            <li class="active"><a href="/eng/export">Hold Info 导出</a></li>
+            <li class="active"><a href="/eng/export">NCMR上报清单导出</a></li>
             <li><a href="/eng/circulations">Hold 流转</a></li>
             {% include '_account_links.html' %}
         </ul>
@@ -79,9 +90,10 @@
 
     <main class="main">
         <div class="card">
-            <h1>Hold Info 导出</h1>
+            <h1>NCMR上报清单导出</h1>
             <p class="sub">
-                按型号与时间从 FT_HOLD_RECORD 导出 FT ATE Hold Lot 表。
+                一次只显示并导出当前选项卡。「ENG预Hold PQC」只展示系统自动上报的时间，不能手动上报；
+                「MP工程测试Hold」只含 MP route，可勾选后导出或上报到 NCMR。
                 合批片会还原源 lot / wafer，并补测试程序。
                 {% if nav_area == 'eng' %}产品工程师仅可导出自己负责的型号。{% endif %}
             </p>
@@ -94,9 +106,6 @@
                 <label>Lot ID
                     <input id="lot_id" placeholder="可选，如 C196717" />
                 </label>
-                <label>Route ID
-                    <input id="route_id" placeholder="可选，如 MP / ENG / FT-MP" />
-                </label>
                 <label>开始时间
                     <input id="start_dttm" type="datetime-local" />
                 </label>
@@ -104,7 +113,8 @@
                     <input id="end_dttm" type="datetime-local" />
                 </label>
                 <button class="btn" onclick="preview()">预览</button>
-                <button class="btn btn-ok" onclick="exportXlsx()">导出 xlsx</button>
+                <button class="btn btn-ok" onclick="exportXlsx()">导出当前表</button>
+                <button class="btn btn-ncmr" id="ncmr_btn" type="button" onclick="submitNcmr()" disabled>上报NCMR</button>
                 <button class="btn btn-ghost" type="button" onclick="toggleAdvanced()">表头默认值</button>
             </div>
             <div class="advanced" id="advanced">
@@ -113,6 +123,14 @@
                 <label>Area <input id="area" value="FT" /></label>
             </div>
             <div class="meta" id="meta">请选择型号与时间后预览或导出</div>
+            <div class="tabs">
+                <button type="button" class="tab active" id="tab_eng" onclick="showSheet('eng_pqc')">ENG预Hold PQC</button>
+                <button type="button" class="tab" id="tab_node" onclick="showSheet('engineering')">MP工程测试Hold</button>
+                <label class="pick-all" id="pick_all_wrap" style="display:none">
+                    <input type="checkbox" id="pick_all" checked onchange="toggleAll(this)" /> 全选
+                </label>
+            </div>
+            <div class="panel show" id="panel_eng">
             <div style="overflow:auto; max-height:70vh;">
                 <table>
                     <thead>
@@ -121,6 +139,35 @@
                             <th>型号</th>
                             <th>设备</th>
                             <th>Route</th>
+                            <th>站点</th>
+                            <th>Lot</th>
+                            <th>Hold Wafer</th>
+                            <th>Wafer List</th>
+                            <th>原因</th>
+                            <th>预处置人</th>
+                            <th>测试程序</th>
+                            <th>Hold 时间</th>
+                            <th>OA单号</th>
+                            <th>上报时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody_eng">
+                        <tr><td colspan="14" class="empty">暂无数据</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            </div>
+            <div class="panel" id="panel_node">
+            <div style="overflow:auto; max-height:70vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Wafer</th>
+                            <th>型号</th>
+                            <th>设备</th>
+                            <th>Route</th>
+                            <th>站点</th>
                             <th>Lot</th>
                             <th>Hold Wafer</th>
                             <th>Wafer List</th>
@@ -131,16 +178,19 @@
                             <th>OA单号</th>
                         </tr>
                     </thead>
-                    <tbody id="tbody">
-                        <tr><td colspan="12" class="empty">暂无数据</td></tr>
+                    <tbody id="tbody_node">
+                        <tr><td colspan="14" class="empty">暂无数据</td></tr>
                     </tbody>
                 </table>
+            </div>
             </div>
         </div>
     </main>
 
     <script>
         const PRODUCTS_API = {{ (products_api or '/admin/hold/api/products')|tojson }};
+        let previewed = false;
+        let activeSheet = 'eng_pqc';
         function pad(n) { return String(n).padStart(2, '0'); }
         function toLocalInput(d) {
             return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
@@ -162,7 +212,6 @@
             const params = new URLSearchParams({
                 product_id: document.getElementById('product_id').value.trim(),
                 lot_id: document.getElementById('lot_id').value.trim(),
-                route_id: document.getElementById('route_id').value.trim(),
                 start_dttm: document.getElementById('start_dttm').value.trim(),
                 end_dttm: document.getElementById('end_dttm').value.trim(),
             });
@@ -175,6 +224,78 @@
         function esc(s) {
             return String(s == null ? '' : s)
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        function invalidatePreview() {
+            if (!previewed) return;
+            previewed = false;
+            const meta = document.getElementById('meta');
+            meta.className = 'meta';
+            meta.textContent = '筛选已变更，请重新预览后再勾选导出';
+        }
+        function routeText(r) {
+            const routeType = r.ROUTE_TYPE || '';
+            const routeId = r.ROUTE_ID || '';
+            if (routeType && routeId) return esc(routeType) + ' / ' + esc(routeId);
+            return esc(routeType || routeId);
+        }
+        function dataCells(r, withReported) {
+            const reported = withReported ? `<td>${esc(r.NCMR_REPORTED_AT)}</td>` : '';
+            return `<td>${esc(r.WAFER_ID)}</td>
+                <td>${esc(r.PRODUCT_ID)}</td>
+                <td>${esc(r.EQUIP_ID)}</td>
+                <td>${routeText(r)}</td>
+                <td>${esc(r.STATION)}</td>
+                <td>${esc(r.LOT_STR)}</td>
+                <td class="wafer-list">${esc(r.HOLD_WAFER_LIST)}</td>
+                <td class="wafer-list">${esc(r.WAFER_LIST)}</td>
+                <td class="reason">${esc(r.REASON)}</td>
+                <td>${esc(r.PRE_HANDLER)}</td>
+                <td>${esc(r.TEST_PROGRAM)}</td>
+                <td>${esc(r.HOLD_DATETIME)}</td>
+                <td>${esc(r.OA_NUMBER)}</td>${reported}`;
+        }
+        function renderEng(items) {
+            const tbody = document.getElementById('tbody_eng');
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="14" class="empty">无记录</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(r => `<tr>${dataCells(r, true)}</tr>`).join('');
+        }
+        function renderNode(items) {
+            const tbody = document.getElementById('tbody_node');
+            const pickAll = document.getElementById('pick_all');
+            pickAll.checked = true;
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="14" class="empty">无记录</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(r => `<tr>
+                <td><input type="checkbox" class="pick" data-id="${esc(r.RECORD_ID)}" checked /></td>
+                ${dataCells(r, false)}
+            </tr>`).join('');
+        }
+        function showSheet(key) {
+            activeSheet = key;
+            const eng = key === 'eng_pqc';
+            document.getElementById('panel_eng').classList.toggle('show', eng);
+            document.getElementById('panel_node').classList.toggle('show', !eng);
+            document.getElementById('tab_eng').classList.toggle('active', eng);
+            document.getElementById('tab_node').classList.toggle('active', !eng);
+            document.getElementById('pick_all_wrap').style.display = eng ? 'none' : '';
+            document.getElementById('ncmr_btn').disabled = eng;
+        }
+        function setTabCounts(engCount, nodeCount) {
+            document.getElementById('tab_eng').textContent = 'ENG预Hold PQC (' + engCount + ')';
+            document.getElementById('tab_node').textContent = 'MP工程测试Hold (' + nodeCount + ')';
+        }
+        function toggleAll(box) {
+            document.querySelectorAll('#tbody_node .pick').forEach(el => { el.checked = box.checked; });
+        }
+        function checkedEngineeringIds() {
+            return Array.from(document.querySelectorAll('#tbody_node .pick:checked'))
+                .map(el => Number(el.dataset.id))
+                .filter(id => Number.isFinite(id));
         }
 
         async function loadProducts() {
@@ -193,59 +314,108 @@
         async function preview() {
             const params = queryParams();
             const meta = document.getElementById('meta');
-            const tbody = document.getElementById('tbody');
             if (!params.get('product_id')) {
                 meta.className = 'meta err';
                 meta.textContent = '请先选择型号';
                 return;
             }
+            previewed = false;
             meta.className = 'meta';
             meta.textContent = '查询中...';
-            tbody.innerHTML = '<tr><td colspan="12" class="empty">查询中...</td></tr>';
+            document.getElementById('tbody_eng').innerHTML = '<tr><td colspan="14" class="empty">查询中...</td></tr>';
+            document.getElementById('tbody_node').innerHTML = '<tr><td colspan="14" class="empty">查询中...</td></tr>';
             try {
                 const resp = await fetch('/admin/hold/api/hold_info_export?' + params.toString());
                 const json = await resp.json();
                 if (json.code !== 200) {
                     meta.className = 'meta err';
                     meta.textContent = json.msg || '查询失败';
-                    tbody.innerHTML = '<tr><td colspan="12" class="empty">查询失败</td></tr>';
+                    renderEng([]);
+                    renderNode([]);
                     return;
                 }
                 const data = json.data || {};
-                const items = data.items || [];
                 let note = `${data.product_id} · ${data.start_dttm} ~ ${data.end_dttm}`;
                 if (data.lot_id) note += ` · Lot ${data.lot_id}`;
-                if (data.route_id) note += ` · Route ${data.route_id}`;
                 note += ` · 合计 ${data.total} 条`;
-                if (data.truncated) note += `（预览前 ${data.shown} 条）`;
+                note += ` · ENG预Hold PQC ${data.eng_pqc_total || 0} 条`;
+                note += ` · MP工程测试Hold ${data.engineering_total || 0} 条`;
+                if (data.truncated) note += `（已截取前 ${data.shown} 条）`;
                 meta.className = 'meta';
                 meta.textContent = note;
-                if (!items.length) {
-                    tbody.innerHTML = '<tr><td colspan="12" class="empty">该条件下无 Hold 记录</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = items.map(r => `<tr>
-                    <td>${esc(r.WAFER_ID)}</td>
-                    <td>${esc(r.PRODUCT_ID)}</td>
-                    <td>${esc(r.EQUIP_ID)}</td>
-                    <td>${esc(r.ROUTE_TYPE)}${r.ROUTE_ID ? ' / ' + esc(r.ROUTE_ID) : ''}</td>
-                    <td>${esc(r.LOT_STR)}</td>
-                    <td class="wafer-list">${esc(r.HOLD_WAFER_LIST)}</td>
-                    <td class="wafer-list">${esc(r.WAFER_LIST)}</td>
-                    <td class="reason">${esc(r.REASON)}</td>
-                    <td>${esc(r.PRE_HANDLER)}</td>
-                    <td>${esc(r.TEST_PROGRAM)}</td>
-                    <td>${esc(r.HOLD_DATETIME)}</td>
-                    <td>${esc(r.OA_NUMBER)}</td>
-                </tr>`).join('');
+                const engItems = data.eng_pqc || [];
+                const nodeItems = data.engineering || [];
+                renderEng(engItems);
+                renderNode(nodeItems);
+                setTabCounts(engItems.length, nodeItems.length);
+                previewed = true;
             } catch (e) {
                 meta.className = 'meta err';
                 meta.textContent = '查询失败：' + e;
-                tbody.innerHTML = '<tr><td colspan="12" class="empty">查询失败</td></tr>';
+                renderEng([]);
+                renderNode([]);
             }
         }
 
-        function exportXlsx() {
+        function currentSheetCount() {
+            if (activeSheet === 'engineering') return checkedEngineeringIds().length;
+            if (document.querySelector('#tbody_eng .empty')) return 0;
+            return document.querySelectorAll('#tbody_eng tr').length;
+        }
+
+        async function submitNcmr() {
+            const meta = document.getElementById('meta');
+            if (activeSheet === 'eng_pqc') {
+                meta.className = 'meta err';
+                meta.textContent = 'ENG预Hold PQC 由系统自动上报，不能手动上报';
+                return;
+            }
+            if (!previewed) {
+                meta.className = 'meta err';
+                meta.textContent = '请先预览，再上报NCMR';
+                return;
+            }
+            const count = currentSheetCount();
+            const label = 'MP工程测试Hold';
+            if (!count) {
+                meta.className = 'meta err';
+                meta.textContent = '当前表没有可上报的行';
+                return;
+            }
+            if (!window.confirm('将上报 ' + count + ' 条' + label + '到 NCMR，是否继续？')) return;
+            const params = queryParams();
+            const body = Object.fromEntries(params.entries());
+            body.sheet = activeSheet;
+            if (activeSheet === 'engineering') {
+                body.engineering_ids = checkedEngineeringIds();
+            }
+            const btn = document.getElementById('ncmr_btn');
+            btn.disabled = true;
+            meta.className = 'meta';
+            meta.textContent = '正在上报...';
+            try {
+                const resp = await fetch('/admin/hold/api/hold_info_export/ncmr', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const json = await resp.json();
+                if (!resp.ok || json.code !== 200) {
+                    meta.className = 'meta err';
+                    meta.textContent = json.msg || '上报失败';
+                    return;
+                }
+                meta.className = 'meta';
+                meta.textContent = json.msg || '上报完成';
+            } catch (e) {
+                meta.className = 'meta err';
+                meta.textContent = '上报失败：' + e;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function exportXlsx() {
             const params = queryParams();
             const meta = document.getElementById('meta');
             if (!params.get('product_id')) {
@@ -253,9 +423,55 @@
                 meta.textContent = '请先选择型号';
                 return;
             }
-            window.location.href = '/admin/hold/api/hold_info_export/xlsx?' + params.toString();
+            params.set('sheet', activeSheet);
+            if (!previewed) {
+                window.location.href = '/admin/hold/api/hold_info_export/xlsx?' + params.toString();
+                return;
+            }
+            const body = Object.fromEntries(params.entries());
+            body.sheet = activeSheet;
+            if (activeSheet === 'engineering') {
+                body.engineering_ids = checkedEngineeringIds();
+            }
+            try {
+                const resp = await fetch('/admin/hold/api/hold_info_export/xlsx', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const type = resp.headers.get('content-type') || '';
+                if (!resp.ok || type.includes('application/json')) {
+                    const json = await resp.json();
+                    meta.className = 'meta err';
+                    meta.textContent = json.msg || '导出失败';
+                    return;
+                }
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                const match = /filename="([^"]+)"/.exec(resp.headers.get('Content-Disposition') || '');
+                link.href = url;
+                link.download = match ? match[1] : 'ncmr.xlsx';
+                link.click();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                meta.className = 'meta err';
+                meta.textContent = '导出失败：' + e;
+            }
         }
 
+        ['product_id', 'lot_id', 'start_dttm', 'end_dttm', 'sub_customer', 'package_type', 'area'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('change', invalidatePreview);
+            el.addEventListener('input', invalidatePreview);
+        });
+        document.getElementById('tbody_node').addEventListener('change', (event) => {
+            if (!event.target.classList.contains('pick')) return;
+            const boxes = document.querySelectorAll('#tbody_node .pick');
+            const checked = document.querySelectorAll('#tbody_node .pick:checked');
+            document.getElementById('pick_all').checked = boxes.length > 0 && boxes.length === checked.length;
+        });
         initDates();
         loadProducts();
     </script>

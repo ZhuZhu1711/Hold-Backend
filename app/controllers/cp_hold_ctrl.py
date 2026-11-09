@@ -35,9 +35,9 @@ _DISPOSE_LABELS = {
 
 def cp_table_names():
     """返回白名单内的 (record_table, circulation_table)。"""
-    record = (getattr(Config, 'CP_HOLD_RECORD_TABLE', None) or 'CP_HOLD_RECORD_TEST').upper()
+    record = (getattr(Config, 'CP_HOLD_RECORD_TABLE', None) or 'CP_HOLD_RECORD').upper()
     circ = (
-        getattr(Config, 'CP_CIRCULATION_TABLE', None) or 'CP_CIRCULATION_HISTORY_TEST'
+        getattr(Config, 'CP_CIRCULATION_TABLE', None) or 'CP_CIRCULATION_HISTORY'
     ).upper()
     if record not in _ALLOWED_RECORD_TABLES:
         raise ValueError(f'非法 CP_HOLD_RECORD 表名: {record}')
