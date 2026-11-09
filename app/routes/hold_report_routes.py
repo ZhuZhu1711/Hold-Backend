@@ -120,7 +120,7 @@ def merge_failed_page():
 @hold_report_bp.route('/export')
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def hold_info_export_page():
-    """FT_HOLD_RECORD 按型号+时间导出 FT ATE Hold Lot（root 全量 / 工程师仅所属型号）"""
+    """NCMR 上报清单：按型号+时间导出（root 全量 / 工程师仅所属型号）"""
     nav_area = 'eng' if session.get('role') == ROLE_ENGINEER else 'admin'
     return render_template(
         'hold/export.html',
@@ -637,7 +637,9 @@ def _export_owner_eng_id():
 def _hold_info_export_status(msg):
     if '不属于' in msg:
         return 403
-    if any(k in msg for k in ('请指定', '不能早于', '无效')):
+    if any(k in msg for k in (
+        '请指定', '不能早于', '无效', '没有可上报', '一次最多', '不能手动上报',
+    )):
         return 400
     return 500
 
@@ -645,7 +647,7 @@ def _hold_info_export_status(msg):
 @hold_report_bp.route('/api/hold_info_export', methods=['GET'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_preview():
-    """预览 FT_HOLD_RECORD 导出结果（最多 100 条）。工程师仅所属型号。"""
+    """预览 NCMR 上报清单（最多 5000 条，已按表拆开）。工程师仅所属型号。"""
     success, msg, data = hold_info_export_ctrl.preview_hold_info_export(
         owner_eng_id=_export_owner_eng_id(),
         **_export_query_args(),
@@ -656,13 +658,45 @@ def api_hold_info_export_preview():
     return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
-@hold_report_bp.route('/api/hold_info_export/xlsx', methods=['GET'])
+def _export_body_args():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return None, None
+
+    def text(key):
+        return str(body.get(key) or '').strip()
+
+    args = {
+        'product_id': text('product_id'),
+        'lot_id': text('lot_id'),
+        'route_id': text('route_id'),
+        'start_dttm': text('start_dttm'),
+        'end_dttm': text('end_dttm'),
+        'sub_customer': text('sub_customer'),
+        'package_type': text('package_type'),
+        'area': text('area'),
+    }
+    engineering_ids = body.get('engineering_ids') if 'engineering_ids' in body else None
+    return args, engineering_ids, text('sheet')
+
+
+@hold_report_bp.route('/api/hold_info_export/xlsx', methods=['GET', 'POST'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_xlsx():
-    """导出 FT_HOLD_RECORD 为 FT ATE Hold Lot xlsx（最多 5000 条）。工程师仅所属型号。"""
-    args = _export_query_args()
+    """导出当前选项卡。sheet=eng_pqc 或 engineering；MP 工程测试可带 engineering_ids。"""
+    if request.method == 'POST':
+        parsed = _export_body_args()
+        if parsed[0] is None:
+            return jsonify({'code': 400, 'msg': '请求体无效', 'data': None}), 400
+        args, engineering_ids, sheet = parsed
+    else:
+        args = _export_query_args()
+        engineering_ids = None
+        sheet = request.args.get('sheet', '').strip()
     success, msg, content = hold_info_export_ctrl.export_hold_info_xlsx(
         owner_eng_id=_export_owner_eng_id(),
+        engineering_ids=engineering_ids,
+        sheet=sheet,
         **args,
     )
     if not success:
@@ -672,7 +706,11 @@ def api_hold_info_export_xlsx():
     product = _safe_filename(args.get('product_id') or 'hold')
     lot = _safe_filename(args.get('lot_id') or '')
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'hold_info_{product}_{lot}_{stamp}.xlsx' if lot else f'hold_info_{product}_{stamp}.xlsx'
+    kind = 'eng_pqc' if sheet == 'eng_pqc' else 'engineering'
+    filename = (
+        f'ncmr_{kind}_{product}_{lot}_{stamp}.xlsx' if lot
+        else f'ncmr_{kind}_{product}_{stamp}.xlsx'
+    )
     return Response(
         content,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -680,6 +718,31 @@ def api_hold_info_export_xlsx():
             'Content-Disposition': f'attachment; filename="{filename}"',
         },
     )
+
+
+@hold_report_bp.route('/api/hold_info_export/ncmr', methods=['POST'])
+@role_required(ROLE_ROOT, ROLE_ENGINEER)
+def api_hold_info_export_ncmr():
+    """把当前选项卡上报到 NCMR。带 rows 时直接转发；否则按筛选重新取导出行。"""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'code': 400, 'msg': '请求体无效', 'data': None}), 400
+    if 'rows' in body:
+        success, msg, data = hold_info_export_ctrl.import_ncmr_rows(
+            body.get('rows'), record_ids=body.get('record_ids'),
+        )
+    else:
+        args, engineering_ids, sheet = _export_body_args()
+        success, msg, data = hold_info_export_ctrl.import_hold_info_ncmr(
+            owner_eng_id=_export_owner_eng_id(),
+            engineering_ids=engineering_ids,
+            sheet=sheet,
+            **args,
+        )
+    if success:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = _hold_info_export_status(msg)
+    return jsonify({'code': status, 'msg': msg, 'data': None}), status
 
 
 def _hold_info_query_response(success, msg, data):

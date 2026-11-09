@@ -25,7 +25,7 @@ _WLT_STATIONS = frozenset({'WOQC'})
 RECORD_TYPE_FT = 0
 RECORD_TYPE_FVI = 1
 RECORD_TYPE_WLT = 2
-# ENG 路线、PQC 站、原因含 FUTURE：建单留档，不进入处置。
+# ENG 路线、PQC 站、原因含 FUTURE：建单后自动上报 NCMR，成功则状态为已上报。
 RECORD_TYPE_ENG_FUTURE = 3
 
 _PQC_STATIONS = frozenset({'FPQC', 'PQC'})

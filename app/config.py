@@ -121,6 +121,25 @@ class Config:
     # 正式读 HOLD_API_TOKEN，测试（HOLD_ENV=test）读 HOLD_API_TOKEN_DEBUG。勿把真实值提交进仓库。
     HOLD_API_TOKEN_ENV, HOLD_API_TOKEN = load_hold_api_token()
 
+    # NCMR 处置单批量导入。网页和客户端都经本服务转发。
+    # 默认用固定账号登录，token 只留在进程内存，不进客户端、不进日志。
+    # HOLD_NCMR_IMPORT_URL / HOLD_NCMR_LOGIN_URL / HOLD_NCMR_USERNAME /
+    # HOLD_NCMR_PASSWORD 可覆盖。HOLD_NCMR_TOKEN 若显式设置则跳过登录。
+    NCMR_IMPORT_URL = os.environ.get(
+        'HOLD_NCMR_IMPORT_URL',
+        'http://172.19.15.11/ncmr-api/factory/v1/disposalOrder/batchImport',
+    )
+    NCMR_LOGIN_URL = os.environ.get(
+        'HOLD_NCMR_LOGIN_URL',
+        'http://172.19.15.11/user-center-api/login',
+    )
+    NCMR_USERNAME = os.environ.get('HOLD_NCMR_USERNAME', 'dongxian_zhu')
+    NCMR_PASSWORD = os.environ.get(
+        'HOLD_NCMR_PASSWORD',
+        'vJMtrdKSCbjkn5E4IXBjkA==',
+    )
+    NCMR_BEARER_TOKEN = os.environ.get('HOLD_NCMR_TOKEN', '')
+
     WLT_TEST_DATA_REMOTE_PATH = '/WLT_TESTLOG/MAP_CP_PDF/'
     FT_TEST_DATA_REMOTE_PATH = '/FT_TESTLOG/'
     # 手提 Hold 附件图 FTP（独立于 TESTLOG；请自行填写 HOST / USER / PASSWD）

@@ -47,7 +47,7 @@ from app.utils.database_util import (
 # 不满足以上规则的 hold_info 不转成 record。
 # 028（重码风险）仍为 RECORD_TYPE=0，但与同片/同批良率、缺陷率 hold 分列，不拼进同一条 record。
 # 非 ENG 的 FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD：仍不建单。
-# ENG 路线 + PQC/FPQC + 原因含 FUTURE：RECORD_TYPE=3，建单但不进入处置。
+# ENG 路线 + PQC/FPQC + 原因含 FUTURE：RECORD_TYPE=3，建单后自动上报 NCMR。
 from app.backend_schedule.hold_merge_rules import (
     RECORD_TYPE_ENG_FUTURE,
     RECORD_TYPE_FT,
@@ -720,7 +720,38 @@ class HoldMergeScheduler(threading.Thread):
             f"RECORD_TYPE={row.get('RECORD_TYPE')}, "
             f"HOLD_CODE={row.get('HOLD_CODE')}"
         )
+        if int(row.get('RECORD_TYPE') or -1) == RECORD_TYPE_ENG_FUTURE:
+            self._report_eng_future(new_id, row)
         return new_id
+
+    def _report_eng_future(self, record_id, record) -> None:
+        """上报失败只记日志。STATUS 仍是创建，下一轮合批会补报。"""
+        try:
+            from app.controllers.hold_info_export_ctrl import report_eng_future_to_ncmr
+            ok, msg = report_eng_future_to_ncmr(
+                record_id, record, record_table=self.hold_record_table,
+            )
+        except Exception as exc:
+            self.logger.error(
+                f"ENG预Hold 上报异常 id={record_id}: {exc}", exc_info=True,
+            )
+            return
+        if ok:
+            self.logger.info(f"ENG预Hold 已上报 NCMR id={record_id}: {msg}")
+            return
+        self.logger.error(f"ENG预Hold 上报未完成 id={record_id}: {msg}")
+
+    def _retry_unreported_eng_future(self) -> None:
+        from app.utils.database_util import query_unreported_eng_future_records
+        rows = query_unreported_eng_future_records(self.hold_record_table)
+        if rows is None:
+            self.logger.error("查询未上报 ENG预Hold 失败，本轮不补报")
+            return
+        if not rows:
+            return
+        self.logger.info(f"补报未上报 ENG预Hold {len(rows)} 条")
+        for record in rows:
+            self._report_eng_future(record.get('ID'), record)
 
     def _run_job(self):
         try:
@@ -798,6 +829,7 @@ class HoldMergeScheduler(threading.Thread):
                     f"写入同 lot 安静水位失败: {save_exc}", exc_info=True
                 )
 
+            self._retry_unreported_eng_future()
             self.logger.info(
                 f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"
                 f"跳过 {len(skipped_ids)}，同 lot 等待下次 {deferred}"

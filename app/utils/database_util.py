@@ -481,6 +481,165 @@ def auto_close_hold_records(
         connection.close()
 
 
+DISPOSE_NCMR_REPORTED = 9
+_NCMR_REPORTED_DETAIL = 'NCMR已上报'
+
+
+def mark_hold_record_ncmr_reported(
+    record_id,
+    record_table: str = 'FT_HOLD_RECORD',
+):
+    """NCMR 上报成功后写「已上报」流转，并把 record 改成 STATUS=9。
+
+    NEXT_OWNER_ID 保持当前负责人。创建那条流转不删。
+    已关闭、已经是已上报、或不存在时返回 False，不改库。
+    """
+    record_tbl = (record_table or '').upper()
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return False
+    try:
+        rid = int(record_id)
+    except (TypeError, ValueError):
+        return False
+    if rid <= 0:
+        return False
+
+    circ_tbl = resolve_circulation_table(record_table=record_tbl)
+    circ_seq = seq_for_circulation(circ_tbl)
+    select_sql = f"""
+        SELECT NVL(STATUS, 0), LAST_CIRCULATION_ID
+        FROM {record_tbl}
+        WHERE ID = :rid
+        FOR UPDATE
+    """
+    owner_sql = f"""
+        SELECT NEXT_OWNER_ID
+        FROM {circ_tbl}
+        WHERE ID = :cid
+    """
+    insert_circ_sql = f"""
+        INSERT INTO {circ_tbl} (
+            ID,
+            HOLD_RECORD_ID,
+            DISPOSED_OWNER_ID,
+            DISPOSE,
+            NEXT_OWNER_ID,
+            DISPOSE_SOURCE,
+            DISPOSE_DTTM,
+            DISPOSE_TYPE,
+            DISPOSE_DETAIL
+        ) VALUES (
+            :circ_id,
+            :hold_record_id,
+            1,
+            :dispose,
+            :next_owner_id,
+            'SYS',
+            SYSDATE,
+            :dispose_type,
+            :dispose_detail
+        )
+    """
+    update_sql = f"""
+        UPDATE {record_tbl}
+        SET LAST_CIRCULATION_ID = :circ_id,
+            STATUS = :status
+        WHERE ID = :rid
+          AND NVL(STATUS, 0) NOT IN (:reported, :closed)
+    """
+
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(select_sql, {'rid': rid})
+            found = cursor.fetchone()
+            if not found:
+                connection.rollback()
+                return False
+            status = int(found[0] or 0)
+            if status in (DISPOSE_NCMR_REPORTED, DISPOSE_CLOSE):
+                connection.rollback()
+                return False
+            next_owner = None
+            if found[1] is not None:
+                cursor.execute(owner_sql, {'cid': int(found[1])})
+                owner_row = cursor.fetchone()
+                if owner_row and owner_row[0] is not None:
+                    next_owner = int(owner_row[0])
+            circ_id = _next_positive_seq(cursor, circ_seq)
+            cursor.execute(
+                insert_circ_sql,
+                {
+                    'circ_id': circ_id,
+                    'hold_record_id': rid,
+                    'dispose': DISPOSE_NCMR_REPORTED,
+                    'next_owner_id': next_owner,
+                    'dispose_type': DISPOSE_NCMR_REPORTED,
+                    'dispose_detail': _NCMR_REPORTED_DETAIL,
+                },
+            )
+            cursor.execute(
+                update_sql,
+                {
+                    'circ_id': circ_id,
+                    'status': DISPOSE_NCMR_REPORTED,
+                    'rid': rid,
+                    'reported': DISPOSE_NCMR_REPORTED,
+                    'closed': DISPOSE_CLOSE,
+                },
+            )
+            if (cursor.rowcount or 0) <= 0:
+                connection.rollback()
+                return False
+            connection.commit()
+            logger.info(
+                f"NCMR 已上报 hold_record id={rid}, circulation_id={circ_id}"
+            )
+            return True
+    except Exception as e:
+        connection.rollback()
+        logger.error(f"回写 NCMR 已上报失败 id={rid}: {e}", exc_info=True)
+        return False
+    finally:
+        connection.close()
+
+
+def query_unreported_eng_future_records(
+    record_table: str = 'FT_HOLD_RECORD',
+    limit: int = 50,
+):
+    """RECORD_TYPE=3 且仍是创建态的 record，供合批补报 NCMR。失败返回 None。"""
+    record_tbl = (record_table or '').upper()
+    if record_tbl not in _ALLOWED_HOLD_RECORD_TABLES:
+        logger.error(f"非法 hold_record 表名: {record_table}")
+        return None
+    try:
+        limit_n = int(limit)
+    except (TypeError, ValueError):
+        limit_n = 50
+    limit_n = max(1, min(limit_n, 200))
+    sql = f"""
+        SELECT ID, PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
+               HOLD_REASON, ROUTE_ID, HOLD_DTTM, RECORD_TYPE, STATUS
+        FROM {record_tbl}
+        WHERE NVL(RECORD_TYPE, -1) = 3
+          AND NVL(STATUS, 0) = 0
+          AND ROWNUM <= :lim
+    """
+    connection = oracledb.connect(user=USER, password=PWD, dsn=DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, {'lim': limit_n})
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall() or []]
+    except Exception as e:
+        logger.error(f"查询未上报 ENG预Hold 失败: {e}", exc_info=True)
+        return None
+    finally:
+        connection.close()
+
+
 def mark_hold_infos_dirty(
     source_info_ids,
     info_table: str = 'FT_HOLD_INFO',

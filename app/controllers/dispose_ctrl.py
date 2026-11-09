@@ -52,6 +52,7 @@ DISPOSE_ANALYZE = 5          # 可靠性分析（下一节点仍是工程师）
 DISPOSE_ANALYZE_RETURN = 6   # 分析(返回) — 已废弃，仅历史展示
 DISPOSE_TRANSFER = 7         # 转交
 DISPOSE_ROLLBACK = 8         # 回退
+DISPOSE_NCMR_REPORTED = 9    # 已上报 NCMR — 系统写入，工程师不可再处置
 DISPOSE_SAMPLE_DONE = 65     # 留样完成 — 生产侧，不改当前节点
 DISPOSE_PROD_ANALYZE_RETURN = 66  # 分析(返回) — 已废弃，仅历史展示
 DISPOSE_CLOSE = 99           # 关闭
@@ -91,6 +92,7 @@ DISPOSE_LABELS = {
     DISPOSE_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_TRANSFER: '转交',
     DISPOSE_ROLLBACK: '回退',
+    DISPOSE_NCMR_REPORTED: '已上报',
     DISPOSE_SAMPLE_DONE: '留样完成',
     DISPOSE_PROD_ANALYZE_RETURN: '分析(返回)',
     DISPOSE_CLOSE: '关闭',
@@ -2010,8 +2012,18 @@ def dispose_record(
         if not record:
             return False, 'hold_record 不存在', None
 
-        if int(record.get('STATUS') or 0) == DISPOSE_CLOSE:
+        try:
+            status_now = int(record.get('STATUS') or 0)
+        except (TypeError, ValueError):
+            status_now = 0
+        if status_now == DISPOSE_CLOSE:
             return False, '记录已关闭，无法继续处置', None
+        try:
+            role_now = int(actor_role)
+        except (TypeError, ValueError):
+            role_now = actor_role
+        if role_now == ROLE_ENGINEER and status_now == DISPOSE_NCMR_REPORTED:
+            return False, '已上报，不能处置', None
         try:
             record_type_now = int(record.get('RECORD_TYPE'))
         except (TypeError, ValueError):
