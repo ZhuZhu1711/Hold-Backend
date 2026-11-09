@@ -848,7 +848,7 @@ class NcmrImportPostTest(unittest.TestCase):
 
     def _config(self, token=''):
         return patch.multiple(
-            'app.controllers.hold_info_export_ctrl.Config',
+            'app.utils.ncmr_import.Config',
             NCMR_IMPORT_URL=self.URL,
             NCMR_LOGIN_URL=self.LOGIN_URL,
             NCMR_USERNAME='dongxian_zhu',
@@ -866,7 +866,7 @@ class NcmrImportPostTest(unittest.TestCase):
     def test_omitted_url_uses_env_token_without_login(self):
         calls = []
         with self._config(token='env-token'), patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             self._open(200, b'{"code":200,"msg":"ok"}', calls),
         ):
             ok, msg, _data = post_ncmr_import([_sample_ncmr_row()])
@@ -907,7 +907,7 @@ class NcmrImportPostTest(unittest.TestCase):
             (200, b'{"code":200,"msg":"imported"}'),
         ])
         with self._config(), patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             fake,
         ), patch('app.controllers.hold_info_export_ctrl.logger') as log:
             ok, msg, data = post_ncmr_import([_sample_ncmr_row()])
@@ -938,7 +938,7 @@ class NcmrImportPostTest(unittest.TestCase):
             return _NcmrResponse(200, '{"code":500,"msg":"账号或密码错误"}'.encode('utf-8'))
 
         with self._config(), patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             fake_urlopen,
         ):
             ok, msg, data = post_ncmr_import([_sample_ncmr_row()])
@@ -952,7 +952,7 @@ class NcmrImportPostTest(unittest.TestCase):
             (200, b'{"code":200,"msg":"imported"}'),
         ])
         with self._config(token='stale-token'), patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             fake,
         ):
             ok, msg, data = post_ncmr_import([_sample_ncmr_row()])
@@ -971,7 +971,7 @@ class NcmrImportPostTest(unittest.TestCase):
             (200, b'{"code":401,"msg":"\xe7\x99\xbb\xe5\xbd\x95\xe5\xb7\xb2\xe8\xbf\x87\xe6\x9c\x9f"}'),
         ])
         with self._config(), patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             fake,
         ):
             ok, msg, data = post_ncmr_import([_sample_ncmr_row()])
@@ -983,6 +983,24 @@ class NcmrImportPostTest(unittest.TestCase):
             [self.LOGIN_URL, self.URL, self.LOGIN_URL, self.URL],
         )
 
+    def test_login_timeout_message_relogin_once(self):
+        calls, fake = self._login_then_import([
+            (200, '{"code":500,"msg":"登录超时，请重新登录后操作"}'.encode('utf-8')),
+            (200, b'{"code":200,"msg":"imported"}'),
+        ])
+        with self._config(token='stale-token'), patch(
+            'app.utils.ncmr_import.urllib.request.urlopen',
+            fake,
+        ):
+            ok, msg, data = post_ncmr_import([_sample_ncmr_row()])
+        self.assertTrue(ok, msg)
+        self.assertEqual(data, {'count': 1})
+        self.assertEqual(
+            [request.full_url for request in calls],
+            [self.URL, self.LOGIN_URL, self.URL],
+        )
+        self.assertEqual(calls[2].get_header('Authorization'), 'Bearer fresh-token')
+
     def test_business_failure_does_not_relogin(self):
         calls = []
 
@@ -991,7 +1009,7 @@ class NcmrImportPostTest(unittest.TestCase):
             return _NcmrResponse(200, b'{"code":500,"message":"lot duplicated"}')
 
         with self._config(token='env-token'), patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             fake_urlopen,
         ):
             ok, msg, data = post_ncmr_import([_sample_ncmr_row()])
@@ -1003,7 +1021,7 @@ class NcmrImportPostTest(unittest.TestCase):
     def test_posts_bearer_body_without_real_host(self):
         calls = []
         with patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             self._open(200, b'{"code":200,"msg":"imported"}', calls),
         ):
             ok, msg, data = post_ncmr_import(
@@ -1026,7 +1044,7 @@ class NcmrImportPostTest(unittest.TestCase):
 
     def test_empty_rows_do_not_call_ncmr(self):
         with patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
         ) as urlopen:
             ok, msg, data = post_ncmr_import([])
         self.assertFalse(ok)
@@ -1042,7 +1060,7 @@ class NcmrImportPostTest(unittest.TestCase):
             )
 
         with patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             fake_urlopen,
         ):
             ok, msg, data = post_ncmr_import(
@@ -1056,7 +1074,7 @@ class NcmrImportPostTest(unittest.TestCase):
     def test_business_code_is_failure(self):
         calls = []
         with patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             self._open(200, b'{"code":500,"message":"lot duplicated"}', calls),
         ):
             ok, msg, data = post_ncmr_import(
@@ -1070,7 +1088,7 @@ class NcmrImportPostTest(unittest.TestCase):
         calls = []
         raw = b'{"code":200,"success":false,"msg":"rejected"}'
         with patch(
-            'app.controllers.hold_info_export_ctrl.urllib.request.urlopen',
+            'app.utils.ncmr_import.urllib.request.urlopen',
             self._open(200, raw, calls),
         ):
             ok, msg, _data = post_ncmr_import(
@@ -1157,13 +1175,73 @@ def _eng_future_record():
     }
 
 
+class BackendNcmrApiTest(unittest.TestCase):
+    def test_posts_report_api_without_ncmr_login(self):
+        from app.utils import hold_ncmr_api
+
+        calls = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append((request, timeout))
+            body = json.dumps({'code': 200, 'msg': '已上报 1 条'}).encode('utf-8')
+            return _NcmrResponse(200, body)
+
+        with patch.multiple(
+            'app.utils.hold_ncmr_api.Config',
+            HOLD_API_TOKEN='merge-token',
+            HOLD_API_BASE='http://127.0.0.1:60001',
+        ), patch(
+            'app.utils.hold_ncmr_api.urllib.request.urlopen',
+            fake_urlopen,
+        ), patch(
+            'app.utils.hold_ncmr_api.ncmr_row_from_hold_record',
+            return_value=_sample_ncmr_row(),
+        ):
+            ok, msg = hold_ncmr_api.report_record_via_backend(25872, _eng_future_record())
+        self.assertTrue(ok, msg)
+        request, timeout = calls[0]
+        self.assertEqual(
+            request.full_url,
+            'http://127.0.0.1:60001/admin/hold/api/hold_info_export/ncmr',
+        )
+        self.assertEqual(request.get_header('X-hold-token'), 'merge-token')
+        self.assertNotIn('user-center-api', request.full_url)
+        self.assertNotIn('batchImport', request.full_url)
+        posted = json.loads(request.data.decode('utf-8'))
+        self.assertEqual(posted['record_ids'], [25872])
+        self.assertEqual(posted['rows'][0][7], '3AL585')
+        self.assertEqual(timeout, 90)
+
+    def test_missing_token_does_not_call(self):
+        from app.utils import hold_ncmr_api
+
+        with patch.multiple(
+            'app.utils.hold_ncmr_api.Config',
+            HOLD_API_TOKEN='',
+            HOLD_API_BASE='http://127.0.0.1:60001',
+        ), patch('app.utils.hold_ncmr_api.urllib.request.urlopen') as urlopen:
+            ok, msg = hold_ncmr_api.report_record_via_backend(8, _eng_future_record())
+        self.assertFalse(ok)
+        self.assertIn('令牌', msg)
+        urlopen.assert_not_called()
+
+
 class EngFutureNcmrTest(unittest.TestCase):
+    def test_merge_exe_does_not_import_controllers(self):
+        import inspect
+        from app.backend_schedule.FT_HOLD_MERGE_sche import HoldMergeScheduler
+
+        src = inspect.getsource(HoldMergeScheduler._report_eng_future)
+        self.assertIn('app.utils.hold_ncmr_api', src)
+        self.assertNotIn('app.controllers', src)
+        self.assertNotIn('report_eng_future_to_ncmr', src)
+
     @patch(
-        'app.controllers.hold_info_export_ctrl.lookup_pre_handler',
+        'app.utils.ncmr_import.lookup_pre_handler',
         return_value='杨泽鑫（A0003923）',
     )
     @patch(
-        'app.controllers.hold_info_export_ctrl.lookup_lot_oa',
+        'app.utils.ncmr_import.lookup_lot_oa',
         return_value='ET.202611060',
     )
     def test_record_becomes_encapsulation_body(self, _oa, _handler):
@@ -1182,19 +1260,19 @@ class EngFutureNcmrTest(unittest.TestCase):
         _oa.assert_called()
 
     @patch(
-        'app.controllers.hold_info_export_ctrl.lookup_pre_handler',
+        'app.utils.ncmr_import.lookup_pre_handler',
         return_value='',
     )
     @patch(
-        'app.controllers.hold_info_export_ctrl.lookup_lot_oa',
+        'app.utils.ncmr_import.lookup_lot_oa',
         return_value='',
     )
     @patch(
-        'app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported',
+        'app.utils.ncmr_import.mark_hold_record_ncmr_reported',
         return_value=True,
     )
     @patch(
-        'app.controllers.hold_info_export_ctrl.post_ncmr_import',
+        'app.utils.ncmr_import.post_ncmr_import',
         return_value=(True, 'imported', {'count': 1}),
     )
     def test_success_marks_reported(self, post, mark, _oa, _handler):
@@ -1204,19 +1282,19 @@ class EngFutureNcmrTest(unittest.TestCase):
         mark.assert_called_once_with(8, record_table='FT_HOLD_RECORD')
 
     @patch(
-        'app.controllers.hold_info_export_ctrl.lookup_pre_handler',
+        'app.utils.ncmr_import.lookup_pre_handler',
         return_value='',
     )
     @patch(
-        'app.controllers.hold_info_export_ctrl.lookup_lot_oa',
+        'app.utils.ncmr_import.lookup_lot_oa',
         return_value='',
     )
     @patch(
-        'app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported',
+        'app.utils.ncmr_import.mark_hold_record_ncmr_reported',
         return_value=True,
     )
     @patch(
-        'app.controllers.hold_info_export_ctrl.post_ncmr_import',
+        'app.utils.ncmr_import.post_ncmr_import',
         return_value=(False, 'NCMR 连接失败: down', None),
     )
     def test_failure_does_not_mark(self, _post, mark, _oa, _handler):

@@ -55,6 +55,21 @@ class SingletonLockTest(unittest.TestCase):
         self.logger = logging.getLogger('test_singleton_lock')
         self.logger.handlers.clear()
         self.logger.addHandler(logging.NullHandler())
+        self._enabled = singleton_lock.ENABLED
+        singleton_lock.ENABLED = True
+
+    def tearDown(self):
+        singleton_lock.ENABLED = self._enabled
+
+    def test_disabled_does_not_connect(self):
+        singleton_lock.ENABLED = False
+
+        def connect():
+            raise AssertionError('关闭单实例锁后不应连接数据库')
+
+        hold_singleton(
+            LOCK_FT_HOLD_MERGE, self.logger, connect=connect, keep_alive=False,
+        )
 
     def test_first_process_keeps_the_session_lock(self):
         conn = _Conn(0)

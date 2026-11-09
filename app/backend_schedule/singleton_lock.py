@@ -14,6 +14,10 @@ import time
 LOCK_FT_HOLD_MERGE = 'FT_HOLD_MERGE'
 LOCK_CP_HOLD_MERGE = 'CP_HOLD_MERGE'
 
+# 当前账号没有 DBMS_LOCK 的 EXECUTE，申请锁会直接退出。
+# 先关掉，合批不再占会话锁。DBA 授权后改回 True。
+ENABLED = False
+
 # DBMS_LOCK 用户锁号。只在当前连接的那套库里有效。
 _LOCK_IDS = {
     LOCK_FT_HOLD_MERGE: 88001001,
@@ -114,6 +118,9 @@ def hold_singleton(lock_name: str, logger, *, connect=None, keep_alive: bool = T
     lock_id = _LOCK_IDS.get(name)
     if lock_id is None:
         raise ValueError(f'未知单实例锁: {lock_name!r}')
+    if not ENABLED:
+        logger.warning(f'{name} 单实例锁已关闭，本进程直接启动')
+        return
     connect_fn = connect or _connect
     try:
         conn = connect_fn()

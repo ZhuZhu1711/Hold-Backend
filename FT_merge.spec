@@ -28,6 +28,9 @@ hiddenimports = [
     'app.backend_schedule.hold_merge_rules',
     'app.backend_schedule.singleton_lock',
     'app.backend_schedule.FT_HOLD_MERGE_sche',
+    'app.utils.ncmr_import',
+    'app.utils.hold_ncmr_api',
+    'app.utils.pre_handler_lookup',
 ]
 
 # oracledb thin 在 .pyd 里才 import kdf，静态分析扫不到，必须整包收进来。

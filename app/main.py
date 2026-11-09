@@ -107,10 +107,10 @@ if __name__ == '__main__':
         f"外部 API Token: 环境变量 {_token_env}="
         f"{'已配置' if _token_on else '未配置（通道关闭）'}"
     )
-    print("\n=== 🚀 已注册的路由 ===")
-    for rule in app.url_map.iter_rules():
-        methods = ','.join(sorted([m for m in rule.methods if m not in ('HEAD', 'OPTIONS')]))
-        print(f"{methods:7} {rule.rule} -> {rule.endpoint}")
+    # print("\n=== 🚀 已注册的路由 ===")
+    # for rule in app.url_map.iter_rules():
+    #     methods = ','.join(sorted([m for m in rule.methods if m not in ('HEAD', 'OPTIONS')]))
+    #     print(f"{methods:7} {rule.rule} -> {rule.endpoint}")
     print("======================\n")
     print("按 Ctrl+C 结束运行\n")
 

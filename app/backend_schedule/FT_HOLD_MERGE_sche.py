@@ -727,10 +727,8 @@ class HoldMergeScheduler(threading.Thread):
     def _report_eng_future(self, record_id, record) -> None:
         """上报失败只记日志。STATUS 仍是创建，下一轮合批会补报。"""
         try:
-            from app.controllers.hold_info_export_ctrl import report_eng_future_to_ncmr
-            ok, msg = report_eng_future_to_ncmr(
-                record_id, record, record_table=self.hold_record_table,
-            )
+            from app.utils.hold_ncmr_api import report_record_via_backend
+            ok, msg = report_record_via_backend(record_id, record)
         except Exception as exc:
             self.logger.error(
                 f"ENG预Hold 上报异常 id={record_id}: {exc}", exc_info=True,

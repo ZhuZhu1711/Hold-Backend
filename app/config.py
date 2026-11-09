@@ -120,6 +120,8 @@ class Config:
     # 外部系统固定 Token（Header: X-Hold-Token）。空字符串 = 关闭该通道。
     # 正式读 HOLD_API_TOKEN，测试（HOLD_ENV=test）读 HOLD_API_TOKEN_DEBUG。勿把真实值提交进仓库。
     HOLD_API_TOKEN_ENV, HOLD_API_TOKEN = load_hold_api_token()
+    # 合批 exe 调本机 Web 上报接口。空则按 HOLD_ENV 用 127.0.0.1:60001 / 50001。
+    HOLD_API_BASE = os.environ.get('HOLD_API_BASE', '').strip()
 
     # NCMR 处置单批量导入。网页和客户端都经本服务转发。
     # 默认用固定账号登录，token 只留在进程内存，不进客户端、不进日志。
