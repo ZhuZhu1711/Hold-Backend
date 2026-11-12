@@ -127,6 +127,7 @@ def hold_info_export_page():
         user_name=session.get('user_name'),
         role_name=current_role_name(),
         nav_area=nav_area,
+        is_root=session.get('role') == ROLE_ROOT,
         products_api=(
             '/eng/api/products' if nav_area == 'eng' else '/admin/hold/api/products'
         ),
@@ -638,10 +639,37 @@ def _hold_info_export_status(msg):
     if '不属于' in msg:
         return 403
     if any(k in msg for k in (
-        '请指定', '不能早于', '无效', '没有可上报', '一次最多', '不能手动上报',
+        '请指定', '不能早于', '无效', '没有可上报', '一次最多', '不能上报',
+        '请重新预览', '不一致', '工单号',
     )):
         return 400
     return 500
+
+
+@hold_report_bp.route('/api/hold_info_export/auto_report', methods=['GET', 'POST'])
+@root_required
+def api_eng_pqc_auto_report():
+    """root 实时开关 ENG 预 Hold PQC 的每天 07:00 / 19:00 自动上报。"""
+    from app.backend_schedule.FT_ENG_PQC_NCMR_sche import (
+        auto_report_enabled,
+        set_auto_report_enabled,
+    )
+    if request.method == 'GET':
+        enabled = auto_report_enabled()
+        return jsonify({
+            'code': 200,
+            'msg': '已开启' if enabled else '已关闭',
+            'data': {'enabled': enabled},
+        })
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get('enabled'), bool):
+        return jsonify({'code': 400, 'msg': '请指定是否开启', 'data': None}), 400
+    enabled = set_auto_report_enabled(body['enabled'])
+    return jsonify({
+        'code': 200,
+        'msg': '已开启' if enabled else '已关闭',
+        'data': {'enabled': enabled},
+    })
 
 
 @hold_report_bp.route('/api/hold_info_export', methods=['GET'])
@@ -683,7 +711,7 @@ def _export_body_args():
 @hold_report_bp.route('/api/hold_info_export/xlsx', methods=['GET', 'POST'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_xlsx():
-    """导出当前选项卡。sheet=eng_pqc 或 engineering；MP 工程测试可带 engineering_ids。"""
+    """导出当前选项卡。sheet=eng_pqc、eng_other 或 engineering；MP 工程测试可带 engineering_ids。"""
     if request.method == 'POST':
         parsed = _export_body_args()
         if parsed[0] is None:
@@ -706,7 +734,7 @@ def api_hold_info_export_xlsx():
     product = _safe_filename(args.get('product_id') or 'hold')
     lot = _safe_filename(args.get('lot_id') or '')
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    kind = 'eng_pqc' if sheet == 'eng_pqc' else 'engineering'
+    kind = sheet if sheet in ('eng_pqc', 'eng_other') else 'engineering'
     filename = (
         f'ncmr_{kind}_{product}_{lot}_{stamp}.xlsx' if lot
         else f'ncmr_{kind}_{product}_{stamp}.xlsx'
@@ -731,6 +759,13 @@ def api_hold_info_export_ncmr():
         success, msg, data = hold_info_export_ctrl.import_ncmr_rows(
             body.get('rows'), record_ids=body.get('record_ids'),
         )
+    elif body.get('record_ids') is not None:
+        args, _engineering_ids, _sheet = _export_body_args()
+        success, msg, data = hold_info_export_ctrl.import_ncmr_group(
+            body.get('record_ids'),
+            owner_eng_id=_export_owner_eng_id(),
+            **args,
+        )
     else:
         args, engineering_ids, sheet = _export_body_args()
         success, msg, data = hold_info_export_ctrl.import_hold_info_ncmr(
@@ -742,7 +777,7 @@ def api_hold_info_export_ncmr():
     if success:
         return jsonify({'code': 200, 'msg': msg, 'data': data})
     status = _hold_info_export_status(msg)
-    return jsonify({'code': status, 'msg': msg, 'data': None}), status
+    return jsonify({'code': status, 'msg': msg, 'data': data}), status
 
 
 def _hold_info_query_response(success, msg, data):

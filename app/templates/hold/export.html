@@ -41,6 +41,23 @@
         .btn-ghost:hover { background: #dee2e6; }
         .btn-ncmr { background: #fd7e14; }
         .btn-ncmr:hover { background: #e36c0a; }
+        .tree { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+        .oa-card { border: 1px solid #ffd8a8; border-radius: 8px; background: #fff; overflow: hidden; }
+        .oa-card.open { border-color: #fd7e14; }
+        .oa-sum {
+            display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+            padding: 12px 14px; cursor: pointer; background: #fff8f1;
+        }
+        .oa-sum:hover { background: #fff1e0; }
+        .oa-no { font-weight: 600; color: #333; min-width: 140px; }
+        .oa-lots { flex: 1; color: #555; font-size: 13px; min-width: 180px; }
+        .oa-count { color: #333; font-size: 13px; white-space: nowrap; }
+        .oa-body { display: none; }
+        .oa-card.open .oa-body { display: block; }
+        .wafer-wrap { overflow: auto; max-height: 70vh; }
+        .oa-body .wafer-wrap { max-height: 50vh; margin: 0; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; align-self: center; }
+        .muted { color: #888; font-size: 12px; }
         .meta { margin-bottom: 10px; color: #555; font-size: 13px; }
         .meta.err { color: #b02a37; }
         .advanced {
@@ -50,7 +67,7 @@
         .advanced.show { display: flex; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
-        th { background: #f8f9fa; position: sticky; top: 0; }
+        th { background: #f8f9fa; position: sticky; top: 0; white-space: nowrap; }
         .empty { padding: 40px; text-align: center; color: #888; }
         .reason { max-width: 280px; line-height: 1.45; color: #444; word-break: break-word; }
         .wafer-list { max-width: 220px; word-break: break-all; color: #555; }
@@ -63,6 +80,37 @@
         .panel { display: none; }
         .panel.show { display: block; }
         .pick-all { font-size: 13px; color: #444; margin-left: auto; }
+        .auto-switch {
+            display: inline-flex; align-items: center; gap: 8px;
+            margin: 0 0 14px; font-size: 13px; color: #333;
+        }
+        .report-mask {
+            position: fixed; inset: 0; z-index: 40;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(33, 37, 41, 0.45); padding: 24px;
+        }
+        .report-mask[hidden] { display: none; }
+        .report-dialog {
+            width: min(480px, 100%); background: #fff; border-radius: 8px;
+            padding: 22px 22px 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+        }
+        .report-dialog h2 { font-size: 18px; margin-bottom: 10px; color: #222; }
+        .report-target { color: #333; font-size: 14px; line-height: 1.5; margin-bottom: 14px; }
+        .report-progress {
+            height: 8px; border-radius: 99px; background: #ffe8cc; overflow: hidden; margin-bottom: 12px;
+        }
+        .report-bar {
+            width: 40%; height: 100%; border-radius: 99px; background: #fd7e14;
+            animation: report-slide 1.1s ease-in-out infinite;
+        }
+        @keyframes report-slide {
+            0% { transform: translateX(-120%); }
+            100% { transform: translateX(320%); }
+        }
+        .report-status { color: #333; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+        .report-status.ok { color: #1e7e34; }
+        .report-status.err { color: #b02a37; }
+        .report-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
     </style>
 </head>
 <body>
@@ -91,12 +139,13 @@
     <main class="main">
         <div class="card">
             <h1>NCMR上报清单导出</h1>
-            <p class="sub">
-                一次只显示并导出当前选项卡。「ENG预Hold PQC」只展示系统自动上报的时间，不能手动上报；
-                「MP工程测试Hold」只含 MP route，可勾选后导出或上报到 NCMR。
-                合批片会还原源 lot / wafer，并补测试程序。
-                {% if nav_area == 'eng' %}产品工程师仅可导出自己负责的型号。{% endif %}
-            </p>
+            {% if is_root %}
+            <label class="auto-switch">
+                <input type="checkbox" id="auto_report" disabled onchange="toggleAutoReport(this)" />
+                ENG预Hold 自动上报
+                <span class="muted" id="auto_report_state">读取中...</span>
+            </label>
+            {% endif %}
 
             <div class="filters">
                 <label>型号
@@ -114,7 +163,6 @@
                 </label>
                 <button class="btn" onclick="preview()">预览</button>
                 <button class="btn btn-ok" onclick="exportXlsx()">导出当前表</button>
-                <button class="btn btn-ncmr" id="ncmr_btn" type="button" onclick="submitNcmr()" disabled>上报NCMR</button>
                 <button class="btn btn-ghost" type="button" onclick="toggleAdvanced()">表头默认值</button>
             </div>
             <div class="advanced" id="advanced">
@@ -125,72 +173,48 @@
             <div class="meta" id="meta">请选择型号与时间后预览或导出</div>
             <div class="tabs">
                 <button type="button" class="tab active" id="tab_eng" onclick="showSheet('eng_pqc')">ENG预Hold PQC</button>
+                <button type="button" class="tab" id="tab_other" onclick="showSheet('eng_other')">ENG其他Hold</button>
                 <button type="button" class="tab" id="tab_node" onclick="showSheet('engineering')">MP工程测试Hold</button>
                 <label class="pick-all" id="pick_all_wrap" style="display:none">
                     <input type="checkbox" id="pick_all" checked onchange="toggleAll(this)" /> 全选
                 </label>
             </div>
             <div class="panel show" id="panel_eng">
-            <div style="overflow:auto; max-height:70vh;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Wafer</th>
-                            <th>型号</th>
-                            <th>设备</th>
-                            <th>Route</th>
-                            <th>站点</th>
-                            <th>Lot</th>
-                            <th>Hold Wafer</th>
-                            <th>Wafer List</th>
-                            <th>原因</th>
-                            <th>预处置人</th>
-                            <th>测试程序</th>
-                            <th>Hold 时间</th>
-                            <th>OA单号</th>
-                            <th>上报时间</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tbody_eng">
-                        <tr><td colspan="14" class="empty">暂无数据</td></tr>
-                    </tbody>
-                </table>
+                <div class="tree" id="tree_eng"><div class="empty">暂无数据</div></div>
             </div>
+            <div class="panel" id="panel_other">
+                <div class="tree" id="tree_other"><div class="empty">暂无数据</div></div>
             </div>
             <div class="panel" id="panel_node">
-            <div style="overflow:auto; max-height:70vh;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th></th>
-                            <th>Wafer</th>
-                            <th>型号</th>
-                            <th>设备</th>
-                            <th>Route</th>
-                            <th>站点</th>
-                            <th>Lot</th>
-                            <th>Hold Wafer</th>
-                            <th>Wafer List</th>
-                            <th>原因</th>
-                            <th>预处置人</th>
-                            <th>测试程序</th>
-                            <th>Hold 时间</th>
-                            <th>OA单号</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tbody_node">
-                        <tr><td colspan="14" class="empty">暂无数据</td></tr>
-                    </tbody>
-                </table>
-            </div>
+                <div class="tree" id="tree_node"><div class="empty">暂无数据</div></div>
             </div>
         </div>
     </main>
+    <div class="report-mask" id="report_mask" hidden>
+        <div class="report-dialog" role="dialog" aria-modal="true" aria-labelledby="report_title">
+            <h2 id="report_title">正在上报 NCMR</h2>
+            <p class="report-target" id="report_target"></p>
+            <div class="report-progress" id="report_progress"><div class="report-bar"></div></div>
+            <p class="report-status" id="report_status">正在提交，请勿关闭页面</p>
+            <div class="report-actions" id="report_actions" hidden>
+                <button type="button" class="btn" id="report_ok" onclick="closeReportDialog()">知道了</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         const PRODUCTS_API = {{ (products_api or '/admin/hold/api/products')|tojson }};
+        const IS_ROOT = {{ (is_root or false)|tojson }};
+        const CLOSE_WARN = '当前正在上报NCMR，关闭网页可能会导致无法预期的结果，确认关闭吗？';
         let previewed = false;
+        let reporting = false;
         let activeSheet = 'eng_pqc';
+        let reportGroups = [];
+        let missingNote = '';
+        const oaState = {
+            tree_eng: { index: null, key: null },
+            tree_other: { index: null, key: null },
+        };
         function pad(n) { return String(n).padStart(2, '0'); }
         function toLocalInput(d) {
             return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
@@ -228,9 +252,14 @@
         function invalidatePreview() {
             if (!previewed) return;
             previewed = false;
+            reportGroups = [];
+            oaState.tree_eng.index = null;
+            oaState.tree_eng.key = null;
+            oaState.tree_other.index = null;
+            oaState.tree_other.key = null;
             const meta = document.getElementById('meta');
             meta.className = 'meta';
-            meta.textContent = '筛选已变更，请重新预览后再勾选导出';
+            meta.textContent = '筛选已变更，请重新预览后再上报';
         }
         function routeText(r) {
             const routeType = r.ROUTE_TYPE || '';
@@ -252,48 +281,166 @@
                 <td>${esc(r.PRE_HANDLER)}</td>
                 <td>${esc(r.TEST_PROGRAM)}</td>
                 <td>${esc(r.HOLD_DATETIME)}</td>
+                <td>${esc(r.WO)}</td>
                 <td>${esc(r.OA_NUMBER)}</td>${reported}`;
         }
-        function renderEng(items) {
-            const tbody = document.getElementById('tbody_eng');
-            if (!items.length) {
-                tbody.innerHTML = '<tr><td colspan="14" class="empty">无记录</td></tr>';
-                return;
-            }
-            tbody.innerHTML = items.map(r => `<tr>${dataCells(r, true)}</tr>`).join('');
+        function waferHead(withPick, withReported, extra) {
+            const pick = withPick ? '<th></th>' : '';
+            const reported = withReported ? '<th>上报时间</th>' : '';
+            return `<tr>${pick}
+                <th>Wafer</th><th>型号</th><th>设备</th><th>Route</th><th>站点</th>
+                <th>Lot</th><th>Hold Wafer</th><th>Wafer List</th><th>原因</th>
+                <th>预处置人</th><th>测试程序</th><th>Hold 时间</th><th>工单号</th><th>OA单号</th>
+                ${reported}${extra || ''}
+            </tr>`;
         }
-        function renderNode(items) {
-            const tbody = document.getElementById('tbody_node');
-            const pickAll = document.getElementById('pick_all');
-            pickAll.checked = true;
-            if (!items.length) {
-                tbody.innerHTML = '<tr><td colspan="14" class="empty">无记录</td></tr>';
+        function waferTable(wafers, withReported, withAction) {
+            const colspan = 14 + (withReported ? 1 : 0) + (withAction ? 1 : 0);
+            const body = (wafers || []).map(r => `<tr>${dataCells(r, withReported)}${withAction ? `<td>${mpAction(r)}</td>` : ''}</tr>`).join('');
+            const rows = body || `<tr><td colspan="${colspan}" class="empty">无记录</td></tr>`;
+            const extra = withAction ? '<th>上报</th>' : '';
+            return `<div class="wafer-wrap"><table>
+                <thead>${waferHead(false, withReported, extra)}</thead>
+                <tbody>${rows}</tbody></table></div>`;
+        }
+        function reportButton(group) {
+            if (!group || !group.can_report || !(group.record_ids || []).length) return '';
+            const index = reportGroups.length;
+            reportGroups.push(group);
+            return `<button class="btn btn-ncmr btn-sm" type="button" onclick="event.stopPropagation(); submitGroup(${index})">上报</button>`;
+        }
+        function groupLots(group) {
+            const names = [];
+            (group.wos || []).forEach(wo => {
+                (wo.lots || []).forEach(lot => {
+                    const name = lot.lot || '';
+                    if (name && names.indexOf(name) < 0) names.push(name);
+                });
+            });
+            return names;
+        }
+        function groupWafers(group) {
+            const rows = [];
+            (group.wos || []).forEach(wo => {
+                (wo.lots || []).forEach(lot => {
+                    (lot.wafers || []).forEach(wafer => rows.push(wafer));
+                });
+            });
+            return rows;
+        }
+        function toggleCard(treeId, index) {
+            const state = oaState[treeId];
+            const cards = document.querySelectorAll('#' + treeId + ' .oa-card');
+            const opening = state.index !== index;
+            cards.forEach((card, i) => card.classList.toggle('open', opening && i === index));
+            state.index = opening ? index : null;
+            state.key = opening && cards[index] ? (cards[index].dataset.oa || '') : null;
+        }
+        function renderOaCards(treeId, groups, withWaferAction) {
+            const box = document.getElementById(treeId);
+            const state = oaState[treeId];
+            if (!groups.length) {
+                state.index = null;
+                box.innerHTML = '<div class="empty">无记录</div>' + missingNote;
                 return;
             }
-            tbody.innerHTML = items.map(r => `<tr>
-                <td><input type="checkbox" class="pick" data-id="${esc(r.RECORD_ID)}" checked /></td>
-                ${dataCells(r, false)}
+            state.index = null;
+            box.innerHTML = groups.map((group, index) => {
+                const key = group.oa || '';
+                const open = state.key === key;
+                if (open) state.index = index;
+                const oa = group.oa ? ('OA ' + esc(group.oa)) : '无 OA';
+                const lots = groupLots(group);
+                const lotText = lots.length ? lots.map(esc).join('、') : '无 lot';
+                const wafers = groupWafers(group);
+                const action = withWaferAction ? '' : reportButton(group);
+                return `<div class="oa-card${open ? ' open' : ''}" data-oa="${esc(key)}">
+                    <div class="oa-sum" role="button" tabindex="0" onclick="toggleCard('${treeId}', ${index})">
+                        <span class="oa-no">${oa}</span>
+                        <span class="oa-lots">${lotText}</span>
+                        <span class="oa-count">${wafers.length} 片</span>
+                        ${action}
+                    </div>
+                    <div class="oa-body">${waferTable(wafers, true, withWaferAction)}</div>
+                </div>`;
+            }).join('') + missingNote;
+        }
+        function renderEng(groups) {
+            renderOaCards('tree_eng', groups, false);
+        }
+        function renderOther(groups) {
+            renderOaCards('tree_other', groups, true);
+        }
+        function canReportWafer(row) {
+            if (!row || row.NCMR_REPORTED_AT || row.ORDER_ERROR) return false;
+            if (!String(row.WO || '').trim() || !String(row.LOT_KEY || row.LOT_STR || '').trim()) return false;
+            const rid = Number(row.RECORD_ID);
+            return Number.isFinite(rid) && rid > 0;
+        }
+        function mpAction(row) {
+            if (row.NCMR_REPORTED_AT) return '<span class="muted">已上报</span>';
+            if (!canReportWafer(row)) return '<span class="muted">不能上报</span>';
+            const index = reportGroups.length;
+            reportGroups.push({
+                record_ids: [Number(row.RECORD_ID)],
+                lot_count: 1,
+                count: 1,
+                can_report: true,
+                label: row.WAFER_ID || row.LOT_KEY || '该片',
+            });
+            return `<button class="btn btn-ncmr btn-sm" type="button" onclick="submitGroup(${index})">上报</button>`;
+        }
+        function renderNode(groups) {
+            const box = document.getElementById('tree_node');
+            document.getElementById('pick_all').checked = true;
+            const wafers = [];
+            (groups || []).forEach(group => {
+                (group.lots || []).forEach(lot => {
+                    (lot.wafers || []).forEach(wafer => wafers.push(wafer));
+                });
+            });
+            if (!wafers.length) {
+                box.innerHTML = '<div class="empty">无记录</div>' + missingNote;
+                return;
+            }
+            const body = wafers.map(row => `<tr>
+                <td><input type="checkbox" class="pick" data-id="${esc(row.RECORD_ID)}" checked /></td>
+                ${dataCells(row, false)}
+                <td>${mpAction(row)}</td>
             </tr>`).join('');
+            box.innerHTML = `<div class="wafer-wrap"><table>
+                <thead>${waferHead(true, false, '<th>上报</th>')}</thead>
+                <tbody>${body}</tbody></table></div>` + missingNote;
         }
         function showSheet(key) {
             activeSheet = key;
-            const eng = key === 'eng_pqc';
-            document.getElementById('panel_eng').classList.toggle('show', eng);
-            document.getElementById('panel_node').classList.toggle('show', !eng);
-            document.getElementById('tab_eng').classList.toggle('active', eng);
-            document.getElementById('tab_node').classList.toggle('active', !eng);
-            document.getElementById('pick_all_wrap').style.display = eng ? 'none' : '';
-            document.getElementById('ncmr_btn').disabled = eng;
+            document.getElementById('panel_eng').classList.toggle('show', key === 'eng_pqc');
+            document.getElementById('panel_other').classList.toggle('show', key === 'eng_other');
+            document.getElementById('panel_node').classList.toggle('show', key === 'engineering');
+            document.getElementById('tab_eng').classList.toggle('active', key === 'eng_pqc');
+            document.getElementById('tab_other').classList.toggle('active', key === 'eng_other');
+            document.getElementById('tab_node').classList.toggle('active', key === 'engineering');
+            document.getElementById('pick_all_wrap').style.display = key === 'engineering' ? '' : 'none';
         }
-        function setTabCounts(engCount, nodeCount) {
+        function setMissingNote(missingWo, orderFailed) {
+            if (!missingWo) {
+                missingNote = '';
+                return;
+            }
+            missingNote = `<div class="meta">另有 ${missingWo} 条没有工单号，不能上报`;
+            if (orderFailed) missingNote += `（其中 ${orderFailed} 条查询失败）`;
+            missingNote += '</div>';
+        }
+        function setTabCounts(engCount, otherCount, nodeCount) {
             document.getElementById('tab_eng').textContent = 'ENG预Hold PQC (' + engCount + ')';
+            document.getElementById('tab_other').textContent = 'ENG其他Hold (' + otherCount + ')';
             document.getElementById('tab_node').textContent = 'MP工程测试Hold (' + nodeCount + ')';
         }
         function toggleAll(box) {
-            document.querySelectorAll('#tbody_node .pick').forEach(el => { el.checked = box.checked; });
+            document.querySelectorAll('#tree_node .pick').forEach(el => { el.checked = box.checked; });
         }
         function checkedEngineeringIds() {
-            return Array.from(document.querySelectorAll('#tbody_node .pick:checked'))
+            return Array.from(document.querySelectorAll('#tree_node .pick:checked'))
                 .map(el => Number(el.dataset.id))
                 .filter(id => Number.isFinite(id));
         }
@@ -322,15 +469,19 @@
             previewed = false;
             meta.className = 'meta';
             meta.textContent = '查询中...';
-            document.getElementById('tbody_eng').innerHTML = '<tr><td colspan="14" class="empty">查询中...</td></tr>';
-            document.getElementById('tbody_node').innerHTML = '<tr><td colspan="14" class="empty">查询中...</td></tr>';
+            document.getElementById('tree_eng').innerHTML = '<div class="empty">查询中...</div>';
+            document.getElementById('tree_other').innerHTML = '<div class="empty">查询中...</div>';
+            document.getElementById('tree_node').innerHTML = '<div class="empty">查询中...</div>';
             try {
                 const resp = await fetch('/admin/hold/api/hold_info_export?' + params.toString());
                 const json = await resp.json();
                 if (json.code !== 200) {
                     meta.className = 'meta err';
                     meta.textContent = json.msg || '查询失败';
+                    reportGroups = [];
+                    missingNote = '';
                     renderEng([]);
+                    renderOther([]);
                     renderNode([]);
                     return;
                 }
@@ -339,60 +490,108 @@
                 if (data.lot_id) note += ` · Lot ${data.lot_id}`;
                 note += ` · 合计 ${data.total} 条`;
                 note += ` · ENG预Hold PQC ${data.eng_pqc_total || 0} 条`;
+                note += ` · ENG其他Hold ${data.eng_other_total || 0} 条`;
                 note += ` · MP工程测试Hold ${data.engineering_total || 0} 条`;
                 if (data.truncated) note += `（已截取前 ${data.shown} 条）`;
                 meta.className = 'meta';
                 meta.textContent = note;
-                const engItems = data.eng_pqc || [];
-                const nodeItems = data.engineering || [];
-                renderEng(engItems);
-                renderNode(nodeItems);
-                setTabCounts(engItems.length, nodeItems.length);
+                reportGroups = [];
+                setMissingNote(data.missing_wo_total || 0, data.order_failed_total || 0);
+                renderEng(data.eng_groups || []);
+                renderOther(data.eng_other_groups || []);
+                renderNode(data.engineering_groups || []);
+                setTabCounts(
+                    data.eng_pqc_total || 0,
+                    data.eng_other_total || 0,
+                    data.engineering_total || 0,
+                );
                 previewed = true;
             } catch (e) {
                 meta.className = 'meta err';
                 meta.textContent = '查询失败：' + e;
+                reportGroups = [];
+                missingNote = '';
                 renderEng([]);
+                renderOther([]);
                 renderNode([]);
             }
         }
 
-        function currentSheetCount() {
-            if (activeSheet === 'engineering') return checkedEngineeringIds().length;
-            if (document.querySelector('#tbody_eng .empty')) return 0;
-            return document.querySelectorAll('#tbody_eng tr').length;
+        function openReportProgress(targetText) {
+            reporting = true;
+            document.getElementById('report_title').textContent = '正在上报 NCMR';
+            document.getElementById('report_target').textContent = targetText;
+            document.getElementById('report_progress').hidden = false;
+            const status = document.getElementById('report_status');
+            status.className = 'report-status';
+            status.textContent = '正在提交，请勿关闭页面';
+            document.getElementById('report_actions').hidden = true;
+            document.getElementById('report_mask').hidden = false;
         }
+        function finishReportDialog(ok, message) {
+            reporting = false;
+            document.getElementById('report_title').textContent = ok ? '上报完成' : '上报未完成';
+            document.getElementById('report_progress').hidden = true;
+            const status = document.getElementById('report_status');
+            status.className = 'report-status ' + (ok ? 'ok' : 'err');
+            status.textContent = message;
+            document.getElementById('report_actions').hidden = false;
+            document.getElementById('report_mask').hidden = false;
+        }
+        function closeReportDialog() {
+            if (reporting) return;
+            document.getElementById('report_mask').hidden = true;
+        }
+        window.addEventListener('beforeunload', (event) => {
+            if (!reporting) return;
+            event.preventDefault();
+            event.returnValue = CLOSE_WARN;
+        });
+        document.addEventListener('click', (event) => {
+            if (!reporting) return;
+            const link = event.target.closest('a[href]');
+            if (!link) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (!window.confirm(CLOSE_WARN)) return;
+            reporting = false;
+            window.location.href = link.href;
+        });
 
-        async function submitNcmr() {
+        async function submitGroup(index) {
             const meta = document.getElementById('meta');
-            if (activeSheet === 'eng_pqc') {
-                meta.className = 'meta err';
-                meta.textContent = 'ENG预Hold PQC 由系统自动上报，不能手动上报';
-                return;
-            }
-            if (!previewed) {
+            const group = reportGroups[index];
+            if (reporting) return;
+            if (!previewed || !group) {
                 meta.className = 'meta err';
                 meta.textContent = '请先预览，再上报NCMR';
                 return;
             }
-            const count = currentSheetCount();
-            const label = 'MP工程测试Hold';
+            const count = (group.record_ids || []).length;
+            const lotCount = group.lot_count || 0;
             if (!count) {
                 meta.className = 'meta err';
-                meta.textContent = '当前表没有可上报的行';
+                meta.textContent = '这一组没有可上报的记录';
                 return;
             }
-            if (!window.confirm('将上报 ' + count + ' 条' + label + '到 NCMR，是否继续？')) return;
-            const params = queryParams();
-            const body = Object.fromEntries(params.entries());
-            body.sheet = activeSheet;
-            if (activeSheet === 'engineering') {
-                body.engineering_ids = checkedEngineeringIds();
+            let confirmText;
+            let progressText;
+            if (group.label) {
+                confirmText = '将上报 ' + group.label + ' 到 NCMR，是否继续？';
+                progressText = '正在上报 ' + group.label;
+            } else {
+                const label = group.oa != null
+                    ? (group.oa ? ('OA ' + group.oa) : '无 OA')
+                    : (group.wo ? ('工单 ' + group.wo) : '无工单');
+                confirmText = '将按 ' + label + ' 拆成 ' + lotCount + ' 个 lot，分批上报 ' + count + ' 条到 NCMR，是否继续？';
+                progressText = '正在按 ' + label + ' 拆成 ' + lotCount + ' 个 lot，上报 ' + count + ' 条';
             }
-            const btn = document.getElementById('ncmr_btn');
-            btn.disabled = true;
-            meta.className = 'meta';
-            meta.textContent = '正在上报...';
+            if (!window.confirm(confirmText)) return;
+            const body = Object.fromEntries(queryParams().entries());
+            body.record_ids = group.record_ids;
+            const buttons = document.querySelectorAll('.btn-ncmr');
+            buttons.forEach(btn => { btn.disabled = true; });
+            openReportProgress(progressText);
             try {
                 const resp = await fetch('/admin/hold/api/hold_info_export/ncmr', {
                     method: 'POST',
@@ -400,18 +599,22 @@
                     body: JSON.stringify(body),
                 });
                 const json = await resp.json();
+                const partial = json.data && (json.data.lots_ok || []).length;
                 if (!resp.ok || json.code !== 200) {
-                    meta.className = 'meta err';
-                    meta.textContent = json.msg || '上报失败';
+                    if (partial) {
+                        try { await preview(); } catch (refreshError) { /* 清单刷新失败仍展示上报结果 */ }
+                    } else {
+                        buttons.forEach(btn => { btn.disabled = false; });
+                    }
+                    finishReportDialog(false, json.msg || '上报失败');
                     return;
                 }
-                meta.className = 'meta';
-                meta.textContent = json.msg || '上报完成';
+                const reported = json.msg || '上报完成';
+                try { await preview(); } catch (refreshError) { /* 清单刷新失败仍展示上报结果 */ }
+                finishReportDialog(true, reported);
             } catch (e) {
-                meta.className = 'meta err';
-                meta.textContent = '上报失败：' + e;
-            } finally {
-                btn.disabled = false;
+                buttons.forEach(btn => { btn.disabled = false; });
+                finishReportDialog(false, '上报失败：' + e);
             }
         }
 
@@ -466,14 +669,60 @@
             el.addEventListener('change', invalidatePreview);
             el.addEventListener('input', invalidatePreview);
         });
-        document.getElementById('tbody_node').addEventListener('change', (event) => {
+        document.getElementById('tree_node').addEventListener('change', (event) => {
             if (!event.target.classList.contains('pick')) return;
-            const boxes = document.querySelectorAll('#tbody_node .pick');
-            const checked = document.querySelectorAll('#tbody_node .pick:checked');
+            const boxes = document.querySelectorAll('#tree_node .pick');
+            const checked = document.querySelectorAll('#tree_node .pick:checked');
             document.getElementById('pick_all').checked = boxes.length > 0 && boxes.length === checked.length;
         });
+        async function loadAutoReport() {
+            if (!IS_ROOT) return;
+            const box = document.getElementById('auto_report');
+            const state = document.getElementById('auto_report_state');
+            try {
+                const resp = await fetch('/admin/hold/api/hold_info_export/auto_report');
+                const json = await resp.json();
+                if (!resp.ok || json.code !== 200) {
+                    state.textContent = json.msg || '读取开关失败';
+                    return;
+                }
+                box.checked = !!(json.data && json.data.enabled);
+                state.textContent = box.checked ? '已开启，下次 07:00 或 19:00 会上报' : '已关闭';
+                box.disabled = false;
+            } catch (e) {
+                state.textContent = '读取开关失败';
+            }
+        }
+        async function toggleAutoReport(box) {
+            const state = document.getElementById('auto_report_state');
+            const enabled = box.checked;
+            box.disabled = true;
+            state.textContent = '保存中...';
+            try {
+                const resp = await fetch('/admin/hold/api/hold_info_export/auto_report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled }),
+                });
+                const json = await resp.json();
+                if (!resp.ok || json.code !== 200) {
+                    box.checked = !enabled;
+                    state.textContent = json.msg || '保存失败';
+                    return;
+                }
+                box.checked = !!(json.data && json.data.enabled);
+                state.textContent = box.checked ? '已开启，下次 07:00 或 19:00 会上报' : '已关闭';
+            } catch (e) {
+                box.checked = !enabled;
+                state.textContent = '保存失败';
+            } finally {
+                box.disabled = false;
+            }
+        }
+
         initDates();
         loadProducts();
+        loadAutoReport();
     </script>
 </body>
 </html>

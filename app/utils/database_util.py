@@ -491,7 +491,7 @@ def mark_hold_record_ncmr_reported(
 ):
     """NCMR 上报成功后写「已上报」流转，并把 record 改成 STATUS=9。
 
-    NEXT_OWNER_ID 保持当前负责人。创建那条流转不删。
+    NEXT_OWNER_ID 改为生产 OP，产品工程师待办不再看到这张单。
     已关闭、已经是已上报、或不存在时返回 False，不改库。
     """
     record_tbl = (record_table or '').upper()
@@ -512,11 +512,6 @@ def mark_hold_record_ncmr_reported(
         FROM {record_tbl}
         WHERE ID = :rid
         FOR UPDATE
-    """
-    owner_sql = f"""
-        SELECT NEXT_OWNER_ID
-        FROM {circ_tbl}
-        WHERE ID = :cid
     """
     insert_circ_sql = f"""
         INSERT INTO {circ_tbl} (
@@ -561,12 +556,7 @@ def mark_hold_record_ncmr_reported(
             if status in (DISPOSE_NCMR_REPORTED, DISPOSE_CLOSE):
                 connection.rollback()
                 return False
-            next_owner = None
-            if found[1] is not None:
-                cursor.execute(owner_sql, {'cid': int(found[1])})
-                owner_row = cursor.fetchone()
-                if owner_row and owner_row[0] is not None:
-                    next_owner = int(owner_row[0])
+            next_owner = int(getattr(Config, 'PRODUCTION_OP_ID', 181) or 181)
             circ_id = _next_positive_seq(cursor, circ_seq)
             cursor.execute(
                 insert_circ_sql,
@@ -699,6 +689,11 @@ def mark_hold_infos_dirty(
         connection.close()
 
 
+def _blank_to_none(value):
+    text = '' if value is None else str(value).strip()
+    return text or None
+
+
 def insert_hold_record_and_link(
     record: dict,
     source_info_ids,
@@ -751,12 +746,14 @@ def insert_hold_record_and_link(
             ID,
             PRODUCT_ID, STATION, EQUIP_ID, LOT_ID, WAFER_ID,
             HOLD_CODE, HOLD_REASON, SOURCE, SECOND_CODE, ROUTE_ID,
-            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM, HOLD_WAFER_ATTR
+            GRADE_NUM, RECORD_TYPE, STATUS, HOLD_DTTM, HOLD_WAFER_ATTR,
+            OA, WO
         ) VALUES (
             :new_id,
             :product_id, :station, :equip_id, :lot_id, :wafer_id,
             :hold_code, :hold_reason, :source, :second_code, :route_id,
-            :grade_num, :record_type, :status, :hold_dttm, :hold_wafer_attr
+            :grade_num, :record_type, :status, :hold_dttm, :hold_wafer_attr,
+            :oa, :wo
         )
     """
 
@@ -831,6 +828,8 @@ def insert_hold_record_and_link(
                     'status': record['STATUS'],
                     'hold_dttm': record.get('HOLD_DTTM'),
                     'hold_wafer_attr': int(record.get('HOLD_WAFER_ATTR') or 0),
+                    'oa': _blank_to_none(record.get('OA')),
+                    'wo': _blank_to_none(record.get('WO')),
                 },
             )
 
@@ -876,6 +875,7 @@ def insert_hold_record_and_link(
             connection.commit()
             logger.info(
                 f"写入 {record_tbl} id={new_id}, wafer={record['WAFER_ID']}, "
+                f"OA={record.get('OA')}, WO={record.get('WO')}, "
                 f"HOLD_DTTM={record.get('HOLD_DTTM')}, "
                 f"circulation_id={circ_id}, next_owner_id={next_owner_id}, "
                 f"回写 {info_tbl} {linked}/{len(ids)} 行 HOLD_RECORD_ID"

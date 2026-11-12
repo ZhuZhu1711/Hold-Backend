@@ -9,6 +9,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, Mock, patch
 
 from app.controllers.dispose_ctrl import DISPOSE_NCMR_REPORTED, dispose_record
+from app.utils.pre_handler_lookup import LotOrder
 from app.controllers.hold_info_export_ctrl import (
     LOOKUP_MAX_IDS,
     NCMR_TIMEOUT,
@@ -19,12 +20,14 @@ from app.controllers.hold_info_export_ctrl import (
     _latest_hold_per_wafer,
     _parse_filters,
     _prepare_export_holds,
+    _build_ncmr_groups,
     _process_hold,
     build_ncmr_import_body,
     export_hold_info_xlsx,
     ncmr_row_from_hold_record,
     report_eng_future_to_ncmr,
     import_hold_info_ncmr,
+    import_ncmr_group,
     import_ncmr_rows,
     post_ncmr_import,
     preview_hold_info_export,
@@ -183,9 +186,12 @@ class PreviewExportScopeTest(unittest.TestCase):
         self.assertEqual(collect.call_args.kwargs.get('route_id'), 'ENG')
 
 
-def _hold(wafer, lot, dttm, hold_id, route='PRODUCTION', route_id='MP', station=''):
+def _hold(
+    wafer, lot, dttm, hold_id, route='PRODUCTION', route_id='MP', station='',
+    reason='reason',
+):
     return (
-        wafer, 'P1', 'EQ', dttm, 'reason', route, lot, route_id, hold_id, station,
+        wafer, 'P1', 'EQ', dttm, reason, route, lot, route_id, hold_id, station,
     )
 
 
@@ -259,11 +265,14 @@ class CollectRowsDedupeTest(unittest.TestCase):
         self.assertEqual(payload['preview_rows'], [{'LOT': 'C2', 'ID': 2}])
         self.assertEqual(process.call_count, 1)
 
-    @patch('app.controllers.hold_info_export_ctrl.lookup_lot_oa', return_value='')
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_lot_order',
+        return_value=LotOrder(ok=True),
+    )
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_excel_hold_time_uses_earliest(self, _program, _wafers, _handler, _oa):
+    def test_excel_hold_time_uses_earliest(self, _program, _wafers, _handler, _order):
         hold = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3)
         row, preview = _process_hold(
             Mock(), hold,
@@ -278,15 +287,20 @@ class CollectRowsDedupeTest(unittest.TestCase):
         self.assertEqual(preview['HOLD_DATETIME'], '2026-01-01 00:00:00')
         self.assertEqual(row[15], '')
         self.assertEqual(row[26], '')
+        self.assertIsNone(row[10])
         self.assertEqual(preview['PRE_HANDLER'], '')
         self.assertEqual(preview['OA_NUMBER'], '')
+        self.assertEqual(preview['WO'], '')
         _handler.assert_not_called()
 
-    @patch('app.controllers.hold_info_export_ctrl.lookup_lot_oa', return_value='ET.202610218')
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_lot_order',
+        return_value=LotOrder(True, 'ET.202610218', 'WO-9'),
+    )
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='周星辰（A0004655）')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_engineering_pre_handler_uses_oa(self, _program, _wafers, handler, lot_oa):
+    def test_engineering_pre_handler_uses_oa(self, _program, _wafers, handler, lot_order):
         hold = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3, route='ENGINEERING')
         cursor = Mock()
         _row, preview = _process_hold(
@@ -296,16 +310,22 @@ class CollectRowsDedupeTest(unittest.TestCase):
         )
         self.assertEqual(preview['PRE_HANDLER'], '周星辰（A0004655）')
         self.assertEqual(preview['OA_NUMBER'], 'ET.202610218')
+        self.assertEqual(preview['WO'], 'WO-9')
+        self.assertEqual(_row[10], 'WO-9')
         self.assertEqual(_row[26], 'ET.202610218')
         self.assertEqual(handler.call_args[0][0], 'C1')
-        self.assertEqual(lot_oa.call_args[0][0], 'C1')
+        self.assertEqual(lot_order.call_args[0][0], 'C1')
+        self.assertEqual(handler.call_args.kwargs['oa_cache']['C1'], 'ET.202610218')
         cursor.execute.assert_not_called()
 
-    @patch('app.controllers.hold_info_export_ctrl.lookup_lot_oa', return_value='ET.MP')
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_lot_order',
+        return_value=LotOrder(True, 'ET.MP', 'WO-MP'),
+    )
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='不应调用')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_mp_pre_handler_uses_newest_pie(self, _program, _wafers, handler, _oa):
+    def test_mp_pre_handler_uses_newest_pie(self, _program, _wafers, handler, _order):
         cursor = Mock()
         pie_rows = [
             ('旧PIE', '2026-01-01', 1),
@@ -328,6 +348,8 @@ class CollectRowsDedupeTest(unittest.TestCase):
         )
         self.assertEqual(preview['PRE_HANDLER'], '张三（A0004655）')
         self.assertEqual(preview['OA_NUMBER'], 'ET.MP')
+        self.assertEqual(preview['WO'], 'WO-MP')
+        self.assertEqual(_row[10], 'WO-MP')
         handler.assert_not_called()
         product_call = next(
             call for call in cursor.execute.call_args_list
@@ -370,6 +392,8 @@ class QueryHoldRecordsFilterTest(unittest.TestCase):
         self.assertIn('c.NEXT_OWNER_ID = NVL(p.PRO_ENG_ID, :system_id)', sql)
         self.assertIn('NVL(r.STATUS, 0) <> :closed', sql)
         self.assertIn('c.DISPOSE = :reported', sql)
+        self.assertIn('r.OA', sql)
+        self.assertIn('r.WO', sql)
         self.assertEqual(params['closed'], 99)
         self.assertEqual(params['reported'], 9)
         self.assertNotIn('route_id', params)
@@ -420,6 +444,8 @@ class QueryHoldInfoRecordsTest(unittest.TestCase):
             'station': '',
             'id': 7,
             'ncmr_reported_at': '',
+            'oa': '',
+            'wo': '',
         }])
         self.assertEqual(
             query.call_args.kwargs['row_limit'],
@@ -662,32 +688,40 @@ class QueryHoldRecordsLimitTest(unittest.TestCase):
 
 
 class NcmrSheetTest(unittest.TestCase):
-    def test_eng_and_pqc_only(self):
+    def test_eng_pqc_needs_station_and_future(self):
         from app.controllers.hold_info_export_ctrl import is_eng_prehold_pqc
 
-        self.assertTrue(is_eng_prehold_pqc('ft-eng', 'fpqc'))
-        self.assertTrue(is_eng_prehold_pqc('ENG-MP', 'PQC'))
-        self.assertFalse(is_eng_prehold_pqc('FT-ENG', 'WOQC'))
-        self.assertFalse(is_eng_prehold_pqc('FT-MP', 'FPQC'))
+        self.assertTrue(is_eng_prehold_pqc('ft-eng', 'fpqc', 'future hold'))
+        self.assertTrue(is_eng_prehold_pqc('ENG-MP', 'PQC', 'Reason:FUTURE'))
+        self.assertFalse(is_eng_prehold_pqc('ft-eng', 'fpqc', '普通 hold'))
+        self.assertFalse(is_eng_prehold_pqc('FT-ENG', 'WOQC', 'FUTURE HOLD'))
+        self.assertFalse(is_eng_prehold_pqc('FT-MP', 'FPQC', 'FUTURE HOLD'))
 
     def test_dedupe_then_latest_station_decides_sheet(self):
         from app.controllers.hold_info_export_ctrl import is_eng_prehold_pqc
 
         latest = _latest_hold_per_wafer([
             _hold('C1-01', 'C1', '2026-01-01 00:00:00', 1, route_id='FT-ENG', station='WOQC'),
-            _hold('C1-01', 'C1', '2026-01-03 00:00:00', 2, route_id='FT-ENG', station='FPQC'),
+            _hold(
+                'C1-01', 'C1', '2026-01-03 00:00:00', 2,
+                route_id='FT-ENG', station='FPQC', reason='FUTURE HOLD',
+            ),
         ])
         self.assertEqual([row[8] for row in latest], [2])
-        self.assertTrue(is_eng_prehold_pqc(latest[0][7], latest[0][9]))
+        self.assertTrue(is_eng_prehold_pqc(latest[0][7], latest[0][9], latest[0][4]))
 
-    @patch('app.controllers.hold_info_export_ctrl.lookup_lot_oa', return_value='')
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_lot_order',
+        return_value=LotOrder(ok=True),
+    )
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_preview_marks_eng_pqc_sheet(self, _program, _wafers, _handler, _oa):
+    def test_preview_marks_eng_pqc_sheet(self, _program, _wafers, _handler, _order):
         hold = _hold(
             'C1-09', 'C1', '2026-01-03 00:00:00', 3,
             route='ENGINEERING', route_id='FT-ENG', station='FPQC',
+            reason='FUTURE HOLD',
         )
         _row, preview = _process_hold(
             Mock(), hold, {'merge': {}, 'hold_wafers': {}, 'test_program': {}}, {},
@@ -697,19 +731,24 @@ class NcmrSheetTest(unittest.TestCase):
         self.assertEqual(preview['RECORD_ID'], 3)
         self.assertEqual(preview['NCMR_REPORTED_AT'], '')
 
-    def test_sheet_key_keeps_eng_pqc_and_mp_only(self):
+    def test_sheet_key_splits_eng_other_from_pqc(self):
         from app.controllers.hold_info_export_ctrl import _sheet_key
 
-        self.assertEqual(_sheet_key('FT-ENG', 'FPQC'), 'eng_pqc')
-        self.assertEqual(_sheet_key('ENG-MP', 'PQC'), 'eng_pqc')
-        self.assertEqual(_sheet_key('FT-MP', 'FPQC'), 'engineering')
-        self.assertEqual(_sheet_key('FT-ENG', 'WOQC'), '')
+        self.assertEqual(_sheet_key('FT-ENG', 'FPQC', 'FUTURE HOLD'), 'eng_pqc')
+        self.assertEqual(_sheet_key('ENG-MP', 'PQC', 'future'), 'eng_pqc')
+        self.assertEqual(_sheet_key('FT-ENG', 'FPQC', '普通原因'), 'eng_other')
+        self.assertEqual(_sheet_key('FT-ENG', 'WOQC', 'FUTURE HOLD'), 'eng_other')
+        self.assertEqual(_sheet_key('FT-MP', 'FPQC', 'FUTURE HOLD'), 'engineering')
+        self.assertEqual(_sheet_key('FT-OTHER', 'FPQC', 'FUTURE HOLD'), '')
 
-    @patch('app.controllers.hold_info_export_ctrl.lookup_lot_oa', return_value='')
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_lot_order',
+        return_value=LotOrder(ok=True),
+    )
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_preview_keeps_auto_report_time(self, _program, _wafers, _handler, _oa):
+    def test_preview_keeps_auto_report_time(self, _program, _wafers, _handler, _order):
         from app.controllers.hold_info_export_ctrl import _process_hold
 
         hold = _hold(
@@ -720,6 +759,90 @@ class NcmrSheetTest(unittest.TestCase):
             Mock(), hold, {'merge': {}, 'hold_wafers': {}, 'test_program': {}}, {},
         )
         self.assertEqual(preview['NCMR_REPORTED_AT'], '2026-11-06 10:05:00')
+
+    @patch('app.controllers.hold_info_export_ctrl.lookup_lot_order')
+    @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='周星辰（A0004655）')
+    @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
+    @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
+    def test_stored_wo_skips_lot_order(self, _program, _wafers, handler, lot_order):
+        hold = _hold(
+            'C1-09', 'C1', '2026-01-03 00:00:00', 3, route='ENGINEERING',
+        ) + ('', 'ET.202610218', 'ZJSH05')
+        _row, preview = _process_hold(
+            Mock(), hold, {'merge': {}, 'hold_wafers': {}, 'test_program': {}}, {},
+        )
+        lot_order.assert_not_called()
+        self.assertEqual(preview['WO'], 'ZJSH05')
+        self.assertEqual(preview['OA_NUMBER'], 'ET.202610218')
+        self.assertEqual(_row[10], 'ZJSH05')
+        self.assertEqual(_row[26], 'ET.202610218')
+        self.assertEqual(handler.call_args.kwargs['oa_cache']['C1'], 'ET.202610218')
+
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_lot_order',
+        return_value=LotOrder(True, '', 'WO-ONLY'),
+    )
+    @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
+    @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
+    @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
+    def test_blank_oa_from_lookup_still_has_wo(self, _program, _wafers, _handler, _order):
+        hold = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3)
+        _row, preview = _process_hold(
+            Mock(), hold, {'merge': {}, 'hold_wafers': {}, 'test_program': {}}, {},
+        )
+        self.assertEqual(preview['OA_NUMBER'], '')
+        self.assertEqual(preview['WO'], 'WO-ONLY')
+        self.assertEqual(preview['ORDER_ERROR'], '')
+        self.assertEqual(_row[10], 'WO-ONLY')
+
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_lot_order',
+        return_value=LotOrder(False, error='连接失败'),
+    )
+    @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
+    @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
+    @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
+    def test_lookup_failure_is_not_reportable(self, _program, _wafers, _handler, lot_order):
+        first = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3)
+        second = _hold('C1-10', 'C1', '2026-01-03 01:00:00', 4)
+        caches = {'merge': {}, 'hold_wafers': {}, 'test_program': {}}
+        _row, preview = _process_hold(Mock(), first, caches, {})
+        _process_hold(Mock(), second, caches, {})
+        self.assertEqual(preview['ORDER_ERROR'], '连接失败')
+        self.assertEqual(preview['WO'], '')
+        self.assertEqual(lot_order.call_count, 1)
+
+    def test_groups_eng_by_oa_and_mp_by_wo(self):
+        eng_groups, other_groups, mp_groups, missing, failed = _build_ncmr_groups([
+            {'SHEET': 'eng_pqc', 'RECORD_ID': 1, 'WO': 'W1', 'OA_NUMBER': 'ET.1', 'LOT_KEY': 'L1'},
+            {'SHEET': 'eng_pqc', 'RECORD_ID': 7, 'WO': 'W2', 'OA_NUMBER': 'ET.1', 'LOT_KEY': 'L2'},
+            {'SHEET': 'eng_other', 'RECORD_ID': 8, 'WO': 'W3', 'OA_NUMBER': 'ET.8', 'LOT_KEY': 'L8'},
+            {'SHEET': 'engineering', 'RECORD_ID': 2, 'WO': 'W1', 'OA_NUMBER': 'ET.1', 'LOT_KEY': 'L1'},
+            {'SHEET': 'engineering', 'RECORD_ID': 3, 'WO': 'W1', 'OA_NUMBER': '', 'LOT_KEY': 'L3'},
+            {'SHEET': 'engineering', 'RECORD_ID': 4, 'WO': '', 'ORDER_ERROR': '连接失败', 'LOT_KEY': 'L4'},
+            {'SHEET': 'engineering', 'RECORD_ID': 5, 'WO': 'W9', 'OA_NUMBER': 'ET.9',
+             'LOT_KEY': 'L9', 'NCMR_REPORTED_AT': '2026-11-06 10:05:00'},
+            {'SHEET': '', 'RECORD_ID': 6, 'WO': 'W1', 'OA_NUMBER': 'ET.1', 'LOT_KEY': 'L1'},
+        ])
+        self.assertEqual(missing, 1)
+        self.assertEqual(failed, 1)
+        self.assertEqual(len(eng_groups), 1)
+        self.assertEqual(eng_groups[0]['oa'], 'ET.1')
+        self.assertEqual(eng_groups[0]['record_ids'], [1, 7])
+        self.assertEqual(eng_groups[0]['lot_count'], 2)
+        self.assertTrue(eng_groups[0]['can_report'])
+        self.assertEqual([wo['wo'] for wo in eng_groups[0]['wos']], ['W1', 'W2'])
+        self.assertEqual(len(other_groups), 1)
+        self.assertEqual(other_groups[0]['oa'], 'ET.8')
+        self.assertEqual(other_groups[0]['record_ids'], [])
+        self.assertFalse(other_groups[0]['can_report'])
+        self.assertEqual(other_groups[0]['wos'][0]['lots'][0]['record_ids'], [8])
+        by_wo = {group['wo']: group for group in mp_groups}
+        self.assertEqual(by_wo['W1']['record_ids'], [2, 3])
+        self.assertEqual(by_wo['W1']['lot_count'], 2)
+        self.assertEqual(by_wo['W9']['record_ids'], [])
+        self.assertFalse(by_wo['W9']['can_report'])
+        self.assertEqual(by_wo['']['record_ids'], [])
 
     @patch('app.controllers.hold_info_export_ctrl._find_template', return_value=None)
     @patch('app.controllers.hold_info_export_ctrl._collect_rows')
@@ -774,6 +897,34 @@ class NcmrSheetTest(unittest.TestCase):
         self.assertIn('无效', msg)
         self.assertIsNone(content)
         collect.assert_not_called()
+
+    @patch('app.controllers.hold_info_export_ctrl._find_template', return_value=None)
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_xlsx_exports_eng_other_with_reported_time(self, collect, _template):
+        from io import BytesIO
+        from openpyxl import load_workbook
+
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [['other'], ['eng']],
+            'preview_rows': [
+                {
+                    'SHEET': 'eng_other', 'RECORD_ID': 8,
+                    'NCMR_REPORTED_AT': '2026-11-06 10:05:00',
+                },
+                {'SHEET': 'eng_pqc', 'RECORD_ID': 1},
+            ],
+            'total': 2,
+            'truncated': False,
+        })
+        ok, msg, content = export_hold_info_xlsx(
+            'P1', '2026-01-01', '2026-01-02', sheet='eng_other',
+        )
+        self.assertTrue(ok, msg)
+        book = load_workbook(BytesIO(content))
+        self.assertEqual(book.sheetnames, ['ENG其他Hold'])
+        self.assertEqual(book.active.cell(1, 28).value, '上报时间')
+        self.assertEqual(book.active[2][0].value, 'other')
+        self.assertEqual(book.active[2][1].value, '2026-11-06 10:05:00')
 
 
 class _NcmrResponse:
@@ -1160,6 +1311,205 @@ class NcmrImportPostTest(unittest.TestCase):
         self.assertIn('不能手动上报', msg)
         self.assertIsNone(data)
 
+    def test_eng_other_sheet_is_not_posted_as_a_whole(self):
+        ok, msg, data = import_hold_info_ncmr(
+            'P1', '2026-01-01', '2026-01-02', sheet='eng_other',
+        )
+        self.assertFalse(ok)
+        self.assertIn('按单片上报', msg)
+        self.assertIsNone(data)
+
+    @patch('app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported', return_value=True)
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import', return_value=(True, 'imported', {'count': 1}))
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_eng_other_posts_one_wafer(self, collect, post, mark):
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [_sample_ncmr_row()],
+            'preview_rows': [{
+                'SHEET': 'eng_other', 'RECORD_ID': 8, 'WO': 'W8',
+                'OA_NUMBER': 'ET.8', 'LOT_KEY': '3AL585', 'WAFER_ID': '3AL585-20',
+                'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+            }],
+            'total': 1,
+            'truncated': False,
+        })
+        ok, msg, data = import_ncmr_group([8], 'P1', '2026-01-01', '2026-01-02')
+        self.assertTrue(ok, msg)
+        self.assertIn('3AL585-20', msg)
+        self.assertEqual(data['reported_ids'], [8])
+        post.assert_called_once()
+        mark.assert_called_once()
+
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_eng_other_rejects_more_than_one_wafer(self, collect, post):
+        row = {
+            'SHEET': 'eng_other', 'WO': 'W8', 'OA_NUMBER': 'ET.8',
+            'LOT_KEY': 'L8', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+        }
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [_sample_ncmr_row(), _sample_ncmr_row()],
+            'preview_rows': [
+                dict(row, RECORD_ID=8, WAFER_ID='L8-01'),
+                dict(row, RECORD_ID=9, WAFER_ID='L8-02'),
+            ],
+            'total': 2,
+            'truncated': False,
+        })
+        ok, msg, data = import_ncmr_group([8, 9], 'P1', '2026-01-01', '2026-01-02')
+        self.assertFalse(ok)
+        self.assertIn('一次只能上报一片', msg)
+        self.assertIsNone(data)
+        post.assert_not_called()
+
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_eng_other_rejects_missing_lot(self, collect, post):
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [_sample_ncmr_row()],
+            'preview_rows': [{
+                'SHEET': 'eng_other', 'RECORD_ID': 8, 'WO': 'W8',
+                'OA_NUMBER': '', 'LOT_KEY': '', 'WAFER_ID': 'W-01',
+                'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+            }],
+            'total': 1,
+            'truncated': False,
+        })
+        ok, msg, data = import_ncmr_group([8], 'P1', '2026-01-01', '2026-01-02')
+        self.assertFalse(ok)
+        self.assertIn('缺少 lot', msg)
+        self.assertIsNone(data)
+        post.assert_not_called()
+
+    @patch('app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported', return_value=True)
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import', return_value=(True, 'imported', {'count': 1}))
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_group_posts_one_oa_as_separate_lots(self, collect, post, mark):
+        first = _sample_ncmr_row()
+        second = _sample_ncmr_row()
+        second[7] = '9ZZ001'
+        second[8] = '9ZZ001-01'
+        second[9] = '9ZZ001'
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [first, second],
+            'preview_rows': [
+                {
+                    'SHEET': 'eng_pqc', 'RECORD_ID': 1, 'WO': 'W1',
+                    'OA_NUMBER': 'ET.1', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+                },
+                {
+                    'SHEET': 'eng_pqc', 'RECORD_ID': 2, 'WO': 'W2',
+                    'OA_NUMBER': 'ET.1', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+                },
+            ],
+            'total': 2,
+            'truncated': False,
+        })
+        ok, msg, data = import_ncmr_group(
+            [1, 2], 'P1', '2026-01-01', '2026-01-02',
+        )
+        self.assertTrue(ok, msg)
+        self.assertIn('OA ET.1', msg)
+        self.assertEqual(data['circulation_marked'], 2)
+        self.assertEqual(data['lots_ok'], ['3AL585', '9ZZ001'])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[0].args[0][0][7], '3AL585')
+        self.assertEqual(post.call_args_list[1].args[0][0][7], '9ZZ001')
+        self.assertEqual([call.args[0] for call in mark.call_args_list], [1, 2])
+
+    @patch('app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported', return_value=True)
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
+    def test_partial_lot_failure_marks_only_success(self, post, mark):
+        first = _sample_ncmr_row()
+        second = _sample_ncmr_row()
+        second[7] = '9ZZ001-01'
+        second[9] = '9ZZ001-01'
+
+        def _post(rows):
+            if rows[0][7] == '9ZZ001':
+                return False, 'boom', None
+            return True, 'ok', {'count': 1}
+
+        post.side_effect = _post
+        ok, msg, data = import_ncmr_rows([first, second], [1, 2])
+        self.assertFalse(ok)
+        self.assertIn('3AL585', msg)
+        self.assertIn('9ZZ001', msg)
+        self.assertIn('部分 lot 未上报', msg)
+        self.assertEqual(data['lots_ok'], ['3AL585'])
+        self.assertEqual(data['reported_ids'], [1])
+        self.assertEqual(data['lots_failed'][0]['lot'], '9ZZ001')
+        mark.assert_called_once()
+        self.assertEqual(mark.call_args.args[0], 1)
+
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_group_rejects_mixed_wo(self, collect, post):
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [['a'], ['b']],
+            'preview_rows': [
+                {
+                    'SHEET': 'engineering', 'RECORD_ID': 1, 'WO': 'W1',
+                    'OA_NUMBER': '', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+                },
+                {
+                    'SHEET': 'engineering', 'RECORD_ID': 2, 'WO': 'W2',
+                    'OA_NUMBER': '', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+                },
+            ],
+            'total': 2,
+            'truncated': False,
+        })
+        ok, msg, data = import_ncmr_group([1, 2], 'P1', '2026-01-01', '2026-01-02')
+        self.assertFalse(ok)
+        self.assertIn('不一致', msg)
+        self.assertIsNone(data)
+        post.assert_not_called()
+
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_group_rejects_missing_record(self, collect, post):
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [['a']],
+            'preview_rows': [
+                {
+                    'SHEET': 'engineering', 'RECORD_ID': 1, 'WO': 'W1',
+                    'OA_NUMBER': '', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+                },
+            ],
+            'total': 1,
+            'truncated': False,
+        })
+        ok, msg, data = import_ncmr_group([1, 9], 'P1', '2026-01-01', '2026-01-02')
+        self.assertFalse(ok)
+        self.assertIn('请重新预览', msg)
+        self.assertIsNone(data)
+        post.assert_not_called()
+
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
+    @patch('app.controllers.hold_info_export_ctrl._collect_rows')
+    def test_group_rejects_mixed_sheet(self, collect, post):
+        collect.return_value = (True, 'ok', {
+            'excel_rows': [_sample_ncmr_row(), _sample_ncmr_row()],
+            'preview_rows': [
+                {
+                    'SHEET': 'eng_pqc', 'RECORD_ID': 1, 'WO': 'W1',
+                    'OA_NUMBER': 'ET.1', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+                },
+                {
+                    'SHEET': 'engineering', 'RECORD_ID': 2, 'WO': 'W1',
+                    'OA_NUMBER': 'ET.1', 'ORDER_ERROR': '', 'NCMR_REPORTED_AT': '',
+                },
+            ],
+            'total': 2,
+            'truncated': False,
+        })
+        ok, msg, data = import_ncmr_group([1, 2], 'P1', '2026-01-01', '2026-01-02')
+        self.assertFalse(ok)
+        self.assertIn('ENG 和 MP', msg)
+        self.assertIsNone(data)
+        post.assert_not_called()
+
 
 def _eng_future_record():
     return {
@@ -1224,6 +1574,99 @@ class BackendNcmrApiTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn('令牌', msg)
         urlopen.assert_not_called()
+
+
+class EngPqcScheduleTest(unittest.TestCase):
+    @patch('app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported', return_value=True)
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import', return_value=(True, 'ok', {'count': 1}))
+    @patch('app.controllers.hold_info_export_ctrl._process_hold')
+    @patch('app.controllers.hold_info_export_ctrl._query_unreported_eng_pqc')
+    @patch('app.controllers.hold_info_export_ctrl._connect')
+    def test_skips_missing_wo_and_posts_the_rest(self, connect, query, process, post, mark):
+        from app.controllers.hold_info_export_ctrl import report_unreported_eng_pqc
+
+        connect.return_value = MagicMock()
+        query.return_value = [('ready',), ('skip',)]
+
+        def _process(_cursor, hold, _caches, _extras, hold_time=None):
+            if hold == ('skip',):
+                return ['x'], {
+                    'RECORD_ID': 2, 'WO': '', 'LOT_KEY': 'L2',
+                    'WAFER_ID': 'L2-01', 'ORDER_ERROR': '',
+                }
+            return _sample_ncmr_row(), {
+                'RECORD_ID': 1, 'WO': 'W1', 'LOT_KEY': '3AL585',
+                'WAFER_ID': '3AL585-20', 'ORDER_ERROR': '',
+            }
+
+        process.side_effect = _process
+        ok, msg, data = report_unreported_eng_pqc()
+        self.assertTrue(ok, msg)
+        self.assertEqual(data['skipped'], 1)
+        self.assertEqual(data['reported_ids'], [1])
+        self.assertEqual(post.call_count, 1)
+        mark.assert_called_once()
+        self.assertEqual(mark.call_args.args[0], 1)
+        connect.return_value.close.assert_called_once()
+
+    @patch('app.controllers.hold_info_export_ctrl._record_table', return_value='FT_HOLD_RECORD')
+    def test_unreported_query_requires_pqc_station_and_future(self, _table):
+        from app.controllers.hold_info_export_ctrl import _query_unreported_eng_pqc
+
+        cursor = Mock()
+        cursor.fetchall.return_value = []
+        _query_unreported_eng_pqc(cursor)
+        sql = cursor.execute.call_args[0][0]
+        self.assertIn("IN ('FPQC', 'PQC')", sql)
+        self.assertIn("LIKE '%FUTURE%'", sql)
+        self.assertNotIn("LIKE '%PQC%'", sql)
+
+    def test_scheduler_binds_seven_and_nineteen(self):
+        import schedule
+        from app.backend_schedule.FT_ENG_PQC_NCMR_sche import EngPqcNcmrScheduler
+
+        sch = schedule.Scheduler()
+        EngPqcNcmrScheduler()._install(sch)
+        times = sorted(job.at_time.strftime('%H:%M') for job in sch.jobs)
+        self.assertEqual(times, ['07:00', '19:00'])
+
+    def test_missing_file_defaults_on_and_toggle_persists(self):
+        import os
+        import tempfile
+        from app.backend_schedule import FT_ENG_PQC_NCMR_sche as sche
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'flag')
+            with patch.object(sche, '_state_path', return_value=path):
+                self.assertTrue(sche.auto_report_enabled())
+                self.assertFalse(sche.set_auto_report_enabled(False))
+                with open(path, encoding='utf-8') as handle:
+                    self.assertEqual(handle.read(), '0')
+                self.assertFalse(sche.auto_report_enabled())
+                self.assertTrue(sche.set_auto_report_enabled(True))
+                self.assertTrue(sche.auto_report_enabled())
+
+    @patch('app.controllers.hold_info_export_ctrl.report_unreported_eng_pqc', return_value=(True, 'ok', {}))
+    def test_job_skips_when_switch_is_off(self, report):
+        from app.backend_schedule.FT_ENG_PQC_NCMR_sche import EngPqcNcmrScheduler
+
+        with patch(
+            'app.backend_schedule.FT_ENG_PQC_NCMR_sche.auto_report_enabled',
+            return_value=False,
+        ):
+            EngPqcNcmrScheduler()._run_job()
+        report.assert_not_called()
+
+    @patch('app.controllers.hold_info_export_ctrl.report_unreported_eng_pqc', return_value=(True, 'ok', {}))
+    def test_job_runs_when_switch_is_on(self, report):
+        from app.backend_schedule.FT_ENG_PQC_NCMR_sche import EngPqcNcmrScheduler
+
+        with patch(
+            'app.backend_schedule.FT_ENG_PQC_NCMR_sche.auto_report_enabled',
+            return_value=True,
+        ):
+            EngPqcNcmrScheduler()._run_job()
+        report.assert_called_once_with()
 
 
 class EngFutureNcmrTest(unittest.TestCase):
@@ -1315,7 +1758,7 @@ class NcmrReportedStatusTest(unittest.TestCase):
         from app.utils.database_util import mark_hold_record_ncmr_reported
 
         cursor = MagicMock()
-        cursor.fetchone.side_effect = [(0, 55), (15,), (100,)]
+        cursor.fetchone.side_effect = [(0, 55), (100,)]
         cursor.rowcount = 1
         connect.return_value = self._connect(cursor)
         self.assertTrue(mark_hold_record_ncmr_reported(8))
@@ -1327,7 +1770,7 @@ class NcmrReportedStatusTest(unittest.TestCase):
             if len(call.args) > 1 and isinstance(call.args[1], dict)
             and call.args[1].get('dispose') == DISPOSE_NCMR_REPORTED
         )
-        self.assertEqual(insert_params['next_owner_id'], 15)
+        self.assertEqual(insert_params['next_owner_id'], 181)
         self.assertEqual(insert_params['dispose_type'], 9)
         connect.return_value.commit.assert_called_once()
 
@@ -1346,7 +1789,7 @@ class NcmrReportedStatusTest(unittest.TestCase):
         from app.utils.database_util import mark_hold_record_ncmr_reported
 
         cursor = MagicMock()
-        cursor.fetchone.side_effect = [(5, 55), (15,), (100,)]
+        cursor.fetchone.side_effect = [(5, 55), (100,)]
         cursor.rowcount = 1
         connect.return_value = self._connect(cursor)
         self.assertTrue(mark_hold_record_ncmr_reported(8))
@@ -1379,6 +1822,73 @@ class NcmrReportedStatusTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn('已上报', msg)
         self.assertIsNone(data)
+
+
+class EngPqcAutoReportRouteTest(unittest.TestCase):
+    def _client(self, role):
+        import os
+        from flask import Flask
+        from app.routes.hold_report_routes import hold_report_bp
+        from app.utils.auth_decorators import ROLE_ROOT
+
+        template_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', 'app', 'templates')
+        )
+        app = Flask(__name__, template_folder=template_dir)
+        app.secret_key = 'test-auto-report'
+        app.config['TESTING'] = True
+        app.register_blueprint(hold_report_bp)
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = 1
+            sess['user_name'] = 'root' if role == ROLE_ROOT else 'eng'
+            sess['role'] = role
+            sess['must_change_password'] = False
+        return client
+
+    def test_root_page_has_switch_and_engineer_page_does_not(self):
+        from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_ROOT
+
+        root_html = self._client(ROLE_ROOT).get('/admin/hold/export').get_data(as_text=True)
+        eng_html = self._client(ROLE_ENGINEER).get('/admin/hold/export').get_data(as_text=True)
+        self.assertIn('id="auto_report"', root_html)
+        self.assertNotIn('id="auto_report"', eng_html)
+
+    def test_root_toggle_and_engineer_forbidden(self):
+        from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_ROOT
+
+        with patch(
+            'app.backend_schedule.FT_ENG_PQC_NCMR_sche.auto_report_enabled',
+            return_value=True,
+        ), patch(
+            'app.backend_schedule.FT_ENG_PQC_NCMR_sche.set_auto_report_enabled',
+            return_value=False,
+        ) as setter:
+            root = self._client(ROLE_ROOT)
+            got = root.get('/admin/hold/api/hold_info_export/auto_report')
+            self.assertEqual(got.status_code, 200)
+            self.assertTrue(got.get_json()['data']['enabled'])
+            saved = root.post(
+                '/admin/hold/api/hold_info_export/auto_report',
+                json={'enabled': False},
+            )
+            self.assertEqual(saved.status_code, 200)
+            self.assertFalse(saved.get_json()['data']['enabled'])
+            setter.assert_called_once_with(False)
+            denied = self._client(ROLE_ENGINEER).post(
+                '/admin/hold/api/hold_info_export/auto_report',
+                json={'enabled': True},
+            )
+            self.assertEqual(denied.status_code, 403)
+
+    def test_toggle_rejects_non_bool(self):
+        from app.utils.auth_decorators import ROLE_ROOT
+
+        resp = self._client(ROLE_ROOT).post(
+            '/admin/hold/api/hold_info_export/auto_report',
+            json={'enabled': 'false'},
+        )
+        self.assertEqual(resp.status_code, 400)
 
 
 if __name__ == '__main__':

@@ -7,9 +7,10 @@
   3. 合批片（LOT/WAFER 后缀位数>2）查 SPLIT_MERGE_HISTORY 还原源 lot / wafer
   4. 补 TEST_WAFER.TEST_PROGRAM
   5. 同一 wafer 多条 record 只保留最新一条（相同时间取 ID 更大的）；Hold Time 统一用该 lot 最早的 HOLD_DTTM
-  6. 预处置人：ROUTE 含 ENG 时按 lot 查 OA（形如「周星辰（A0004655）」）；
+  6. 预处置人：ROUTE 含 ENG 时按 OA 查姓名（形如「周星辰（A0004655）」）；
      含 MP 的 PRODUCTION 用该型号族 PRODUCT_INFO.PIE，按 USERS 补成同样的「姓名（工号）」
-  7. 末列 OA单号按 lot 查 MES get_lot_order 的 data.OA；没有记录留空
+  7. OA、WO 优先用 FT_HOLD_RECORD 已有值。没有工单号时才按 lot 请求
+     get_lot_order（默认 http://127.0.0.1:6969）。OA 允许为空。查询失败的行不能上报。
 """
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -28,10 +29,12 @@ from app.utils.database_util import (
     mark_hold_record_ncmr_reported, normalize_lot_id,
     resolve_circulation_table, resolve_hold_record_table,
 )
+from app.backend_schedule.hold_merge_rules import is_eng_pqc_future_hold
 from app.controllers.product_ctrl import family_product_ids
 from app.utils.ncmr_import import (
     DEFAULTS,
     NCMR_TIMEOUT,
+    align_ncmr_row_lot,
     build_ncmr_import_body,
     ncmr_row_from_hold_record,
     post_ncmr_import,
@@ -43,6 +46,7 @@ from app.utils.pre_handler_lookup import (
     format_work_code,
     looks_like_work_code,
     lookup_lot_oa,
+    lookup_lot_order,
     lookup_pre_handler,
     split_pre_handler,
 )
@@ -50,6 +54,7 @@ from app.utils.pre_handler_lookup import (
 EXPORT_MAX_ROWS = 5000
 PREVIEW_MAX_ROWS = 100
 SHEET_ENG_PQC = 'ENG预Hold PQC'
+SHEET_ENG_OTHER = 'ENG其他Hold'
 SHEET_ENGINEERING = 'MP工程测试Hold'
 _ROUTE_CHOICES = ('', 'ENG', 'MP')
 # 客户端拉原始行后再去重；先截断会和网页导出（先去重再截断）不一致。
@@ -66,17 +71,17 @@ EXCEL_HEADERS = [
 ]
 
 
-def is_eng_prehold_pqc(route_id, station):
-    """ROUTE_ID 含 ENG 且 STATION 含 PQC。大小写不敏感。"""
-    route = (route_id or '').strip().upper()
-    site = (station or '').strip().upper()
-    return 'ENG' in route and 'PQC' in site
+def is_eng_prehold_pqc(route_id, station, reason=''):
+    """ENG 路线 + 站点 FPQC/PQC + 原因含 FUTURE。大小写不敏感。"""
+    return is_eng_pqc_future_hold(route_id, station, reason)
 
 
-def _sheet_key(route_id, station):
-    """ENG 且 PQC 进预 Hold 表；不含 ENG 的 MP route 进 MP 工程测试表。其余不进任何表。"""
-    if is_eng_prehold_pqc(route_id, station):
+def _sheet_key(route_id, station, reason=''):
+    """三条都满足进预 Hold 表；其余 ENG 进其他 Hold；不含 ENG 的 MP 进工程测试表。"""
+    if is_eng_prehold_pqc(route_id, station, reason):
         return 'eng_pqc'
+    if _is_engineering_route(route_id):
+        return 'eng_other'
     if _is_mp_route(route_id):
         return 'engineering'
     return ''
@@ -162,7 +167,9 @@ def _query_hold_records(
             CASE
                 WHEN c.DISPOSE = :reported
                 THEN TO_CHAR(c.DISPOSE_DTTM, 'YYYY-MM-DD HH24:MI:SS')
-            END AS NCMR_REPORTED_AT
+            END AS NCMR_REPORTED_AT,
+            r.OA,
+            r.WO
         FROM {record_table} r
         INNER JOIN {circ_table} c
             ON c.ID = r.LAST_CIRCULATION_ID
@@ -363,6 +370,36 @@ def _lookup_employee_no(cursor, name: str) -> str:
     return codes[0]
 
 
+def _hold_text(hold, index):
+    if len(hold) <= index or hold[index] is None:
+        return ''
+    return str(hold[index]).strip()
+
+
+def _remember_oa(caches, lot_id, oa):
+    lot = (lot_id or '').strip()
+    if not lot:
+        return
+    caches.setdefault('lot_oa', {})[lot] = oa or ''
+
+
+def _resolve_lot_order(lot_id, stored_oa, stored_wo, caches):
+    """表里已有工单号则不再请求。失败返回错误文案，空 OA 不算失败。"""
+    lot = (lot_id or '').strip()
+    if stored_wo:
+        _remember_oa(caches, lot, stored_oa)
+        return stored_oa or '', stored_wo, ''
+    cache = caches.setdefault('lot_order', {})
+    if lot not in cache:
+        cache[lot] = lookup_lot_order(lot)
+    order = cache[lot]
+    if not order.ok:
+        caches.setdefault('lot_oa', {}).setdefault(lot, '')
+        return '', '', order.error or 'OA/WO 查询失败'
+    _remember_oa(caches, lot, order.oa)
+    return order.oa or '', order.wo or '', ''
+
+
 def _pre_handler_for(cursor, route, lot_id, product_id, caches):
     """ENG 走 OA；MP 用型号 PIE。"""
     if _is_engineering_route(route):
@@ -435,7 +472,9 @@ def _process_hold(cursor, hold, caches, extras, hold_time=None):
     except (TypeError, ValueError):
         record_id = None
     station = str(hold[9] or '').strip() if len(hold) > 9 else ''
-    reported_at = str(hold[10]).strip() if len(hold) > 10 and hold[10] else ''
+    reported_at = _hold_text(hold, 10)
+    stored_oa = _hold_text(hold, 11)
+    stored_wo = _hold_text(hold, 12)
 
     product = product_id.split('-')[0] if product_id else ''
     expanded = expand_display_wafer_ids(wafer_id, lot_id)
@@ -467,9 +506,15 @@ def _process_hold(cursor, hold, caches, extras, hold_time=None):
     source_lots = sorted(source_lots_set)
     source_wafers = sorted(source_wafers_set)
     hold_wafers = sorted(hold_wafers_set)
-    oa_number = lookup_lot_oa(lot_id, caches.setdefault('lot_oa', {}))
+    oa_number, wo, order_error = _resolve_lot_order(
+        lot_id, stored_oa, stored_wo, caches,
+    )
     pre_handler = _pre_handler_for(cursor, route, lot_id, product_id, caches)
     lot_str = '/'.join(source_lots)
+    lot_key = normalize_lot_id(lot_id)
+    if not lot_key and source_lots:
+        lot_key = source_lots[0]
+    ncmr_lot = lot_key or lot_str
     hold_wafer_list_str = format_wafer_list(hold_wafers)
     wafer_list_str = format_wafer_list(source_wafers)
     if not hold_wafer_list_str:
@@ -483,10 +528,10 @@ def _process_hold(cursor, hold, caches, extras, hold_time=None):
         DEFAULTS['factory'],
         extras.get('area') or DEFAULTS['area'],
         route or '',
-        lot_str,
+        ncmr_lot,
         wafer_id,
-        lot_str,
-        None,
+        ncmr_lot,
+        wo or None,
         DEFAULTS['stage'],
         hold_wafer_list_str,
         wafer_list_str,
@@ -514,13 +559,16 @@ def _process_hold(cursor, hold, caches, extras, hold_time=None):
         'ROUTE_ID': route_id,
         'STATION': station,
         'RECORD_ID': record_id,
-        'SHEET': _sheet_key(route_id, station),
+        'SHEET': _sheet_key(route_id, station, reason),
         'LOT_STR': lot_str,
+        'LOT_KEY': ncmr_lot,
         'HOLD_WAFER_LIST': hold_wafer_list_str,
         'WAFER_LIST': wafer_list_str,
         'TEST_PROGRAM': test_pro,
         'PRE_HANDLER': pre_handler,
         'OA_NUMBER': oa_number,
+        'WO': wo,
+        'ORDER_ERROR': order_error,
         'NCMR_REPORTED_AT': reported_at,
     }
     return row, preview
@@ -686,12 +734,24 @@ def preview_hold_info_export(
     )
     if not ok:
         return False, msg, None
-    eng_preview, engineering_preview = _partition_preview(payload['preview_rows'])
+    eng_preview, other_preview, engineering_preview = _partition_preview(
+        payload['preview_rows'],
+    )
+    eng_groups, other_groups, engineering_groups, missing_wo, order_failed = (
+        _build_ncmr_groups(payload['preview_rows'])
+    )
     return True, '查询成功', {
         'items': payload['preview_rows'],
         'eng_pqc': eng_preview,
+        'eng_other': other_preview,
         'engineering': engineering_preview,
+        'eng_groups': eng_groups,
+        'eng_other_groups': other_groups,
+        'engineering_groups': engineering_groups,
+        'missing_wo_total': missing_wo,
+        'order_failed_total': order_failed,
         'eng_pqc_total': len(eng_preview),
+        'eng_other_total': len(other_preview),
         'engineering_total': len(engineering_preview),
         'total': payload['total'],
         'shown': len(payload['preview_rows']),
@@ -719,16 +779,167 @@ def _find_template():
     return None
 
 
+def _preview_lot_key(preview):
+    key = str(preview.get('LOT_KEY') or '').strip()
+    if key:
+        return key
+    text = str(preview.get('LOT_STR') or '').strip()
+    if '/' in text:
+        text = text.split('/', 1)[0].strip()
+    return normalize_lot_id(text) or text
+
+
+def _reportable_record_id(preview):
+    """未上报、有工单号、有 lot 的记录才能进入上报按钮。"""
+    if not isinstance(preview, dict):
+        return None
+    if preview.get('NCMR_REPORTED_AT') or preview.get('ORDER_ERROR'):
+        return None
+    if not str(preview.get('WO') or '').strip():
+        return None
+    if not _preview_lot_key(preview):
+        return None
+    try:
+        rid = int(preview.get('RECORD_ID'))
+    except (TypeError, ValueError):
+        return None
+    if rid <= 0:
+        return None
+    return rid
+
+
+def _lot_nodes(lot_map):
+    lots = []
+    for lot in sorted(lot_map):
+        wafers = lot_map[lot]
+        ids = []
+        for preview in wafers:
+            rid = _reportable_record_id(preview)
+            if rid is not None:
+                ids.append(rid)
+        lots.append({
+            'lot': lot,
+            'record_ids': ids,
+            'count': len(wafers),
+            'wafers': wafers,
+        })
+    return lots
+
+
+def _report_ids_and_lots(lots):
+    ids = []
+    seen_lots = []
+    for lot in lots:
+        lot_ids = lot.get('record_ids') or []
+        if not lot_ids:
+            continue
+        ids.extend(lot_ids)
+        name = lot.get('lot') or ''
+        if name and name not in seen_lots:
+            seen_lots.append(name)
+    return ids, seen_lots
+
+
+def _nest_eng_groups(rows, oa_report=True):
+    """ENG：OA → 工单 → lot → wafer。预 Hold 的上报按钮挂在 OA 上。
+
+    其他 Hold 按片上报，OA 上不挂 record_ids。
+    """
+    tree = {}
+    for preview in rows:
+        oa = str(preview.get('OA_NUMBER') or '').strip()
+        wo = str(preview.get('WO') or '').strip()
+        lot = _preview_lot_key(preview) or '（无 lot）'
+        tree.setdefault(oa, {}).setdefault(wo, {}).setdefault(lot, []).append(preview)
+    groups = []
+    for oa in sorted(tree):
+        wos = []
+        for wo in sorted(tree[oa]):
+            wos.append({'wo': wo, 'lots': _lot_nodes(tree[oa][wo])})
+        flat_lots = [lot for wo in wos for lot in wo['lots']]
+        record_ids, lot_names = _report_ids_and_lots(flat_lots)
+        if not oa_report:
+            record_ids = []
+            lot_names = []
+        groups.append({
+            'oa': oa,
+            'wos': wos,
+            'record_ids': record_ids,
+            'count': len(record_ids),
+            'lot_count': len(lot_names),
+            'can_report': bool(record_ids),
+        })
+    return groups
+
+
+def _nest_mp_groups(rows):
+    """MP：工单 → lot → wafer。网页不展示这层结构，按片平铺，每行一个上报按钮。"""
+    tree = {}
+    for preview in rows:
+        wo = str(preview.get('WO') or '').strip()
+        lot = _preview_lot_key(preview) or '（无 lot）'
+        tree.setdefault(wo, {}).setdefault(lot, []).append(preview)
+    groups = []
+    for wo in sorted(tree):
+        lots = _lot_nodes(tree[wo])
+        record_ids, lot_names = _report_ids_and_lots(lots)
+        groups.append({
+            'wo': wo,
+            'lots': lots,
+            'record_ids': record_ids,
+            'count': len(record_ids),
+            'lot_count': len(lot_names),
+            'can_report': bool(record_ids),
+        })
+    return groups
+
+
+def _build_ncmr_groups(preview_rows):
+    """ENG 按 OA 分层，MP 按工单分层。缺工单或查询失败的行只展示，不进上报按钮。"""
+    eng_rows = []
+    other_rows = []
+    mp_rows = []
+    missing = 0
+    failed = 0
+    for preview in preview_rows or []:
+        sheet = preview.get('SHEET')
+        if sheet == 'eng_pqc':
+            eng_rows.append(preview)
+        elif sheet == 'eng_other':
+            other_rows.append(preview)
+        elif sheet == 'engineering':
+            mp_rows.append(preview)
+        else:
+            continue
+        if preview.get('NCMR_REPORTED_AT'):
+            continue
+        wo = str(preview.get('WO') or '').strip()
+        if preview.get('ORDER_ERROR') or not wo:
+            missing += 1
+            if preview.get('ORDER_ERROR'):
+                failed += 1
+    return (
+        _nest_eng_groups(eng_rows),
+        _nest_eng_groups(other_rows, oa_report=False),
+        _nest_mp_groups(mp_rows),
+        missing,
+        failed,
+    )
+
+
 def _partition_preview(preview_rows):
     eng_rows = []
+    other_rows = []
     engineering_rows = []
     for preview in preview_rows or []:
         sheet = preview.get('SHEET')
         if sheet == 'eng_pqc':
             eng_rows.append(preview)
+        elif sheet == 'eng_other':
+            other_rows.append(preview)
         elif sheet == 'engineering':
             engineering_rows.append(preview)
-    return eng_rows, engineering_rows
+    return eng_rows, other_rows, engineering_rows
 
 
 def _normalize_engineering_ids(engineering_ids):
@@ -754,22 +965,25 @@ def _normalize_engineering_ids(engineering_ids):
 
 def _select_export_rows(excel_rows, preview_rows, engineering_ids):
     eng_rows = []
+    other_rows = []
     node_rows = []
     for excel, preview in zip(excel_rows, preview_rows):
         sheet = preview.get('SHEET')
-        if sheet == 'eng_pqc':
+        if sheet in ('eng_pqc', 'eng_other'):
             reported = preview.get('NCMR_REPORTED_AT') or None
-            eng_rows.append(list(excel) + [reported])
+            target = eng_rows if sheet == 'eng_pqc' else other_rows
+            target.append(list(excel) + [reported])
             continue
         if sheet != 'engineering':
             continue
         if engineering_ids is None or preview.get('RECORD_ID') in engineering_ids:
             node_rows.append(excel)
-    return eng_rows, node_rows
+    return eng_rows, other_rows, node_rows
 
 
 _SHEET_TITLES = {
     'eng_pqc': SHEET_ENG_PQC,
+    'eng_other': SHEET_ENG_OTHER,
     'engineering': SHEET_ENGINEERING,
 }
 
@@ -796,7 +1010,7 @@ def _build_export_workbook(rows, title):
         sheet = wb.active
         sheet.title = title
         sheet.append(list(EXCEL_HEADERS))
-    if title == SHEET_ENG_PQC:
+    if title in (SHEET_ENG_PQC, SHEET_ENG_OTHER):
         sheet.cell(1, len(EXCEL_HEADERS) + 1, '上报时间')
     for row in rows:
         sheet.append(row)
@@ -836,11 +1050,15 @@ def _sheet_export_rows(
     if not ok:
         return False, msg, None, None, None
 
-    eng_rows, node_rows = _select_export_rows(
+    eng_rows, other_rows, node_rows = _select_export_rows(
         payload['excel_rows'], payload['preview_rows'], id_set,
     )
     title = _SHEET_TITLES[sheet_key]
-    rows = eng_rows if sheet_key == 'eng_pqc' else node_rows
+    rows = {
+        'eng_pqc': eng_rows,
+        'eng_other': other_rows,
+        'engineering': node_rows,
+    }[sheet_key]
     return True, 'ok', rows, title, payload
 
 
@@ -928,29 +1146,114 @@ def _write_ncmr_circulations(record_ids):
     return note, marked
 
 
+def _post_ncmr_by_lot(pairs):
+    """按 lot 分批调用 NCMR。某一 lot 失败时，已经成功的 lot 仍然回写流转。
+
+    pairs 是 (导出行, record_id 或 None)。返回 (全部成功, 说明, data)。
+    """
+    if not pairs:
+        return False, '没有可上报的行', None
+    buckets = {}
+    order = []
+    try:
+        for row, rid in pairs:
+            key, cells = align_ncmr_row_lot(row)
+            label = key or ''
+            if label not in buckets:
+                buckets[label] = []
+                order.append(label)
+            buckets[label].append((cells, rid))
+    except ValueError as exc:
+        return False, str(exc), None
+
+    lots_ok = []
+    lots_failed = []
+    reported_ids = []
+    marked = 0
+    posted_rows = 0
+    notes = []
+    for label in order:
+        items = buckets[label]
+        rows = [cells for cells, _rid in items]
+        ids = []
+        for _cells, rid in items:
+            if rid is None:
+                continue
+            try:
+                rid = int(rid)
+            except (TypeError, ValueError):
+                continue
+            if rid > 0 and rid not in ids:
+                ids.append(rid)
+        if not label:
+            lots_failed.append({'lot': '', 'msg': '缺少 lot'})
+            notes.append('缺少 lot，未上报')
+            continue
+        ok, msg, _data = post_ncmr_import(rows)
+        if not ok:
+            lots_failed.append({'lot': label, 'msg': msg})
+            notes.append(f'lot {label} 失败：{msg}')
+            continue
+        note, count = _write_ncmr_circulations(ids)
+        marked += count
+        reported_ids.extend(ids)
+        posted_rows += len(rows)
+        lots_ok.append(label)
+        notes.append(f'lot {label} 已上报 {len(rows)} 条{note}')
+    data = {
+        'count': posted_rows,
+        'lots_ok': lots_ok,
+        'lots_failed': lots_failed,
+        'reported_ids': reported_ids,
+        'circulation_marked': marked,
+    }
+    summary = '；'.join(notes)
+    if lots_failed:
+        prefix = '部分 lot 未上报。' if lots_ok else ''
+        return False, f'{prefix}{summary}', data
+    return True, summary or f'已上报 {posted_rows} 条', data
+
+
 def import_ncmr_rows(rows, record_ids=None):
-    """客户端已组装好的当前表。成功后按 record_ids 写「已上报」流转。"""
+    """客户端已组装好的行。按 lot 分批上报，成功的 lot 写「已上报」流转。"""
     if isinstance(rows, (str, bytes)) or not isinstance(rows, list):
         return False, '上报行无效', None
-    ok, msg, data = post_ncmr_import(rows)
-    if not ok:
-        return False, msg, None
-    note, marked = _write_ncmr_circulations(record_ids)
-    data = dict(data or {})
-    data['circulation_marked'] = marked
-    return True, f'{msg}{note}', data
+    if record_ids is None:
+        pairs = [(row, None) for row in rows]
+    else:
+        if isinstance(record_ids, (str, bytes)) or not isinstance(record_ids, (list, tuple)):
+            return False, 'record_ids无效', None
+        if len(record_ids) != len(rows):
+            return False, '上报行与记录条数不一致', None
+        pairs = []
+        seen = set()
+        for row, raw in zip(rows, record_ids):
+            try:
+                rid = int(raw)
+            except (TypeError, ValueError):
+                return False, 'record_ids无效', None
+            if rid <= 0 or rid in seen:
+                return False, 'record_ids无效', None
+            seen.add(rid)
+            pairs.append((row, rid))
+    return _post_ncmr_by_lot(pairs)
 
 
 def import_hold_info_ncmr(
     product_id, start_dttm, end_dttm, lot_id='', route_id='',
     owner_eng_id=None, engineering_ids=None, sheet='', **extras,
 ):
-    """网页按筛选和勾选重新取当前表，再上报。ENG 预 Hold 只展示，不在这里上报。"""
+    """网页按筛选和勾选重新取 MP 表，再按 lot 分批上报。
+
+    ENG 预 Hold 由定时任务上报。ENG 其他 Hold 只按单片走 import_ncmr_group。
+    """
     ok, msg, sheet_key = _normalize_sheet(sheet)
     if not ok:
         return False, msg, None
     if sheet_key == 'eng_pqc':
         return False, 'ENG预Hold PQC 由系统自动上报，不能手动上报', None
+    if sheet_key == 'eng_other':
+        return False, 'ENG其他Hold 按单片上报，不能整表上报', None
     ok, msg, rows, title, payload = _sheet_export_rows(
         product_id, start_dttm, end_dttm, lot_id=lot_id, route_id=route_id,
         owner_eng_id=owner_eng_id, engineering_ids=engineering_ids,
@@ -960,17 +1263,193 @@ def import_hold_info_ncmr(
         return False, msg, None
     if not rows:
         return False, '没有可上报的行', None
-    ok, msg, data = post_ncmr_import(rows)
+    wanted = set(_reported_record_ids(
+        (payload or {}).get('preview_rows'), engineering_ids,
+    ))
+    pairs = []
+    for excel, preview in zip(payload['excel_rows'], payload['preview_rows']):
+        try:
+            rid = int(preview.get('RECORD_ID'))
+        except (TypeError, ValueError):
+            continue
+        if rid not in wanted:
+            continue
+        pairs.append((excel, rid))
+    ok, msg, data = _post_ncmr_by_lot(pairs)
+    if data is None:
+        return False, msg, None
+    return ok, f'{msg}（{title}）', data
+
+
+def import_ncmr_group(
+    record_ids, product_id, start_dttm, end_dttm, lot_id='', route_id='',
+    owner_eng_id=None, **extras,
+):
+    """按一组 record 重新取仍在工程师节点上的行。
+
+    ENG 预 Hold 必须是同一个 OA，MP 必须是同一个工单。
+    ENG 其他 Hold 一次只上报一片。提交时再按 lot 拆开。
+    """
+    ids = _clean_record_ids(record_ids)
+    if not ids:
+        return False, '没有可上报的记录', None
+    if len(ids) > EXPORT_MAX_ROWS:
+        return False, f'一次最多 {EXPORT_MAX_ROWS} 条', None
+    ok, msg, parsed = _parse_filters(
+        product_id, start_dttm, end_dttm, lot_id=lot_id, route_id=route_id,
+    )
     if not ok:
         return False, msg, None
-    note, marked = _write_ncmr_circulations(
-        _reported_record_ids(
-            (payload or {}).get('preview_rows'), engineering_ids,
-        ),
+    product_id, start, end, lot_id, route_id = parsed
+    ok, msg = _ensure_owned_product(product_id, owner_eng_id)
+    if not ok:
+        return False, msg, None
+    ok, msg, payload = _collect_rows(
+        product_id, start, end, extras, EXPORT_MAX_ROWS,
+        lot_id=lot_id, route_id=route_id,
     )
-    data = dict(data or {})
-    data['circulation_marked'] = marked
-    return True, f'{msg}（{len(rows)} 条，{title}）{note}', data
+    if not ok:
+        return False, msg, None
+    wanted = set(ids)
+    pairs = []
+    found = set()
+    sheets = set()
+    wos = set()
+    oas = set()
+    only_preview = None
+    for excel, preview in zip(payload['excel_rows'], payload['preview_rows']):
+        try:
+            rid = int(preview.get('RECORD_ID'))
+        except (TypeError, ValueError):
+            continue
+        if rid not in wanted:
+            continue
+        sheet = preview.get('SHEET')
+        if sheet not in ('eng_pqc', 'eng_other', 'engineering'):
+            return False, '包含不能上报的记录，请重新预览', None
+        if preview.get('NCMR_REPORTED_AT'):
+            return False, '包含已上报记录，请重新预览', None
+        if preview.get('ORDER_ERROR'):
+            return False, f"OA/WO 查询失败，不能上报：{preview.get('ORDER_ERROR')}", None
+        wo = str(preview.get('WO') or '').strip()
+        if not wo:
+            return False, '缺少工单号，不能上报', None
+        found.add(rid)
+        pairs.append((excel, rid))
+        sheets.add(sheet)
+        wos.add(wo)
+        oas.add(str(preview.get('OA_NUMBER') or '').strip())
+        only_preview = preview
+    if found != wanted:
+        return False, '部分记录已不在可上报范围，请重新预览', None
+    if len(sheets) != 1:
+        return False, '不能把 ENG 和 MP 放在同一次上报', None
+    sheet = next(iter(sheets))
+    if sheet == 'eng_other':
+        if len(found) != 1:
+            return False, 'ENG其他Hold 一次只能上报一片', None
+        if not _preview_lot_key(only_preview):
+            return False, '缺少 lot，不能上报', None
+        wafer = str((only_preview or {}).get('WAFER_ID') or '').strip()
+        label = wafer or '该片'
+    elif sheet == 'eng_pqc':
+        if len(oas) != 1:
+            return False, '组内 OA 不一致', None
+        label = f"OA {next(iter(oas)) or '无 OA'}"
+    else:
+        if len(wos) != 1:
+            return False, '组内工单号不一致', None
+        label = f"工单 {next(iter(wos))}"
+    ok, msg, data = _post_ncmr_by_lot(pairs)
+    if data is None:
+        return False, msg, None
+    return ok, f'{label}：{msg}', data
+
+
+def _query_unreported_eng_pqc(cursor):
+    """状态仍是创建、ENG + FPQC/PQC + 原因含 FUTURE 的记录。不限型号和时间。"""
+    record_table = _record_table()
+    sql = f"""
+        SELECT
+            r.WAFER_ID,
+            r.PRODUCT_ID,
+            r.EQUIP_ID,
+            TO_CHAR(r.HOLD_DTTM, 'YYYY-MM-DD HH24:MI:SS') AS HOLD_DATETIME,
+            r.HOLD_REASON AS REASON,
+            CASE
+                WHEN UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%' THEN 'ENGINEERING'
+                WHEN UPPER(NVL(r.ROUTE_ID, '')) LIKE '%MP%' THEN 'PRODUCTION'
+            END AS ROUTE_TYPE,
+            r.LOT_ID,
+            r.ROUTE_ID,
+            r.ID,
+            r.STATION,
+            NULL AS NCMR_REPORTED_AT,
+            r.OA,
+            r.WO
+        FROM {record_table} r
+        WHERE NVL(r.STATUS, 0) = 0
+          AND UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%'
+          AND UPPER(NVL(r.STATION, '')) IN ('FPQC', 'PQC')
+          AND UPPER(NVL(r.HOLD_REASON, '')) LIKE '%FUTURE%'
+        ORDER BY r.PRODUCT_ID, r.WAFER_ID, r.HOLD_DTTM, r.ID
+    """
+    cursor.execute(sql)
+    return cursor.fetchall()
+
+
+def report_unreported_eng_pqc(**extras):
+    """把尚未上报的 ENG 预 Hold PQC 按 lot 分批上报。没有工单号的跳过。"""
+    conn = _connect()
+    skipped = 0
+    try:
+        cursor = conn.cursor()
+        holds = _query_unreported_eng_pqc(cursor)
+        caches = {'merge': {}, 'hold_wafers': {}, 'test_program': {}}
+        pairs = []
+        for hold in holds:
+            excel, preview = _process_hold(cursor, hold, caches, extras)
+            rid = preview.get('RECORD_ID')
+            wo = str(preview.get('WO') or '').strip()
+            sheet = preview.get('SHEET')
+            if sheet and sheet != 'eng_pqc':
+                skipped += 1
+                logger.warning(
+                    'ENG预Hold PQC 跳过 id=%s wafer=%s：不属于预 Hold',
+                    rid,
+                    preview.get('WAFER_ID'),
+                )
+                continue
+            if preview.get('ORDER_ERROR') or not wo or not preview.get('LOT_KEY'):
+                skipped += 1
+                logger.warning(
+                    'ENG预Hold PQC 跳过 id=%s wafer=%s：%s',
+                    rid,
+                    preview.get('WAFER_ID'),
+                    preview.get('ORDER_ERROR') or '缺少工单号或 lot',
+                )
+                continue
+            pairs.append((excel, rid))
+    except Exception as exc:
+        logger.error(f'ENG预Hold PQC 上报准备失败: {exc}', exc_info=True)
+        return False, f'上报准备失败: {exc}', None
+    finally:
+        conn.close()
+    if not pairs:
+        return True, f'没有可上报的 ENG预Hold PQC（跳过 {skipped} 条）', {
+            'count': 0,
+            'lots_ok': [],
+            'lots_failed': [],
+            'reported_ids': [],
+            'circulation_marked': 0,
+            'skipped': skipped,
+        }
+    ok, msg, data = _post_ncmr_by_lot(pairs)
+    if data is not None:
+        data['skipped'] = skipped
+    if skipped:
+        msg = f'{msg}；跳过 {skipped} 条'
+    return ok, msg, data
 
 
 def _record_item(hold):
@@ -993,9 +1472,9 @@ def _record_item(hold):
         'route_id': str(hold[7] or '').strip() if len(hold) > 7 else '',
         'station': str(hold[9] or '').strip() if len(hold) > 9 else '',
         'id': record_id,
-        'ncmr_reported_at': (
-            str(hold[10]).strip() if len(hold) > 10 and hold[10] else ''
-        ),
+        'ncmr_reported_at': _hold_text(hold, 10),
+        'oa': _hold_text(hold, 11),
+        'wo': _hold_text(hold, 12),
     }
 
 

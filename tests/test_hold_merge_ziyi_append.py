@@ -11,10 +11,12 @@ from app.backend_schedule.FT_HOLD_MERGE_sche import (
     HoldInfo,
     HoldMergeScheduler,
     RoughHoldRecord,
+    _DEFER_THIS_ROUND,
     build_rough_hold_records,
     build_ziyi_append_updates,
     is_ziyi_append_candidate,
 )
+from app.utils.pre_handler_lookup import LotOrder
 from app.utils.database_util import (
     HOLD_WAFER_ATTR_IQC_ATE,
     HOLD_WAFER_ATTR_ZIYI,
@@ -266,6 +268,14 @@ class BuildRoughSetsBucketTest(unittest.TestCase):
 class PersistZiyiAppendTest(unittest.TestCase):
     def setUp(self):
         self.scheduler = HoldMergeScheduler()
+        self._order = patch(
+            'app.backend_schedule.FT_HOLD_MERGE_sche.lookup_lot_order',
+            return_value=LotOrder(ok=True),
+        )
+        self.lookup = self._order.start()
+
+    def tearDown(self):
+        self._order.stop()
 
     @patch('app.backend_schedule.FT_HOLD_MERGE_sche.mark_hold_infos_dirty')
     @patch('app.backend_schedule.FT_HOLD_MERGE_sche.insert_hold_record_and_link')
@@ -300,6 +310,7 @@ class PersistZiyiAppendTest(unittest.TestCase):
         )
         append_fn.assert_called_once()
         insert_fn.assert_not_called()
+        self.lookup.assert_not_called()
         updates = append_fn.call_args[0][1]
         self.assertEqual(updates['WAFER_ID'], '#01#02')
 
@@ -402,6 +413,53 @@ class PersistZiyiAppendTest(unittest.TestCase):
         self.assertEqual(result, 101)
         insert_fn.assert_called_once()
         append_fn.assert_not_called()
+
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.mark_hold_infos_dirty')
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.insert_hold_record_and_link')
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.find_existing_ziyi_hold_record')
+    def test_lookup_failure_does_not_insert(
+        self, find_existing, insert_fn, dirty
+    ):
+        find_existing.return_value = None
+        with patch(
+            'app.backend_schedule.FT_HOLD_MERGE_sche.lookup_lot_order',
+            return_value=LotOrder(ok=False, error='连接失败'),
+        ):
+            result = self.scheduler._persist_rough_record(_ziyi_rec(_info(1, '01')))
+        self.assertIs(result, _DEFER_THIS_ROUND)
+        insert_fn.assert_not_called()
+        dirty.assert_not_called()
+
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.mark_hold_infos_dirty')
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.insert_hold_record_and_link')
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.find_existing_ziyi_hold_record')
+    def test_blank_oa_still_inserts(self, find_existing, insert_fn, _dirty):
+        find_existing.return_value = None
+        insert_fn.return_value = 99
+        with patch(
+            'app.backend_schedule.FT_HOLD_MERGE_sche.lookup_lot_order',
+            return_value=LotOrder(ok=True, oa='', wo='ZJSH05B261027036'),
+        ):
+            result = self.scheduler._persist_rough_record(_ziyi_rec(_info(1, '01')))
+        self.assertEqual(result, 99)
+        row = insert_fn.call_args.args[0]
+        self.assertIsNone(row['OA'])
+        self.assertEqual(row['WO'], 'ZJSH05B261027036')
+
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.insert_hold_record_and_link')
+    @patch('app.backend_schedule.FT_HOLD_MERGE_sche.find_existing_ziyi_hold_record')
+    def test_same_lot_queries_once(self, find_existing, insert_fn):
+        find_existing.return_value = None
+        insert_fn.return_value = 1
+        with patch(
+            'app.backend_schedule.FT_HOLD_MERGE_sche.lookup_lot_order',
+            return_value=LotOrder(ok=True, oa='ET.202610218', wo='WO-1'),
+        ) as lookup:
+            self.scheduler._persist_rough_record(_ziyi_rec(_info(1, '01')))
+            self.scheduler._persist_rough_record(_ziyi_rec(_info(2, '02')))
+        self.assertEqual(lookup.call_count, 1)
+        self.assertEqual(insert_fn.call_args.args[0]['OA'], 'ET.202610218')
+        self.assertEqual(insert_fn.call_args.args[0]['WO'], 'WO-1')
 
 
 if __name__ == '__main__':
