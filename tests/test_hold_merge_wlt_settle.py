@@ -18,6 +18,7 @@ from app.backend_schedule.FT_HOLD_MERGE_sche import (
     quiet_state_key_for_row,
     rows_for_merge,
 )
+from app.utils.pre_handler_lookup import LotOrder
 
 _NOW = datetime(2026, 10, 26, 18, 0, 0)
 _QUIET = timedelta(minutes=30)
@@ -224,8 +225,14 @@ class RunJobLotQuietTest(unittest.TestCase):
         self._dir = tempfile.TemporaryDirectory()
         self._path = os.path.join(self._dir.name, 'quiet.json')
         self.scheduler._quiet_state_path = lambda: self._path
+        self._order = patch(
+            'app.backend_schedule.FT_HOLD_MERGE_sche.lookup_lot_order',
+            return_value=LotOrder(ok=True, oa='ET.1', wo='WO-1'),
+        )
+        self._order.start()
 
     def tearDown(self):
+        self._order.stop()
         self._dir.cleanup()
 
     def _age_watermark(self, minutes):

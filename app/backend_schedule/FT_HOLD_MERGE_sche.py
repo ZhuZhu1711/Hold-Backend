@@ -23,6 +23,7 @@ from typing import List, Optional, Tuple
 
 from app.backend_schedule.singleton_lock import LOCK_FT_HOLD_MERGE, hold_singleton
 from app.config import Config, is_test_env, reject_legacy_mode_arg
+from app.utils.pre_handler_lookup import lookup_lot_order
 from app.utils.mail_alert import notify_severe_error
 from app.utils.database_util import (
     HOLD_WAFER_ATTR_ZIYI,
@@ -47,7 +48,7 @@ from app.utils.database_util import (
 # 不满足以上规则的 hold_info 不转成 record。
 # 028（重码风险）仍为 RECORD_TYPE=0，但与同片/同批良率、缺陷率 hold 分列，不拼进同一条 record。
 # 非 ENG 的 FPQC + HOLD_CODE=025 且 HOLD_REASON 含 FUTURE HOLD：仍不建单。
-# ENG 路线 + PQC/FPQC + 原因含 FUTURE：RECORD_TYPE=3，建单后自动上报 NCMR。
+# ENG 路线 + PQC/FPQC + 原因含 FUTURE：RECORD_TYPE=3。自动上报 NCMR 已关闭。
 from app.backend_schedule.hold_merge_rules import (
     RECORD_TYPE_ENG_FUTURE,
     RECORD_TYPE_FT,
@@ -62,6 +63,10 @@ from app.backend_schedule.hold_merge_rules import (
 _FPQC_FUTURE_HOLD_CODE = '025'
 _FPQC_FUTURE_HOLD_STATION = 'FPQC'
 _FPQC_FUTURE_HOLD_REASON = 'FUTURE HOLD'
+# ENG 预 Hold 建单后是否自动抛送 NCMR。关闭时只建单，不抛送、不补报。
+_AUTO_REPORT_ENG_FUTURE_NCMR = False
+# 本轮不建单：源 info 保持未关联，下一轮再查 OA/WO。
+_DEFER_THIS_ROUND = object()
 
 # 梓一 / WLT 同 lot：水位不再变大后，再安静这么久才建单。调度器优先读配置。
 _LOT_QUIET_MINUTES_DEFAULT = 30
@@ -609,6 +614,7 @@ class HoldMergeScheduler(threading.Thread):
         )
         self.lot_quiet = timedelta(minutes=self.lot_quiet_minutes)
         self.lot_quiet_max = timedelta(minutes=self.lot_quiet_max_minutes)
+        self._lot_order_cache = {}
 
     def _quiet_state_path(self) -> str:
         table = (self.hold_info_table or 'FT_HOLD_INFO').upper()
@@ -623,6 +629,7 @@ class HoldMergeScheduler(threading.Thread):
         写入或追加一条 rough record。
         梓一且同 LOT 已有单的 HOLD_DTTM 在合批间隔回看窗口内 → append；否则 insert。
         成功返回 hold_record ID；失败返回 None（源 info 已标 -1）。
+        OA/WO 查询失败返回 _DEFER_THIS_ROUND，不标脏，下一轮再试。
         """
         row = rec.to_record_dict(status=self.record_status)
         if not row:
@@ -701,6 +708,16 @@ class HoldMergeScheduler(threading.Thread):
                 )
                 return appended_id
 
+        order = self._lot_order_for(row.get('LOT_ID'))
+        if not order.ok:
+            self.logger.warning(
+                f"OA/WO 查询失败，本轮不建单 lot={row.get('LOT_ID')} "
+                f"wafer={rec.wafer_id}: {order.error}"
+            )
+            return _DEFER_THIS_ROUND
+        row['OA'] = order.oa or None
+        row['WO'] = order.wo or None
+
         new_id = insert_hold_record_and_link(
             row,
             rec.source_ids,
@@ -720,9 +737,21 @@ class HoldMergeScheduler(threading.Thread):
             f"RECORD_TYPE={row.get('RECORD_TYPE')}, "
             f"HOLD_CODE={row.get('HOLD_CODE')}"
         )
-        if int(row.get('RECORD_TYPE') or -1) == RECORD_TYPE_ENG_FUTURE:
+        if (
+            _AUTO_REPORT_ENG_FUTURE_NCMR
+            and int(row.get('RECORD_TYPE') or -1) == RECORD_TYPE_ENG_FUTURE
+        ):
             self._report_eng_future(new_id, row)
         return new_id
+
+    def _lot_order_for(self, lot_id):
+        """同一轮、同一 lot 只请求一次 get_lot_order。"""
+        key = (lot_id or '').strip()
+        cached = self._lot_order_cache.get(key)
+        if cached is None:
+            cached = lookup_lot_order(key)
+            self._lot_order_cache[key] = cached
+        return cached
 
     def _report_eng_future(self, record_id, record) -> None:
         """上报失败只记日志。STATUS 仍是创建，下一轮合批会补报。"""
@@ -754,6 +783,7 @@ class HoldMergeScheduler(threading.Thread):
     def _run_job(self):
         try:
             self.logger.info(">>> Hold 合并定时任务开始执行...")
+            self._lot_order_cache = {}
             hold_infos = query_online_hold_info(self.hold_info_table)
             if hold_infos is None:
                 self.logger.error("查询在线 hold_info 失败")
@@ -788,7 +818,7 @@ class HoldMergeScheduler(threading.Thread):
                 f"同 lot 安静={self.lot_quiet_minutes} 分钟）"
             )
 
-            ok, fail, deferred = 0, 0, 0
+            ok, fail, deferred, order_held = 0, 0, 0, 0
             now = datetime.now()
             state_path = self._quiet_state_path()
             state = load_lot_quiet_state(state_path)
@@ -815,8 +845,11 @@ class HoldMergeScheduler(threading.Thread):
                         f"同 lot 自首次看到已超过 {self.lot_quiet_max_minutes} 分钟，"
                         f"用已有行建单: {rec.summary()}"
                     )
-                if self._persist_rough_record(rec) is None:
+                persisted = self._persist_rough_record(rec)
+                if persisted is None:
                     fail += 1
+                elif persisted is _DEFER_THIS_ROUND:
+                    order_held += 1
                 else:
                     ok += 1
 
@@ -827,10 +860,12 @@ class HoldMergeScheduler(threading.Thread):
                     f"写入同 lot 安静水位失败: {save_exc}", exc_info=True
                 )
 
-            self._retry_unreported_eng_future()
+            if _AUTO_REPORT_ENG_FUTURE_NCMR:
+                self._retry_unreported_eng_future()
             self.logger.info(
                 f"<<< Hold 合并定时任务执行完毕：成功 {ok}，失败 {fail}，"
-                f"跳过 {len(skipped_ids)}，同 lot 等待下次 {deferred}"
+                f"跳过 {len(skipped_ids)}，同 lot 等待下次 {deferred}，"
+                f"OA/WO 查询失败暂缓 {order_held}"
             )
         except Exception as e:
             self.logger.error(f"Hold 合并定时任务执行出错: {e}", exc_info=True)

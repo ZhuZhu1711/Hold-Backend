@@ -16,6 +16,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,63 @@ _ENVELOPE_KEYS = ('data', 'result', 'results', 'payload', 'content')
 _VALUE_KEYS = ('value', 'text', 'name', 'label')
 _DOC_RE = re.compile(r'ET\.\d+', re.IGNORECASE)
 _A_CODE_RE = re.compile(r'^[Aa]0*(\d+)$')
+
+
+class LotOrder(NamedTuple):
+    """get_lot_order 的结果。ok 为假是请求失败；oa、wo 为空仍是查到了。"""
+
+    ok: bool
+    oa: str = ''
+    wo: str = ''
+    error: str = ''
+
+
+def lot_order_base() -> str:
+    """合批建单查 OA/WO。未设 HOLD_OA_API_BASE 时打本机 6969。"""
+    override = (os.environ.get('HOLD_OA_API_BASE') or '').strip()
+    if override:
+        return override.rstrip('/')
+    return 'http://127.0.0.1:6969'
+
+
+def lookup_lot_order(lot_id) -> LotOrder:
+    """POST get_lot_order，返回 data.OA 与 data.WO。
+
+    连接失败、非 JSON、code 非 0 时 ok=False。
+    code 为 0 且 OA/WO 缺失或为 null 时 ok=True，对应字段为空字符串。
+    """
+    key = (lot_id or '').strip()
+    if not key:
+        return LotOrder(False, error='缺少 LOT_ID')
+    try:
+        payload = _post('/api/v1/query', {
+            'category': ['ft'],
+            'operation': 'get_lot_order',
+            'params': {'lot_id': key},
+        }, base_url=lot_order_base())
+    except Exception as exc:
+        logger.warning('OA/WO 查询失败 lot=%s: %s', key, exc)
+        return LotOrder(False, error=str(exc))
+    if not isinstance(payload, dict) or not _response_ok(payload):
+        logger.warning('OA/WO 查询失败 lot=%s body=%s', key, _brief(payload))
+        message = ''
+        if isinstance(payload, dict):
+            message = _scalar(payload.get('message')) or _scalar(payload.get('msg'))
+        return LotOrder(False, error=message or 'get_lot_order 返回失败')
+    data = payload.get('data')
+    if data is None:
+        return LotOrder(True, '', '')
+    if not isinstance(data, dict):
+        logger.warning('OA/WO 查询失败 lot=%s body=%s', key, _brief(payload))
+        return LotOrder(False, error='get_lot_order data 不是对象')
+    return LotOrder(True, _field(data, 'OA'), _field(data, 'WO'))
+
+
+def _field(data: dict, name: str) -> str:
+    for key, value in data.items():
+        if str(key).lower() == name.lower():
+            return _scalar(value)
+    return ''
 
 
 def lookup_lot_oa(lot_id, cache=None) -> str:
@@ -328,8 +386,8 @@ def _app_key() -> str:
     return (os.environ.get('HOLD_OA_APP_KEY') or DEFAULT_APP_KEY).strip()
 
 
-def _post(path: str, body: dict):
-    url = _base_url() + path
+def _post(path: str, body: dict, base_url: str | None = None):
+    url = (base_url or _base_url()).rstrip('/') + path
     data = json.dumps(body, ensure_ascii=False).encode('utf-8')
     request = urllib.request.Request(
         url,

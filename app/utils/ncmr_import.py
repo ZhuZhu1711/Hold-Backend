@@ -156,6 +156,25 @@ def _ncmr_item(row):
     }
 
 
+def lot_key_from_ncmr_row(row):
+    """NCMR 一次只收一个 lot。lot 是 LotId 里第一个 '-' 之前的前缀。"""
+    _key, _cells = align_ncmr_row_lot(row)
+    return _key
+
+
+def align_ncmr_row_lot(row):
+    """返回 (lot 前缀, 27 列)。LotId / WaferLot 写成同一个前缀。"""
+    cells = _ncmr_cells(row)
+    raw = _ncmr_cell(cells[_COL_LOT]) or ''
+    key = normalize_lot_id(raw) or raw
+    if key:
+        cells[_COL_LOT] = key
+        wafer_raw = _ncmr_cell(cells[_COL_WAFER_LOT]) or ''
+        if not wafer_raw or wafer_raw == raw or normalize_lot_id(wafer_raw) == key:
+            cells[_COL_WAFER_LOT] = key
+    return key, cells
+
+
 def build_ncmr_import_body(rows):
     """导出行 → NCMR batchImport 请求体。Hold/Total Wafer List 固定 null。"""
     return {

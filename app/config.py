@@ -135,7 +135,7 @@ class Config:
         'HOLD_NCMR_LOGIN_URL',
         'http://172.19.15.11/user-center-api/login',
     )
-    NCMR_USERNAME = os.environ.get('HOLD_NCMR_USERNAME', 'dongxian_zhu')
+    NCMR_USERNAME = os.environ.get('HOLD_NCMR_USERNAME', 'FTpublic')
     NCMR_PASSWORD = os.environ.get(
         'HOLD_NCMR_PASSWORD',
         'vJMtrdKSCbjkn5E4IXBjkA==',

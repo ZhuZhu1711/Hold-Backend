@@ -129,6 +129,11 @@ if __name__ == '__main__':
             schedulers.append(hold_predict_scheduler)
         else:
             print('HOLD_PREDICT_ENABLED=False，未启动可放行概率预测调度')
+        from app.backend_schedule.FT_ENG_PQC_NCMR_sche import EngPqcNcmrScheduler
+        eng_pqc_ncmr = EngPqcNcmrScheduler()
+        eng_pqc_ncmr.start()
+        schedulers.append(eng_pqc_ncmr)
+        print('ENG预Hold PQC 每天 07:00 和 19:00 自动上报，root 可在导出页随时开关')
         print('缺陷代码同步改为管理页手动触发，启动时不跑')
         server = threading.Thread(
             target=lambda: serve(app, host='0.0.0.0', port=50001),

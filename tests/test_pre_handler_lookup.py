@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError
 
 from app.utils.pre_handler_lookup import (
+    LotOrder,
     extract_document_number,
     extract_user_name,
     extract_work_code,
     format_pre_handler,
     lookup_lot_oa,
+    lookup_lot_order,
     lookup_pre_handler,
     work_code_for_query,
 )
@@ -197,3 +200,56 @@ class LookupChainTest(unittest.TestCase):
         with patch('app.utils.pre_handler_lookup.urllib.request.urlopen', fake_urlopen):
             self.assertEqual(lookup_pre_handler('C147238-01', {}), '')
         self.assertEqual(len(calls), 1)
+
+
+class LookupLotOrderTest(unittest.TestCase):
+    def test_reads_oa_and_wo_from_localhost(self):
+        def fake_urlopen(request, timeout=None):
+            self.url = request.full_url
+            self.body = json.loads(request.data.decode('utf-8'))
+            return _Body(LOT_ORDER)
+
+        with patch.dict(os.environ, {'HOLD_OA_API_BASE': ''}), patch(
+            'app.utils.pre_handler_lookup.urllib.request.urlopen',
+            fake_urlopen,
+        ):
+            order = lookup_lot_order('3AL585')
+        self.assertEqual(order, LotOrder(True, 'ET.202610218', 'ZJSH05B261027036', ''))
+        self.assertEqual(self.url, 'http://127.0.0.1:6969/api/v1/query')
+        self.assertEqual(self.body, {
+            'category': ['ft'],
+            'operation': 'get_lot_order',
+            'params': {'lot_id': '3AL585'},
+        })
+
+    def test_null_oa_is_empty_not_failure(self):
+        def fake_urlopen(request, timeout=None):
+            return _Body({'code': 0, 'data': {'OA': None, 'WO': None}})
+
+        with patch('app.utils.pre_handler_lookup.urllib.request.urlopen', fake_urlopen):
+            order = lookup_lot_order('3AL585')
+        self.assertTrue(order.ok)
+        self.assertEqual(order.oa, '')
+        self.assertEqual(order.wo, '')
+
+    def test_nonzero_code_is_failure(self):
+        def fake_urlopen(request, timeout=None):
+            return _Body({
+                'code': 1,
+                'message': 'fail',
+                'data': {'OA': 'ET.1', 'WO': 'W'},
+            })
+
+        with patch('app.utils.pre_handler_lookup.urllib.request.urlopen', fake_urlopen):
+            order = lookup_lot_order('3AL585')
+        self.assertFalse(order.ok)
+        self.assertEqual(order.error, 'fail')
+
+    def test_connection_failure(self):
+        def fake_urlopen(request, timeout=None):
+            raise URLError('refused')
+
+        with patch('app.utils.pre_handler_lookup.urllib.request.urlopen', fake_urlopen):
+            order = lookup_lot_order('3AL585')
+        self.assertFalse(order.ok)
+        self.assertIn('连接失败', order.error)
