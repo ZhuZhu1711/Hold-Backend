@@ -10,11 +10,13 @@ from urllib.error import URLError
 from app.utils.pre_handler_lookup import (
     LotOrder,
     extract_document_number,
+    extract_ncmr_owner,
     extract_user_name,
     extract_work_code,
     format_pre_handler,
     lookup_lot_oa,
     lookup_lot_order,
+    lookup_ncmr_owner,
     lookup_pre_handler,
     work_code_for_query,
 )
@@ -253,3 +255,93 @@ class LookupLotOrderTest(unittest.TestCase):
             order = lookup_lot_order('3AL585')
         self.assertFalse(order.ok)
         self.assertIn('连接失败', order.error)
+
+
+class LookupNcmrOwnerTest(unittest.TestCase):
+    def _urlopen(self, payload):
+        def fake_urlopen(request, timeout=None):
+            self.url = request.full_url
+            self.body = json.loads(request.data.decode('utf-8'))
+            self.timeout = timeout
+            return _Body(payload)
+
+        return fake_urlopen
+
+    def test_posts_product_to_rpt_query(self):
+        payload = {
+            'code': 0,
+            'data': {'OWNER': '张三（A0004655）'},
+        }
+        with patch.dict(os.environ, {'HOLD_OA_API_BASE': ''}), patch(
+            'app.utils.pre_handler_lookup.urllib.request.urlopen',
+            self._urlopen(payload),
+        ):
+            text = lookup_ncmr_owner('GC10V0-3.5')
+        self.assertEqual(text, '张三（A0004655）')
+        self.assertEqual(self.url, 'http://127.0.0.1:6969/api/v1/rpt/query')
+        self.assertEqual(self.body, {
+            'category': ['common'],
+            'operation': 'get_ncmr_owner',
+            'params': {
+                'line_type': 'FT',
+                'product_id': 'GC10V0-3.5',
+            },
+        })
+
+    def test_null_owner_is_empty(self):
+        cases = (
+            {'code': 0, 'data': {'OWNER': None}},
+            {'code': 200, 'data': {'OWNER': None}},
+            {'code': 0, 'data': None},
+            {'code': 200, 'data': []},
+            {'code': 0, 'data': [{'OWNER': None}, {'OWNER': ''}]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.assertEqual(extract_ncmr_owner(payload), '')
+                with patch(
+                    'app.utils.pre_handler_lookup.urllib.request.urlopen',
+                    self._urlopen(payload),
+                ):
+                    self.assertEqual(lookup_ncmr_owner('GC10V0-3.5'), '')
+
+    def test_owner_from_row_list(self):
+        payload = {'code': 0, 'data': [{'OWNER': None}, {'OWNER': ' 李四 '}]}
+        self.assertEqual(extract_ncmr_owner(payload), '李四')
+
+    def test_nonzero_code_is_blank(self):
+        payload = {'code': 1, 'message': 'fail', 'data': {'OWNER': '张三'}}
+        with patch(
+            'app.utils.pre_handler_lookup.urllib.request.urlopen',
+            self._urlopen(payload),
+        ):
+            self.assertEqual(lookup_ncmr_owner('GC10V0-3.5'), '')
+
+    def test_connection_failure_is_blank(self):
+        def fake_urlopen(request, timeout=None):
+            raise URLError('refused')
+
+        with patch('app.utils.pre_handler_lookup.urllib.request.urlopen', fake_urlopen):
+            self.assertEqual(lookup_ncmr_owner('GC10V0-3.5'), '')
+
+    def test_same_product_is_cached(self):
+        calls = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append(request.full_url)
+            return _Body({'code': 0, 'data': {'OWNER': '张三'}})
+
+        cache = {}
+        with patch('app.utils.pre_handler_lookup.urllib.request.urlopen', fake_urlopen):
+            first = lookup_ncmr_owner('GC10V0-3.5', cache)
+            second = lookup_ncmr_owner('GC10V0-3.5', cache)
+        self.assertEqual(first, '张三')
+        self.assertEqual(second, '张三')
+        self.assertEqual(len(calls), 1)
+
+    def test_blank_product_skips_request(self):
+        def fake_urlopen(request, timeout=None):
+            raise AssertionError('should not request')
+
+        with patch('app.utils.pre_handler_lookup.urllib.request.urlopen', fake_urlopen):
+            self.assertEqual(lookup_ncmr_owner('  '), '')

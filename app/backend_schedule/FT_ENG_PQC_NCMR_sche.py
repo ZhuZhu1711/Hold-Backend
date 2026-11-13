@@ -22,6 +22,19 @@ if not logger.handlers:
     logger.addHandler(_handler)
 
 _state_lock = threading.Lock()
+_run_lock = threading.Lock()
+
+
+def run_eng_pqc_report_once():
+    """跑一轮尚未上报的 ENG 预 Hold PQC。已有一轮在跑时不再启动。"""
+    if not _run_lock.acquire(blocking=False):
+        logger.info('ENG预Hold PQC 已有一轮在上报，跳过')
+        return False, '已有一轮 ENG预Hold PQC 正在上报', None
+    try:
+        from app.controllers.hold_info_export_ctrl import report_unreported_eng_pqc
+        return report_unreported_eng_pqc()
+    finally:
+        _run_lock.release()
 
 
 def _state_path():
@@ -81,8 +94,7 @@ class EngPqcNcmrScheduler(threading.Thread):
             logger.info('ENG预Hold PQC 自动上报已关闭，跳过本次')
             return
         try:
-            from app.controllers.hold_info_export_ctrl import report_unreported_eng_pqc
-            ok, msg, _data = report_unreported_eng_pqc()
+            ok, msg, _data = run_eng_pqc_report_once()
             if ok:
                 logger.info('ENG预Hold PQC 定时上报完成: %s', msg)
             else:

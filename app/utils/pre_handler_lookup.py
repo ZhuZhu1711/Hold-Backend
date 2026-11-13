@@ -61,6 +61,79 @@ def lot_order_base() -> str:
     return 'http://127.0.0.1:6969'
 
 
+def lookup_ncmr_owner(product_id, cache=None) -> str:
+    """按型号查 MP 预处置人。line_type 固定 FT。
+
+    POST /api/v1/rpt/query，operation=get_ncmr_owner。
+    没有记录、或 data.OWNER 为 null / 空，都是成功，返回空字符串。
+    连接失败或 code 不是 0 / 200 时记日志并留空，不中断导出。
+    """
+    key = (product_id or '').strip()
+    if not key:
+        return ''
+    if cache is not None and key in cache:
+        return cache[key]
+    try:
+        value = _ncmr_owner(key)
+    except Exception as exc:
+        logger.warning('NCMR 预处置人查询失败 product=%s: %s', key, exc)
+        value = ''
+    if cache is not None:
+        cache[key] = value
+    return value
+
+
+def _ncmr_owner(product_id: str) -> str:
+    payload = _post('/api/v1/rpt/query', {
+        'category': ['common'],
+        'operation': 'get_ncmr_owner',
+        'params': {
+            'line_type': 'FT',
+            'product_id': product_id,
+        },
+    }, base_url=lot_order_base())
+    if not isinstance(payload, dict) or not _owner_response_ok(payload):
+        logger.warning(
+            'NCMR 预处置人查询失败 product=%s body=%s',
+            product_id, _brief(payload),
+        )
+        return ''
+    value = extract_ncmr_owner(payload)
+    if value:
+        logger.info('NCMR 预处置人 product=%s -> %s', product_id, value)
+    return value
+
+
+def extract_ncmr_owner(payload) -> str:
+    """读 data.OWNER。data 为 null、空列表，或 OWNER 为 null，都是空字符串。"""
+    if not isinstance(payload, dict) or not _owner_response_ok(payload):
+        return ''
+    data = payload.get('data') if 'data' in payload else None
+    if isinstance(data, list):
+        for item in data:
+            text = _owner_text(item)
+            if text:
+                return text
+        return ''
+    return _owner_text(data)
+
+
+def _owner_text(node) -> str:
+    if not isinstance(node, dict):
+        return ''
+    return _field(node, 'OWNER')
+
+
+def _owner_response_ok(payload) -> bool:
+    """这个接口成功码是 0；调用方描述的 HTTP/业务 200 也算成功。"""
+    if not isinstance(payload, dict) or 'code' not in payload:
+        return True
+    code = payload.get('code')
+    if isinstance(code, str) and code.strip().lstrip('-').isdigit():
+        code = int(code.strip())
+    return code in (0, 200)
+
+
 def lookup_lot_order(lot_id) -> LotOrder:
     """POST get_lot_order，返回 data.OA 与 data.WO。
 

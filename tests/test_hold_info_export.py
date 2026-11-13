@@ -15,7 +15,6 @@ from app.controllers.hold_info_export_ctrl import (
     NCMR_TIMEOUT,
     RECORDS_MAX_ROWS,
     _collect_rows,
-    _format_mp_pre_handler,
     _ensure_owned_product,
     _latest_hold_per_wafer,
     _parse_filters,
@@ -265,6 +264,7 @@ class CollectRowsDedupeTest(unittest.TestCase):
         self.assertEqual(payload['preview_rows'], [{'LOT': 'C2', 'ID': 2}])
         self.assertEqual(process.call_count, 1)
 
+    @patch('app.controllers.hold_info_export_ctrl.lookup_ncmr_owner', return_value='')
     @patch(
         'app.controllers.hold_info_export_ctrl.lookup_lot_order',
         return_value=LotOrder(ok=True),
@@ -272,7 +272,7 @@ class CollectRowsDedupeTest(unittest.TestCase):
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_excel_hold_time_uses_earliest(self, _program, _wafers, _handler, _order):
+    def test_excel_hold_time_uses_earliest(self, _program, _wafers, _handler, _order, _owner):
         hold = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3)
         row, preview = _process_hold(
             Mock(), hold,
@@ -319,56 +319,27 @@ class CollectRowsDedupeTest(unittest.TestCase):
         cursor.execute.assert_not_called()
 
     @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_ncmr_owner',
+        return_value='张三（A0004655）',
+    )
+    @patch(
         'app.controllers.hold_info_export_ctrl.lookup_lot_order',
         return_value=LotOrder(True, 'ET.MP', 'WO-MP'),
     )
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='不应调用')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_mp_pre_handler_uses_newest_pie(self, _program, _wafers, handler, _order):
+    def test_mp_pre_handler_uses_ncmr_owner(self, _program, _wafers, handler, _order, owner):
         cursor = Mock()
-        pie_rows = [
-            ('旧PIE', '2026-01-01', 1),
-            ('  张三  ', '2026-02-01', 2),
-            ('   ', '2026-03-01', 3),
-        ]
-
-        def fetchall():
-            sql = cursor.execute.call_args[0][0]
-            if 'USERS' in sql:
-                return [('A0004655',)]
-            return pie_rows
-
-        cursor.fetchall.side_effect = fetchall
         hold = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3, route='PRODUCTION')
-        _row, preview = _process_hold(
-            cursor, hold,
-            {'merge': {}, 'hold_wafers': {}, 'test_program': {}},
-            {},
-        )
+        caches = {'merge': {}, 'hold_wafers': {}, 'test_program': {}}
+        _row, preview = _process_hold(cursor, hold, caches, {})
         self.assertEqual(preview['PRE_HANDLER'], '张三（A0004655）')
         self.assertEqual(preview['OA_NUMBER'], 'ET.MP')
         self.assertEqual(preview['WO'], 'WO-MP')
         self.assertEqual(_row[10], 'WO-MP')
         handler.assert_not_called()
-        product_call = next(
-            call for call in cursor.execute.call_args_list
-            if 'PRODUCT_INFO' in call[0][0]
-        )
-        self.assertEqual(set(product_call[0][1].values()), {'P1', 'P1-3.5', 'P1-2.6'})
-
-    def test_mp_pie_work_code_and_existing_display(self):
-        cursor = Mock()
-        cursor.fetchall.return_value = [('周星辰',)]
-        self.assertEqual(
-            _format_mp_pre_handler(cursor, '4655'),
-            '周星辰（A0004655）',
-        )
-        cursor.reset_mock()
-        self.assertEqual(
-            _format_mp_pre_handler(cursor, '周星辰（4655）'),
-            '周星辰（A0004655）',
-        )
+        owner.assert_called_once_with('P1', caches['ncmr_owner'])
         cursor.execute.assert_not_called()
 
 
@@ -415,9 +386,10 @@ class QueryHoldRecordsFilterTest(unittest.TestCase):
 
 
 class QueryHoldInfoRecordsTest(unittest.TestCase):
+    @patch('app.controllers.hold_info_export_ctrl.lookup_ncmr_owner', return_value='')
     @patch('app.controllers.hold_info_export_ctrl._connect')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_records')
-    def test_returns_raw_rows(self, query, connect):
+    def test_returns_raw_rows(self, query, connect, _owner):
         connect.return_value = Mock()
         query.return_value = [
             _hold('C1-01', 'C1', '2026-01-01 00:00:00', 7, route='ENG'),
@@ -452,10 +424,11 @@ class QueryHoldInfoRecordsTest(unittest.TestCase):
             RECORDS_MAX_ROWS + 1,
         )
 
+    @patch('app.controllers.hold_info_export_ctrl.lookup_ncmr_owner', return_value='')
     @patch('app.controllers.hold_info_export_ctrl.RECORDS_MAX_ROWS', 1)
     @patch('app.controllers.hold_info_export_ctrl._connect')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_records')
-    def test_truncates_at_safety_cap(self, query, connect):
+    def test_truncates_at_safety_cap(self, query, connect, _owner):
         connect.return_value = Mock()
         query.return_value = [
             _hold('C1-01', 'C1', '2026-01-01 00:00:00', 1),
@@ -468,25 +441,32 @@ class QueryHoldInfoRecordsTest(unittest.TestCase):
         self.assertEqual(len(data['items']), 1)
         self.assertEqual(data['items'][0]['id'], 1)
 
+    @patch(
+        'app.controllers.hold_info_export_ctrl.lookup_ncmr_owner',
+        return_value='李四',
+    )
     @patch('app.controllers.hold_info_export_ctrl._connect')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_records', return_value=[])
-    def test_records_include_family_pie(self, _query, connect):
-        cursor = Mock()
-        cursor.fetchall.return_value = [('李四', '2026-01-01', 9)]
-        connect.return_value.cursor.return_value = cursor
+    def test_records_include_ncmr_owner(self, _query, connect, owner):
+        connect.return_value.cursor.return_value = Mock()
         ok, msg, data = query_hold_info_records(
-            'GC1084-3.5', '2026-01-01', '2026-01-02',
+            'GC10V0-3.5', '2026-01-01', '2026-01-02',
         )
         self.assertTrue(ok, msg)
         self.assertEqual(data['pie'], '李四')
-        product_call = next(
-            call for call in cursor.execute.call_args_list
-            if 'PRODUCT_INFO' in call[0][0]
+        owner.assert_called_once_with('GC10V0-3.5')
+
+    @patch('app.controllers.hold_info_export_ctrl.lookup_ncmr_owner', return_value='不应调用')
+    @patch('app.controllers.hold_info_export_ctrl._connect')
+    @patch('app.controllers.hold_info_export_ctrl._query_hold_records', return_value=[])
+    def test_eng_records_skip_ncmr_owner(self, _query, connect, owner):
+        connect.return_value.cursor.return_value = Mock()
+        ok, msg, data = query_hold_info_records(
+            'GC10V0-3.5', '2026-01-01', '2026-01-02', route_id='ENG',
         )
-        self.assertEqual(
-            set(product_call[0][1].values()),
-            {'GC1084', 'GC1084-3.5', 'GC1084-2.6'},
-        )
+        self.assertTrue(ok, msg)
+        self.assertEqual(data['pie'], '')
+        owner.assert_not_called()
 
     @patch('app.controllers.engineer_ctrl.engineer_owns_product', return_value=False)
     @patch('app.controllers.hold_info_export_ctrl._connect')
@@ -778,6 +758,7 @@ class NcmrSheetTest(unittest.TestCase):
         self.assertEqual(_row[26], 'ET.202610218')
         self.assertEqual(handler.call_args.kwargs['oa_cache']['C1'], 'ET.202610218')
 
+    @patch('app.controllers.hold_info_export_ctrl.lookup_ncmr_owner', return_value='')
     @patch(
         'app.controllers.hold_info_export_ctrl.lookup_lot_order',
         return_value=LotOrder(True, '', 'WO-ONLY'),
@@ -785,7 +766,7 @@ class NcmrSheetTest(unittest.TestCase):
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_blank_oa_from_lookup_still_has_wo(self, _program, _wafers, _handler, _order):
+    def test_blank_oa_from_lookup_still_has_wo(self, _program, _wafers, _handler, _order, _owner):
         hold = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3)
         _row, preview = _process_hold(
             Mock(), hold, {'merge': {}, 'hold_wafers': {}, 'test_program': {}}, {},
@@ -795,6 +776,7 @@ class NcmrSheetTest(unittest.TestCase):
         self.assertEqual(preview['ORDER_ERROR'], '')
         self.assertEqual(_row[10], 'WO-ONLY')
 
+    @patch('app.controllers.hold_info_export_ctrl.lookup_ncmr_owner', return_value='')
     @patch(
         'app.controllers.hold_info_export_ctrl.lookup_lot_order',
         return_value=LotOrder(False, error='连接失败'),
@@ -802,7 +784,7 @@ class NcmrSheetTest(unittest.TestCase):
     @patch('app.controllers.hold_info_export_ctrl.lookup_pre_handler', return_value='')
     @patch('app.controllers.hold_info_export_ctrl._query_hold_wafers_by_lot', return_value=set())
     @patch('app.controllers.hold_info_export_ctrl._query_test_program', return_value='')
-    def test_lookup_failure_is_not_reportable(self, _program, _wafers, _handler, lot_order):
+    def test_lookup_failure_is_not_reportable(self, _program, _wafers, _handler, lot_order, _owner):
         first = _hold('C1-09', 'C1', '2026-01-03 00:00:00', 3)
         second = _hold('C1-10', 'C1', '2026-01-03 01:00:00', 4)
         caches = {'merge': {}, 'hold_wafers': {}, 'test_program': {}}
@@ -1419,6 +1401,38 @@ class NcmrImportPostTest(unittest.TestCase):
 
     @patch('app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported', return_value=True)
     @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
+    def test_same_lot_posts_latest_hold_time(self, post, mark):
+        post.return_value = (True, 'ok', {'count': 2})
+        later = _sample_ncmr_row()
+        later[7] = 'A000997-02'
+        later[8] = 'A000997-02'
+        later[9] = 'A000997-02'
+        later[18] = '2026-11-07 08:00:00'
+        later[25] = '2026-11-07 08:00:00'
+        earlier = _sample_ncmr_row()
+        earlier[7] = 'A000997-01'
+        earlier[8] = 'A000997-01'
+        earlier[9] = 'A000997-01'
+        earlier[18] = '2026-11-06 10:00:10'
+        blank = _sample_ncmr_row()
+        blank[7] = 'A000997-03'
+        blank[8] = 'A000997-03'
+        blank[9] = 'A000997-03'
+        blank[18] = None
+        ok, msg, data = import_ncmr_rows([later, earlier, blank], [1, 2, 3])
+        self.assertTrue(ok, msg)
+        rows = post.call_args.args[0]
+        self.assertEqual([row[18] for row in rows], [
+            '2026-11-07 08:00:00',
+            '2026-11-07 08:00:00',
+            '2026-11-07 08:00:00',
+        ])
+        self.assertEqual(rows[0][25], '2026-11-07 08:00:00')
+        self.assertEqual(data['reported_ids'], [1, 2, 3])
+        self.assertEqual(mark.call_count, 3)
+
+    @patch('app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported', return_value=True)
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import')
     def test_partial_lot_failure_marks_only_success(self, post, mark):
         first = _sample_ncmr_row()
         second = _sample_ncmr_row()
@@ -1581,8 +1595,9 @@ class EngPqcScheduleTest(unittest.TestCase):
     @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import', return_value=(True, 'ok', {'count': 1}))
     @patch('app.controllers.hold_info_export_ctrl._process_hold')
     @patch('app.controllers.hold_info_export_ctrl._query_unreported_eng_pqc')
+    @patch('app.controllers.hold_info_export_ctrl._query_unreported_eng_pqc_products', return_value=['P1'])
     @patch('app.controllers.hold_info_export_ctrl._connect')
-    def test_skips_missing_wo_and_posts_the_rest(self, connect, query, process, post, mark):
+    def test_skips_missing_wo_and_posts_the_rest(self, connect, products, query, process, post, mark):
         from app.controllers.hold_info_export_ctrl import report_unreported_eng_pqc
 
         connect.return_value = MagicMock()
@@ -1604,10 +1619,55 @@ class EngPqcScheduleTest(unittest.TestCase):
         self.assertTrue(ok, msg)
         self.assertEqual(data['skipped'], 1)
         self.assertEqual(data['reported_ids'], [1])
+        self.assertEqual(data['product_count'], 1)
+        self.assertNotIn('流转已写入', msg)
         self.assertEqual(post.call_count, 1)
         mark.assert_called_once()
         self.assertEqual(mark.call_args.args[0], 1)
-        connect.return_value.close.assert_called_once()
+        products.assert_called_once()
+        self.assertEqual(query.call_args.args[1], 'P1')
+        self.assertEqual(connect.return_value.close.call_count, 2)
+
+    @patch('app.controllers.hold_info_export_ctrl.mark_hold_record_ncmr_reported', return_value=True)
+    @patch('app.controllers.hold_info_export_ctrl.post_ncmr_import', return_value=(True, 'ok', {'count': 1}))
+    @patch('app.controllers.hold_info_export_ctrl._process_hold')
+    @patch('app.controllers.hold_info_export_ctrl._query_unreported_eng_pqc')
+    @patch(
+        'app.controllers.hold_info_export_ctrl._query_unreported_eng_pqc_products',
+        return_value=['P1', 'P2'],
+    )
+    @patch('app.controllers.hold_info_export_ctrl._connect')
+    def test_reports_one_product_at_a_time(self, connect, _products, query, process, post, _mark):
+        from app.controllers.hold_info_export_ctrl import report_unreported_eng_pqc
+
+        connect.return_value = MagicMock()
+        seen = []
+
+        def _holds(_cursor, product_id=None):
+            seen.append(product_id)
+            row = _sample_ncmr_row()
+            row[7] = 'L1' if product_id == 'P1' else 'L2'
+            return [row]
+
+        query.side_effect = _holds
+        process.side_effect = lambda _cursor, hold, _caches, _extras, hold_time=None: (
+            hold,
+            {
+                'RECORD_ID': 1 if hold[7] == 'L1' else 2,
+                'WO': 'W1',
+                'LOT_KEY': hold[7],
+                'WAFER_ID': 'W',
+                'ORDER_ERROR': '',
+                'SHEET': 'eng_pqc',
+            },
+        )
+        ok, msg, data = report_unreported_eng_pqc()
+        self.assertTrue(ok, msg)
+        self.assertEqual(seen, ['P1', 'P2'])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(data['product_count'], 2)
+        self.assertEqual(data['count'], 2)
+        self.assertNotIn('lot L1', msg)
 
     @patch('app.controllers.hold_info_export_ctrl._record_table', return_value='FT_HOLD_RECORD')
     def test_unreported_query_requires_pqc_station_and_future(self, _table):
@@ -1620,6 +1680,7 @@ class EngPqcScheduleTest(unittest.TestCase):
         self.assertIn("IN ('FPQC', 'PQC')", sql)
         self.assertIn("LIKE '%FUTURE%'", sql)
         self.assertNotIn("LIKE '%PQC%'", sql)
+        self.assertNotIn(':product_id', sql)
 
     def test_scheduler_binds_seven_and_nineteen(self):
         import schedule
@@ -1852,7 +1913,9 @@ class EngPqcAutoReportRouteTest(unittest.TestCase):
         root_html = self._client(ROLE_ROOT).get('/admin/hold/export').get_data(as_text=True)
         eng_html = self._client(ROLE_ENGINEER).get('/admin/hold/export').get_data(as_text=True)
         self.assertIn('id="auto_report"', root_html)
+        self.assertIn('id="run_auto_report"', root_html)
         self.assertNotIn('id="auto_report"', eng_html)
+        self.assertNotIn('id="run_auto_report"', eng_html)
 
     def test_root_toggle_and_engineer_forbidden(self):
         from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_ROOT
@@ -1880,6 +1943,38 @@ class EngPqcAutoReportRouteTest(unittest.TestCase):
                 json={'enabled': True},
             )
             self.assertEqual(denied.status_code, 403)
+
+    def test_root_can_run_once_and_engineer_cannot(self):
+        from app.utils.auth_decorators import ROLE_ENGINEER, ROLE_ROOT
+
+        with patch(
+            'app.controllers.hold_info_export_ctrl.report_unreported_eng_pqc',
+            return_value=(True, '已上报 2 条', {'count': 2, 'lots_ok': ['A000997']}),
+        ) as report:
+            ran = self._client(ROLE_ROOT).post(
+                '/admin/hold/api/hold_info_export/auto_report/run',
+            )
+        self.assertEqual(ran.status_code, 200)
+        self.assertEqual(ran.get_json()['msg'], '已上报 2 条')
+        self.assertEqual(ran.get_json()['data']['lots_ok'], ['A000997'])
+        report.assert_called_once_with()
+        denied = self._client(ROLE_ENGINEER).post(
+            '/admin/hold/api/hold_info_export/auto_report/run',
+        )
+        self.assertEqual(denied.status_code, 403)
+
+    def test_run_once_returns_upstream_failure(self):
+        from app.utils.auth_decorators import ROLE_ROOT
+
+        with patch(
+            'app.controllers.hold_info_export_ctrl.report_unreported_eng_pqc',
+            return_value=(False, 'lot A000997 失败：同组合单字段不一致', {'count': 0}),
+        ):
+            resp = self._client(ROLE_ROOT).post(
+                '/admin/hold/api/hold_info_export/auto_report/run',
+            )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('A000997', resp.get_json()['msg'])
 
     def test_toggle_rejects_non_bool(self):
         from app.utils.auth_decorators import ROLE_ROOT

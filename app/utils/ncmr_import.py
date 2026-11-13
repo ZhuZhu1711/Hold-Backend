@@ -175,6 +175,29 @@ def align_ncmr_row_lot(row):
     return key, cells
 
 
+def align_lot_hold_times(rows):
+    """同一 lot 会合成一单，holdTime 必须相同。用最晚的非空时间，原行的 HoldDateTime2 不动。"""
+    texts = [
+        _ncmr_cell(row[_COL_HOLD_TIME]) or ''
+        if len(row) > _COL_HOLD_TIME else ''
+        for row in rows
+    ]
+    chosen = max((text for text in texts if text), default='')
+    if not chosen or all(text == chosen for text in texts):
+        return rows
+    aligned = []
+    for row, text in zip(rows, texts):
+        if text == chosen:
+            aligned.append(row)
+            continue
+        cells = list(row)
+        while len(cells) <= _COL_HOLD_TIME:
+            cells.append(None)
+        cells[_COL_HOLD_TIME] = chosen
+        aligned.append(cells)
+    return aligned
+
+
 def build_ncmr_import_body(rows):
     """导出行 → NCMR batchImport 请求体。Hold/Total Wafer List 固定 null。"""
     return {

@@ -84,6 +84,7 @@
             display: inline-flex; align-items: center; gap: 8px;
             margin: 0 0 14px; font-size: 13px; color: #333;
         }
+        .auto-switch .btn { align-self: center; }
         .report-mask {
             position: fixed; inset: 0; z-index: 40;
             display: flex; align-items: center; justify-content: center;
@@ -91,11 +92,13 @@
         }
         .report-mask[hidden] { display: none; }
         .report-dialog {
-            width: min(480px, 100%); background: #fff; border-radius: 8px;
+            width: min(520px, 100%); max-height: calc(100vh - 48px);
+            display: flex; flex-direction: column; overflow: hidden;
+            background: #fff; border-radius: 8px;
             padding: 22px 22px 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.18);
         }
-        .report-dialog h2 { font-size: 18px; margin-bottom: 10px; color: #222; }
-        .report-target { color: #333; font-size: 14px; line-height: 1.5; margin-bottom: 14px; }
+        .report-dialog h2 { font-size: 18px; margin-bottom: 10px; color: #222; flex: none; }
+        .report-target { color: #333; font-size: 14px; line-height: 1.5; margin-bottom: 14px; flex: none; }
         .report-progress {
             height: 8px; border-radius: 99px; background: #ffe8cc; overflow: hidden; margin-bottom: 12px;
         }
@@ -107,10 +110,25 @@
             0% { transform: translateX(-120%); }
             100% { transform: translateX(320%); }
         }
+        .report-scroll { overflow: auto; min-height: 0; flex: 1 1 auto; max-height: calc(100vh - 220px); }
         .report-status { color: #333; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
         .report-status.ok { color: #1e7e34; }
         .report-status.err { color: #b02a37; }
-        .report-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+        .report-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .report-stat {
+            flex: 1 1 96px; background: #f8f9fa; border-radius: 6px; padding: 8px 10px;
+        }
+        .report-stat b { display: block; font-size: 20px; line-height: 1.2; color: #222; }
+        .report-stat span { color: #666; font-size: 12px; }
+        .report-stat.good b { color: #1e7e34; }
+        .report-stat.bad b { color: #b02a37; }
+        .report-fails { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+        .report-fails li {
+            background: #fff5f5; border-radius: 6px; padding: 8px 10px;
+            color: #842029; font-size: 13px; line-height: 1.45;
+        }
+        .report-fails strong { display: block; color: #333; }
+        .report-actions { display: flex; justify-content: flex-end; margin-top: 16px; flex: none; }
     </style>
 </head>
 <body>
@@ -140,11 +158,14 @@
         <div class="card">
             <h1>NCMR上报清单导出</h1>
             {% if is_root %}
-            <label class="auto-switch">
-                <input type="checkbox" id="auto_report" disabled onchange="toggleAutoReport(this)" />
-                ENG预Hold 自动上报
-                <span class="muted" id="auto_report_state">读取中...</span>
-            </label>
+            <div class="auto-switch">
+                <label>
+                    <input type="checkbox" id="auto_report" disabled onchange="toggleAutoReport(this)" />
+                    ENG预Hold 自动上报
+                    <span class="muted" id="auto_report_state">读取中...</span>
+                </label>
+                <button type="button" class="btn btn-ncmr btn-sm" id="run_auto_report" onclick="runEngPqcReport()">立即上报</button>
+            </div>
             {% endif %}
 
             <div class="filters">
@@ -195,7 +216,11 @@
             <h2 id="report_title">正在上报 NCMR</h2>
             <p class="report-target" id="report_target"></p>
             <div class="report-progress" id="report_progress"><div class="report-bar"></div></div>
-            <p class="report-status" id="report_status">正在提交，请勿关闭页面</p>
+            <div class="report-scroll" id="report_scroll">
+                <div class="report-stats" id="report_summary" hidden></div>
+                <p class="report-status" id="report_status">正在提交，请勿关闭页面</p>
+                <ul class="report-fails" id="report_fails" hidden></ul>
+            </div>
             <div class="report-actions" id="report_actions" hidden>
                 <button type="button" class="btn" id="report_ok" onclick="closeReportDialog()">知道了</button>
             </div>
@@ -517,12 +542,22 @@
             }
         }
 
+        function clearReportDetail() {
+            const summary = document.getElementById('report_summary');
+            const fails = document.getElementById('report_fails');
+            summary.hidden = true;
+            summary.replaceChildren();
+            fails.hidden = true;
+            fails.replaceChildren();
+        }
         function openReportProgress(targetText) {
             reporting = true;
             document.getElementById('report_title').textContent = '正在上报 NCMR';
             document.getElementById('report_target').textContent = targetText;
             document.getElementById('report_progress').hidden = false;
+            clearReportDetail();
             const status = document.getElementById('report_status');
+            status.hidden = false;
             status.className = 'report-status';
             status.textContent = '正在提交，请勿关闭页面';
             document.getElementById('report_actions').hidden = true;
@@ -532,9 +567,61 @@
             reporting = false;
             document.getElementById('report_title').textContent = ok ? '上报完成' : '上报未完成';
             document.getElementById('report_progress').hidden = true;
+            clearReportDetail();
             const status = document.getElementById('report_status');
+            status.hidden = false;
             status.className = 'report-status ' + (ok ? 'ok' : 'err');
             status.textContent = message;
+            document.getElementById('report_actions').hidden = false;
+            document.getElementById('report_mask').hidden = false;
+        }
+        function reportStat(value, label, tone) {
+            const item = document.createElement('div');
+            item.className = 'report-stat' + (tone ? ' ' + tone : '');
+            const number = document.createElement('b');
+            number.textContent = String(value);
+            const caption = document.createElement('span');
+            caption.textContent = label;
+            item.append(number, caption);
+            return item;
+        }
+        function finishEngPqcDialog(payload) {
+            const data = (payload && payload.data) || {};
+            const failedLots = data.lots_failed || [];
+            const failedProducts = data.products_failed || [];
+            const ok = !failedLots.length && !failedProducts.length;
+            reporting = false;
+            document.getElementById('report_title').textContent = ok ? '上报完成' : '上报未完成';
+            document.getElementById('report_progress').hidden = true;
+            clearReportDetail();
+            const summary = document.getElementById('report_summary');
+            summary.hidden = false;
+            summary.append(
+                reportStat(data.product_count || 0, '已上报型号', 'good'),
+                reportStat(data.count || 0, '已上报条数', 'good'),
+                reportStat(failedLots.length + failedProducts.length, '失败', failedLots.length || failedProducts.length ? 'bad' : ''),
+                reportStat(data.skipped || 0, '跳过', ''),
+            );
+            const status = document.getElementById('report_status');
+            status.hidden = false;
+            status.className = 'report-status ' + (ok ? 'ok' : 'err');
+            status.textContent = (payload && payload.msg) || (ok ? '上报完成' : '上报未完成');
+            const fails = document.getElementById('report_fails');
+            failedProducts.forEach(item => {
+                const row = document.createElement('li');
+                const title = document.createElement('strong');
+                title.textContent = '型号 ' + (item.product_id || '');
+                row.append(title, document.createTextNode(item.msg || '准备失败'));
+                fails.append(row);
+            });
+            failedLots.forEach(item => {
+                const row = document.createElement('li');
+                const title = document.createElement('strong');
+                title.textContent = 'lot ' + (item.lot || '');
+                row.append(title, document.createTextNode(item.msg || '上报失败'));
+                fails.append(row);
+            });
+            fails.hidden = fails.children.length === 0;
             document.getElementById('report_actions').hidden = false;
             document.getElementById('report_mask').hidden = false;
         }
@@ -675,6 +762,27 @@
             const checked = document.querySelectorAll('#tree_node .pick:checked');
             document.getElementById('pick_all').checked = boxes.length > 0 && boxes.length === checked.length;
         });
+        async function runEngPqcReport() {
+            if (!IS_ROOT || reporting) return;
+            if (!window.confirm('将立即上报全部尚未上报的 ENG预Hold PQC，是否继续？')) return;
+            const button = document.getElementById('run_auto_report');
+            button.disabled = true;
+            openReportProgress('正在上报全部尚未上报的 ENG预Hold PQC');
+            try {
+                const resp = await fetch('/admin/hold/api/hold_info_export/auto_report/run', {
+                    method: 'POST',
+                });
+                const json = await resp.json();
+                if ((json.data && json.data.count) && previewed) {
+                    try { await preview(); } catch (refreshError) { /* 清单刷新失败仍展示上报结果 */ }
+                }
+                finishEngPqcDialog(json);
+            } catch (e) {
+                finishReportDialog(false, '上报失败：' + e);
+            } finally {
+                button.disabled = false;
+            }
+        }
         async function loadAutoReport() {
             if (!IS_ROOT) return;
             const box = document.getElementById('auto_report');

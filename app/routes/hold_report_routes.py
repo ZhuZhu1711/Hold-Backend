@@ -672,6 +672,19 @@ def api_eng_pqc_auto_report():
     })
 
 
+@hold_report_bp.route('/api/hold_info_export/auto_report/run', methods=['POST'])
+@root_required
+def api_eng_pqc_auto_report_run():
+    """root 立即跑一轮 ENG 预 Hold PQC 上报，不等 07:00 / 19:00，也不看定时开关。"""
+    from app.backend_schedule.FT_ENG_PQC_NCMR_sche import run_eng_pqc_report_once
+
+    ok, msg, data = run_eng_pqc_report_once()
+    if ok:
+        return jsonify({'code': 200, 'msg': msg, 'data': data})
+    status = 409 if '正在上报' in (msg or '') else _hold_info_export_status(msg or '')
+    return jsonify({'code': status, 'msg': msg, 'data': data}), status
+
+
 @hold_report_bp.route('/api/hold_info_export', methods=['GET'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_export_preview():
@@ -790,7 +803,10 @@ def _hold_info_query_response(success, msg, data):
 @hold_report_bp.route('/api/hold_info/records', methods=['GET'])
 @role_required(ROLE_ROOT, ROLE_ENGINEER)
 def api_hold_info_records():
-    """原始 FT_HOLD_RECORD 行，附带型号 PIE。客户端去重、补合批；ENG 预处置人另接口查询。"""
+    """原始 FT_HOLD_RECORD 行。客户端去重、补合批；ENG 预处置人另查。
+
+    data.pie 是 MP 预处置人，来自 get_ncmr_owner；纯 ENG 查询不请求该接口。
+    """
     success, msg, data = hold_info_export_ctrl.query_hold_info_records(
         product_id=request.args.get('product_id', '').strip(),
         start_dttm=request.args.get('start_dttm', '').strip(),

@@ -8,7 +8,8 @@
   4. 补 TEST_WAFER.TEST_PROGRAM
   5. 同一 wafer 多条 record 只保留最新一条（相同时间取 ID 更大的）；Hold Time 统一用该 lot 最早的 HOLD_DTTM
   6. 预处置人：ROUTE 含 ENG 时按 OA 查姓名（形如「周星辰（A0004655）」）；
-     含 MP 的 PRODUCTION 用该型号族 PRODUCT_INFO.PIE，按 USERS 补成同样的「姓名（工号）」
+     含 MP 的 PRODUCTION 调 get_ncmr_owner（line_type 固定 FT，product_id 为实际型号）。
+     没有记录或 OWNER 为 null 时留空
   7. OA、WO 优先用 FT_HOLD_RECORD 已有值。没有工单号时才按 lot 请求
      get_lot_order（默认 http://127.0.0.1:6969）。OA 允许为空。查询失败的行不能上报。
 """
@@ -30,10 +31,10 @@ from app.utils.database_util import (
     resolve_circulation_table, resolve_hold_record_table,
 )
 from app.backend_schedule.hold_merge_rules import is_eng_pqc_future_hold
-from app.controllers.product_ctrl import family_product_ids
 from app.utils.ncmr_import import (
     DEFAULTS,
     NCMR_TIMEOUT,
+    align_lot_hold_times,
     align_ncmr_row_lot,
     build_ncmr_import_body,
     ncmr_row_from_hold_record,
@@ -42,13 +43,10 @@ from app.utils.ncmr_import import (
     reset_ncmr_token_cache,
 )
 from app.utils.pre_handler_lookup import (
-    format_pre_handler,
-    format_work_code,
-    looks_like_work_code,
     lookup_lot_oa,
     lookup_lot_order,
+    lookup_ncmr_owner,
     lookup_pre_handler,
-    split_pre_handler,
 )
 
 EXPORT_MAX_ROWS = 5000
@@ -261,115 +259,6 @@ def _is_mp_route(route):
     return text == 'PRODUCTION' or 'MP' in text
 
 
-def _newest_pie(rows):
-    """同族取更新时间较新的非空 PIE。空白不覆盖更早的有效值。"""
-    chosen = ''
-    chosen_key = None
-    for row in rows:
-        if not isinstance(row, (tuple, list)) or len(row) < 3:
-            continue
-        pie = str(row[0] or '').strip()
-        if not pie:
-            continue
-        updated = str(row[1] or '')
-        try:
-            ident = int(row[2]) if row[2] is not None else 0
-        except (TypeError, ValueError):
-            ident = 0
-        key = (updated, ident)
-        if chosen_key is None or key > chosen_key:
-            chosen = pie
-            chosen_key = key
-    return chosen
-
-
-def _query_product_pie(cursor, product_id, cache):
-    """按型号族查 PRODUCT_INFO.PIE。失败或未绑定返回空字符串，不中断导出。"""
-    key = (product_id or '').strip()
-    if not key:
-        return ''
-    if key in cache:
-        return cache[key]
-    value = ''
-    try:
-        ids = family_product_ids(key)
-        binds = {f'p{index}': pid for index, pid in enumerate(ids)}
-        placeholders = ', '.join(f':{name}' for name in binds)
-        cursor.execute(
-            f"""
-            SELECT PIE, TO_CHAR(UPDATE_DTTM, 'YYYY-MM-DD'), ID
-            FROM PRODUCT_INFO
-            WHERE PRODUCT_ID IN ({placeholders})
-            """,
-            binds,
-        )
-        rows = cursor.fetchall()
-        if isinstance(rows, list):
-            value = _format_mp_pre_handler(cursor, _newest_pie(rows))
-    except Exception as exc:
-        logger.warning('型号 PIE 查询失败 product=%s: %s', key, exc)
-        value = ''
-    cache[key] = value
-    return value
-
-
-def _format_mp_pre_handler(cursor, pie: str) -> str:
-    """PIE 是工号或姓名。导出成与 ENG 相同的「姓名（A0004655）」。对不上就留原值。"""
-    text = (pie or '').strip()
-    if not text:
-        return ''
-    person, code = split_pre_handler(text)
-    if person and code:
-        return format_pre_handler(person, code)
-    if looks_like_work_code(text):
-        return format_pre_handler(_lookup_user_name(cursor, text), text)
-    employee_no = _lookup_employee_no(cursor, text)
-    if not employee_no:
-        return text
-    return format_pre_handler(text, employee_no)
-
-
-def _lookup_user_name(cursor, work_code: str) -> str:
-    formatted = format_work_code(work_code)
-    cursor.execute(
-        """
-        SELECT NAME
-        FROM USERS
-        WHERE EMPLOYEE_NO = :raw OR EMPLOYEE_NO = :formatted
-        ORDER BY ID
-        """,
-        {'raw': work_code, 'formatted': formatted},
-    )
-    names = []
-    for row in cursor.fetchall() or []:
-        name = str(row[0] or '').strip() if row else ''
-        if name and name not in names:
-            names.append(name)
-    if len(names) != 1:
-        return ''
-    return names[0]
-
-
-def _lookup_employee_no(cursor, name: str) -> str:
-    cursor.execute(
-        """
-        SELECT EMPLOYEE_NO
-        FROM USERS
-        WHERE NAME = :name
-        ORDER BY ID
-        """,
-        {'name': name},
-    )
-    codes = []
-    for row in cursor.fetchall() or []:
-        code = str(row[0] or '').strip() if row else ''
-        if looks_like_work_code(code) and code not in codes:
-            codes.append(code)
-    if len(codes) != 1:
-        return ''
-    return codes[0]
-
-
 def _hold_text(hold, index):
     if len(hold) <= index or hold[index] is None:
         return ''
@@ -400,8 +289,8 @@ def _resolve_lot_order(lot_id, stored_oa, stored_wo, caches):
     return order.oa or '', order.wo or '', ''
 
 
-def _pre_handler_for(cursor, route, lot_id, product_id, caches):
-    """ENG 走 OA；MP 用型号 PIE。"""
+def _pre_handler_for(_cursor, route, lot_id, product_id, caches):
+    """ENG 走 OA；MP 按型号调 get_ncmr_owner。同一型号只请求一次。"""
     if _is_engineering_route(route):
         return lookup_pre_handler(
             lot_id,
@@ -409,8 +298,8 @@ def _pre_handler_for(cursor, route, lot_id, product_id, caches):
             oa_cache=caches.setdefault('lot_oa', {}),
         )
     if _is_mp_route(route):
-        return _query_product_pie(
-            cursor, product_id, caches.setdefault('product_pie', {}),
+        return lookup_ncmr_owner(
+            product_id, caches.setdefault('ncmr_owner', {}),
         )
     return ''
 
@@ -1149,6 +1038,7 @@ def _write_ncmr_circulations(record_ids):
 def _post_ncmr_by_lot(pairs):
     """按 lot 分批调用 NCMR。某一 lot 失败时，已经成功的 lot 仍然回写流转。
 
+    同一 lot 的多行合成一单，holdTime 统一成该 lot 最晚的非空时间。
     pairs 是 (导出行, record_id 或 None)。返回 (全部成功, 说明, data)。
     """
     if not pairs:
@@ -1189,6 +1079,7 @@ def _post_ncmr_by_lot(pairs):
             lots_failed.append({'lot': '', 'msg': '缺少 lot'})
             notes.append('缺少 lot，未上报')
             continue
+        rows = align_lot_hold_times(rows)
         ok, msg, _data = post_ncmr_import(rows)
         if not ok:
             lots_failed.append({'lot': label, 'msg': msg})
@@ -1366,8 +1257,37 @@ def import_ncmr_group(
     return ok, f'{label}：{msg}', data
 
 
-def _query_unreported_eng_pqc(cursor):
-    """状态仍是创建、ENG + FPQC/PQC + 原因含 FUTURE 的记录。不限型号和时间。"""
+def _eng_pqc_where():
+    """尚未上报的 ENG 预 Hold：创建态、ENG 路线、FPQC/PQC、原因含 FUTURE。"""
+    return """
+        NVL(r.STATUS, 0) = 0
+        AND UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%'
+        AND UPPER(NVL(r.STATION, '')) IN ('FPQC', 'PQC')
+        AND UPPER(NVL(r.HOLD_REASON, '')) LIKE '%FUTURE%'
+    """
+
+
+def _query_unreported_eng_pqc_products(cursor):
+    """有待上报记录的型号，按型号分批时先取这一份。"""
+    record_table = _record_table()
+    cursor.execute(
+        f"""
+        SELECT DISTINCT r.PRODUCT_ID
+        FROM {record_table} r
+        WHERE {_eng_pqc_where()}
+        ORDER BY r.PRODUCT_ID
+        """
+    )
+    products = []
+    for row in cursor.fetchall() or []:
+        product_id = str(row[0] or '').strip() if row else ''
+        if product_id and product_id not in products:
+            products.append(product_id)
+    return products
+
+
+def _query_unreported_eng_pqc(cursor, product_id=None):
+    """状态仍是创建、ENG + FPQC/PQC + 原因含 FUTURE 的记录。可只查一个型号。"""
     record_table = _record_table()
     sql = f"""
         SELECT
@@ -1388,68 +1308,145 @@ def _query_unreported_eng_pqc(cursor):
             r.OA,
             r.WO
         FROM {record_table} r
-        WHERE NVL(r.STATUS, 0) = 0
-          AND UPPER(NVL(r.ROUTE_ID, '')) LIKE '%ENG%'
-          AND UPPER(NVL(r.STATION, '')) IN ('FPQC', 'PQC')
-          AND UPPER(NVL(r.HOLD_REASON, '')) LIKE '%FUTURE%'
-        ORDER BY r.PRODUCT_ID, r.WAFER_ID, r.HOLD_DTTM, r.ID
+        WHERE {_eng_pqc_where()}
     """
-    cursor.execute(sql)
+    params = {}
+    product_id = (product_id or '').strip()
+    if product_id:
+        sql += " AND r.PRODUCT_ID = :product_id"
+        params['product_id'] = product_id
+    sql += " ORDER BY r.WAFER_ID, r.HOLD_DTTM, r.ID"
+    cursor.execute(sql, params)
     return cursor.fetchall()
 
 
-def report_unreported_eng_pqc(**extras):
-    """把尚未上报的 ENG 预 Hold PQC 按 lot 分批上报。没有工单号的跳过。"""
+def _with_cursor(work):
     conn = _connect()
-    skipped = 0
     try:
-        cursor = conn.cursor()
-        holds = _query_unreported_eng_pqc(cursor)
-        caches = {'merge': {}, 'hold_wafers': {}, 'test_program': {}}
-        pairs = []
-        for hold in holds:
-            excel, preview = _process_hold(cursor, hold, caches, extras)
-            rid = preview.get('RECORD_ID')
-            wo = str(preview.get('WO') or '').strip()
-            sheet = preview.get('SHEET')
-            if sheet and sheet != 'eng_pqc':
-                skipped += 1
-                logger.warning(
-                    'ENG预Hold PQC 跳过 id=%s wafer=%s：不属于预 Hold',
-                    rid,
-                    preview.get('WAFER_ID'),
-                )
-                continue
-            if preview.get('ORDER_ERROR') or not wo or not preview.get('LOT_KEY'):
-                skipped += 1
-                logger.warning(
-                    'ENG预Hold PQC 跳过 id=%s wafer=%s：%s',
-                    rid,
-                    preview.get('WAFER_ID'),
-                    preview.get('ORDER_ERROR') or '缺少工单号或 lot',
-                )
-                continue
-            pairs.append((excel, rid))
+        return work(conn.cursor())
+    finally:
+        conn.close()
+
+
+def _assemble_unreported_eng_pqc(cursor, product_id, extras):
+    """组装一个型号的可上报行。返回 (pairs, skipped)。"""
+    holds = _query_unreported_eng_pqc(cursor, product_id)
+    caches = {'merge': {}, 'hold_wafers': {}, 'test_program': {}}
+    pairs = []
+    skipped = 0
+    for hold in holds:
+        excel, preview = _process_hold(cursor, hold, caches, extras)
+        rid = preview.get('RECORD_ID')
+        wo = str(preview.get('WO') or '').strip()
+        sheet = preview.get('SHEET')
+        if sheet and sheet != 'eng_pqc':
+            skipped += 1
+            logger.warning(
+                'ENG预Hold PQC 跳过 id=%s wafer=%s：不属于预 Hold',
+                rid,
+                preview.get('WAFER_ID'),
+            )
+            continue
+        if preview.get('ORDER_ERROR') or not wo or not preview.get('LOT_KEY'):
+            skipped += 1
+            logger.warning(
+                'ENG预Hold PQC 跳过 id=%s wafer=%s：%s',
+                rid,
+                preview.get('WAFER_ID'),
+                preview.get('ORDER_ERROR') or '缺少工单号或 lot',
+            )
+            continue
+        pairs.append((excel, rid))
+    return pairs, skipped
+
+
+def _eng_pqc_result(count, product_count, lots_ok, lots_failed, reported_ids, marked, skipped, products_failed):
+    return {
+        'count': count,
+        'product_count': product_count,
+        'lots_ok': lots_ok,
+        'lots_failed': lots_failed,
+        'products_failed': products_failed,
+        'reported_ids': reported_ids,
+        'circulation_marked': marked,
+        'skipped': skipped,
+    }
+
+
+def _eng_pqc_message(data):
+    """给页面的短摘要。逐 lot 的长句留在 lots_failed，不拼进这句话。"""
+    bits = []
+    if data['count']:
+        bits.append(f"已上报 {data['product_count']} 个型号、{data['count']} 条")
+    if data['lots_failed']:
+        bits.append(f"{len(data['lots_failed'])} 个 lot 失败")
+    if data['products_failed']:
+        bits.append(f"{len(data['products_failed'])} 个型号准备失败")
+    if data['skipped']:
+        bits.append(f"跳过 {data['skipped']} 条")
+    if not bits:
+        return '没有可上报的 ENG预Hold PQC'
+    return '，'.join(bits)
+
+
+def report_unreported_eng_pqc(**extras):
+    """按型号分批：查一个型号、组装并上报，再处理下一个。没有工单号的跳过。"""
+    try:
+        products = _with_cursor(_query_unreported_eng_pqc_products)
     except Exception as exc:
         logger.error(f'ENG预Hold PQC 上报准备失败: {exc}', exc_info=True)
         return False, f'上报准备失败: {exc}', None
-    finally:
-        conn.close()
-    if not pairs:
-        return True, f'没有可上报的 ENG预Hold PQC（跳过 {skipped} 条）', {
-            'count': 0,
-            'lots_ok': [],
-            'lots_failed': [],
-            'reported_ids': [],
-            'circulation_marked': 0,
-            'skipped': skipped,
-        }
-    ok, msg, data = _post_ncmr_by_lot(pairs)
-    if data is not None:
-        data['skipped'] = skipped
-    if skipped:
-        msg = f'{msg}；跳过 {skipped} 条'
-    return ok, msg, data
+    skipped = 0
+    posted_rows = 0
+    product_count = 0
+    lots_ok = []
+    lots_failed = []
+    reported_ids = []
+    marked = 0
+    products_failed = []
+    for product_id in products:
+        logger.info('ENG预Hold PQC 开始型号 %s', product_id)
+        try:
+            pairs, product_skipped = _with_cursor(
+                lambda cursor, product_id=product_id: _assemble_unreported_eng_pqc(
+                    cursor, product_id, extras,
+                )
+            )
+        except Exception as exc:
+            logger.error(
+                'ENG预Hold PQC 型号 %s 准备失败: %s', product_id, exc, exc_info=True,
+            )
+            products_failed.append({'product_id': product_id, 'msg': str(exc)})
+            continue
+        skipped += product_skipped
+        if not pairs:
+            continue
+        ok, msg, data = _post_ncmr_by_lot(pairs)
+        logger.info('ENG预Hold PQC 型号 %s：%s', product_id, msg)
+        if not ok and not data:
+            products_failed.append({'product_id': product_id, 'msg': msg})
+            continue
+        if data:
+            posted_rows += data.get('count') or 0
+            lots_ok.extend(data.get('lots_ok') or [])
+            for item in data.get('lots_failed') or []:
+                failed = dict(item)
+                failed['product_id'] = product_id
+                lots_failed.append(failed)
+            reported_ids.extend(data.get('reported_ids') or [])
+            marked += data.get('circulation_marked') or 0
+        if ok:
+            product_count += 1
+        elif data and data.get('lots_ok'):
+            product_count += 1
+    result = _eng_pqc_result(
+        posted_rows, product_count, lots_ok, lots_failed,
+        reported_ids, marked, skipped, products_failed,
+    )
+    message = _eng_pqc_message(result)
+    if lots_failed or products_failed:
+        return False, message, result
+    return True, message, result
 
 
 def _record_item(hold):
@@ -1521,7 +1518,10 @@ def query_hold_info_records(
     product_id, start_dttm, end_dttm, lot_id='', route_id='',
     owner_eng_id=None,
 ):
-    """按型号和时间返回原始 hold 行，并带上型号 PIE。去重、合批在客户端；ENG 预处置人另查。"""
+    """按型号和时间返回原始 hold 行。去重、合批在客户端；ENG 预处置人另查。
+
+    pie 字段现在是 MP 预处置人：非纯 ENG 查询时按型号调 get_ncmr_owner。
+    """
     ok, msg, parsed = _parse_filters(
         product_id, start_dttm, end_dttm, lot_id=lot_id, route_id=route_id,
     )
@@ -1544,7 +1544,7 @@ def query_hold_info_records(
             'items': [_record_item(hold) for hold in holds],
             'shown': len(holds) if not truncated else RECORDS_MAX_ROWS,
             'truncated': truncated,
-            'pie': _query_product_pie(cursor, product_id, {}),
+            'pie': '',
             'product_id': product_id,
             'lot_id': lot_id,
             'route_id': route_id,
@@ -1552,7 +1552,10 @@ def query_hold_info_records(
             'end_dttm': end,
         }
 
-    return _run_query(work)
+    ok, msg, data = _run_query(work)
+    if ok and isinstance(data, dict) and route_id != 'ENG':
+        data['pie'] = lookup_ncmr_owner(product_id)
+    return ok, msg, data
 
 
 def query_pre_handlers(
